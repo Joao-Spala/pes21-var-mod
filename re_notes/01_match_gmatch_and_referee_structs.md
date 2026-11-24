@@ -86,7 +86,7 @@ Documento de referencia tecnica com enderecos, RVAs, VTables e layouts de struct
 | `+0x1748` | `uint8_t[22]` | `PlayerOnPitch` | `1` = jogador ativo em campo, `0` = expulso/ausente. Escrito via `0x140A3D0E0(MatchInfo, slot, bool)` |
 | `+0x175E` | `uint8_t[22]` | `PlayerInjuredOff` | `1` = fora de campo temporariamente por lesao (`0x14044B430`, `0x14044CA20`) |
 | `+0x1775` | `uint8_t` | `SpecialModeKind` | `0` = partida normal. Valores `> 0` = treino, tutorial ou cenarios especiais |
-| `+0x17AC` | `RingBuf` | `FoulSnapshotRing` | Snapshots de posicoes dos 22 jogadores (stride `0x2C`) e bola (`+0x3CC`), indexado por `FoulInfo+0x28` (`0x140A82120`) |
+| `+0x17AC` | `RingBuf` | `FoulSnapshotPool` | Pool de 3 snapshots de posicoes dos 22 jogadores (stride `0x3E4`, entrada `0x2C`), bola (`+0x3CC`) e IDs em `+0x2358` (`0x17AC + 3 * 0x3E4`), indexado por `FoulInfo+0x28` (`0x1404B4B40` / `0x140A82120`) |
 
 ### 3.1. Layout de `SetPlayInfo` (`MatchInfo + 0x1554` / `JudgeResult + 0x00`)
 
@@ -148,11 +148,21 @@ No commit de frame em `MatchControl::CommitToRegistry` (`0x140422A3F`, codigo na
 4. Todas as leituras de elegibilidade/expulsao no motor (ex: `0x140444C40`, `0x140452F00` linhas 98-105 e `0x140444ED2`) checam consistentemente `(reds != 0) || (yellows >= 2)`.
 5. Cartao amarelo tardio pos-vantagem: implementado nativamente pelo estado `0x20` (`0x14044B9D0`), que remonta `FoulInfo` em `MatchFSM + 0x49F0` com `FoulKind = 2`, `FoulJudgementKind = 3` na parada subsequente.
 
-### 4.3. Consulta de Nomes de Jogadores para o HUD VAR
+### 4.3. Layout Validado de `MatchRoster` (Times, Uniformes, Camisas e Jogadores)
 
-Verificado em `Replay@Screen@match2D::Update` (`0x1420F4580` linhas 135-166) e confirmado ao vivo em memoria (Cheat Engine):
-- `matchData = *(uint64_t*)0x143714240` (retornado por `0x1414BC550()`)
-- `rosterTable = *(matchData + 0x50) + 0x35960`
-- Tabela por time: `teamBase = rosterTable + 0x1334 + teamIdx * (40 * 0x188)` (ate 40 entradas por time, stride `0x188`)
-- Campos por entrada validados ao vivo: `uint32_t playerId` em `+0x04` (high dword do `uint64_t` em `+0x00`), nome de exibicao UTF-8 em `+0x0C` (fallback nome da camisa ASCII em `+0x49`).
-- Complementarmente, `ReplayMgr + 0x1C` (slot `1..22`) e `ReplayMgr + 0x20` (`playerID`) informam em tempo real qual jogador esta focado na camera de Replay.
+Verificado em `0x1414BC550`, `0x1414C6A30`, `0x1414C9580` e validado ao vivo em partidas reais (BMPES 16.3):
+- `matchRoster = *(uint64_t*)0x143714240` (retornado por `0x1414BC550()`)
+- `dataPtr = *(uint64_t*)(matchRoster + 0x50)` e `rosterTable = dataPtr + 0x35960`
+- `editedKitPtr = *(uint64_t*)(matchRoster + 0x58)` e `balNameString = matchRoster + 0x98` (`std::string` MSVC)
+- **Entrada por time (`teamEntry = rosterTable + 0x138 + teamIdx * 0x690`):**
+  - `+0x00`: `uint32_t TeamId`
+  - `+0x04`: `char[70] FullName` (UTF-8)
+  - `+0x4A`: `char[16] ShortName` (sigla de 3 letras do placar)
+  - `+0x29A`: `uint16_t[40] ShirtNumbers` (numeros de camisa na mesma ordem das 40 entradas de jogadores)
+  - `+0x5D8`: `KitTable` licenciada (10 entradas de 8 bytes, RGB primario em `+2..+4`, secundario em `+5..+7`). Para uniformes editados/BMPES, `editedKitPtr + teamIdx * 0x108` traz RGB primario em `+0x1991` e secundario em `+0x1994`.
+- **Entrada por jogador (`entry = rosterTable + 0x1308 + teamIdx * 0x3D40 + i * 0x188`, ate 40 por time):**
+  - `+0x2C`: `uint64_t PlayerKey` (`key >> 32` casa com `*(uint64_t*)(PlayerRecord + 0x30) >> 32`, com fallback em `TeamInfo + 0x04` para substituicoes ao vivo)
+  - `+0x38`: `DisplayName` UTF-8
+  - `+0x75`: `ShirtName`
+  - `+0x144`: `int32_t BalAvatarFlag` (`< 0` indica avatar do Rumo ao Estrelato, cujo nome vem de `matchRoster + 0x98`)
+- Complementarmente, `ReplayMgr + 0x1C` (slot `1..22`) e `ReplayMgr + 0x20` (`PlayerKey`) informam em tempo real qual jogador esta focado na camera de Replay.

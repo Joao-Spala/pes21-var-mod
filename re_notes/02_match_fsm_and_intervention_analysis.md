@@ -92,9 +92,9 @@ Duas funcoes limpas da propria Fox Engine governam quase todas as intervencoes V
   - **Viabilidade:** Alta (deterministico).
   - **Mecanica:** Decrementar `PlayerRecord[0]` (clamp `>= 0`), atualizar `FoulJudgementKind = 1` e limpar indicador em `PlayerStatus` (`GMATCH + 0x180`).
 - **Retirar cartao Vermelho ou reduzir Vermelho -> Amarelo (Reintegracao de Expulso):**
-  - **Viabilidade:** Alta **antes** do estado `0x13` (durante cutscenes `0x03..0x11`) e **Condicional `[Validar Live]` apos** o estado `0x13` (quando o jogo ja entrou em `0x1A` SetPlayReady ou voltou a `0x1C` InPlay).
-  - **Limitacao real da engine:** Antes de `0x13`, o ator 3D ainda esta em campo. Zerar `PlayerRecord[1] = 0` (ajustando `yellows` para `0` ou `1`) e manter `PlayerOnPitch[slot] = 1` evita a remocao completamente. Apos `0x13`, o ator ja foi removido da cena e o time pode ter reorganizado a formacao (especialmente goleiro). Re-setar `PlayerRecord[1] = 0`, `PlayerOnPitch[slot] = 1` e acionar `MatchFSM_RebuildSetPlay` (`0x140454280`) re-executa `0x12 -> 0x13 -> 0x14 -> 0x15`, mas exige validacao ao vivo em `cheatengine` para confirmar restauracao completa da malha e IA do ator `[Validar Live]`.
-  - **Regra de produto:** A opcao nunca sera travada na UI. Quando acionada apos `0x13`, o mod executa a reintegracao completa e valida ponteiros de entidade antes de commitar.
+  - **Viabilidade:** Alta antes do estado `0x13` (durante cutscenes `0x03..0x11`) e tratada com seguranca apos o estado `0x13` (`0x1A` SetPlayReady ou `0x1C` InPlay).
+  - **Limitacao real da engine:** Antes de `0x13`, o ator 3D ainda esta em campo: zerar `PlayerRecord[1] = 0` e manter `PlayerOnPitch[slot] = 1` evita a remocao completamente. Apos `0x13`, o ator ja foi retirado da cena e o mod reintegra `PlayerRecord` + `PlayerOnPitch[slot] = 1` exibindo aviso claro de que o ator 3D retorna na proxima parada/reconstrucao.
+  - **Regra de produto:** A opcao nunca e travada na UI, preservando controle total sobre cartoes de qualquer jogador.
 
 ### Cenario 2: Converter Falta <-> Penalti (com opcao de cartao) em Parada Existente
 
@@ -116,8 +116,8 @@ Duas funcoes limpas da propria Fox Engine governam quase todas as intervencoes V
 - **Mecanica:**
   1. Durante `InPlay`, o gravador passivo salva snapshots de jogo rolando (posicoes dos 22 jogadores + bola + pares de contato mais proximos + timestamp float 60Hz).
   2. No Replay Manual, o usuario pausa no frame exato do lance nao marcado, escolhe infrator/vitima (pre-sugeridos pelo contato mais proximo ou pelo foco da camera `ReplayMgr + 0x1C`) e seleciona o veredito (Falta simples / Falta + Amarelo / Falta + Vermelho / Penalti + cartao opcional).
-  3. Ao sair do Replay e voltar a `State_InPlay` (`0x140449F40`), o hook em **`0x14044A065`** (logo apos `0x14050CD70` e antes do teste em `0x14044A2AF`) preenche `MatchFSM + 0x49C0` (`JudgeResult`) com `SetPlayKind = 5 ou 6`, `BenefitedTeam`, `SetPlayPosA/B` (do snapshot ou marca penal via `0x14050DC00`), `StoppageReason = 5`, `FoulInfo.IsValid = 1`, `FoulKind = 2`, `FoulJudgementKind = 1/3/4`, `OffenderSlot`, `VictimSlot`.
-  4. O proprio codigo da Fox Engine executa `test eax, eax -> jne -> call MatchFSM_EnterOutOfPlay (0x1404541A0)`, toca o apito, aplica o cartao, monta a bola parada e entrega o controle em `0x1A`.
+  3. Ao sair do Replay e voltar a `State_InPlay` (`0x140449F40`), os hooks de entrada em `Judge::FinalizeFrame` (`0x14050CD70`) e `MatchFSM::MainTick` (`0x1404468F0`) preenchem `MatchFSM + 0x49C0` (`JudgeResult`) com `SetPlayKind = 5 ou 6`, `BenefitedTeam`, `SetPlayPosA/B`, `StoppageReason = 5`, `FoulInfo.IsValid = 1`, `FoulKind = 2`, `FoulJudgementKind = 1/3/4`, `OffenderSlot`, `VictimSlot`, sentinelas `0xFF` nos campos internos da engine e um `SnapshotTickIndex` valido garantido no pool `MatchInfo + 0x17AC` (`EnsureValidFoulSnapshotId`, eliminando qualquer risco de crash em `0x1404B4C25`).
+  4. A propria Fox Engine aciona `MatchFSM_EnterOutOfPlay` (`0x1404541A0`), aplica o cartao, monta a bola parada e entrega o controle em `0x1A`.
 - **Nota de escopo sobre gol ja validado apos o lance:** Se o usuario pausar antes da bola entrar (ainda em `InPlay`), o Cenario 3 funciona 100%. Se o gol ja foi validado (`StoppageReason == 3` e placar incrementado), anular gol requer reverter placar + historico de artilheiros (e evitar colisao com `goal_pyro.lua`), ficando documentado como extensao controlada de fase posterior apos validacao live do placar.
 
 ### Cenario 4: Anular Marcacao de Falta ou Penalti (Overturn / Cancel)

@@ -43,8 +43,8 @@ Verificados em `ReplayCam.lua`, `goal_pyro.lua` e `doc\scripting.html`:
 - `set_teams`: dispara ao preparar cada partida (ideal para zerar o histórico de lances do VAR e revalidar ponteiros de `GMATCH`).
 - `memory.read`, `memory.write`, `memory.search`: utilitários nativos do Sider para AOB e memória.
 
-## 4. Padrão BMPES de Ativação/Desativação Opcional
+## 4. Padrão BMPES de Instalação e Ativação/Desativação
 
 Verificado em `<Steam>\steamapps\common\BMPES/GoalPyro_Opcional.ps1` e `<Steam>\steamapps\common\BMPES/Comemoracoes_Opcional.ps1`:
-- O mod deve fornecer scripts `Ativar VAR.bat` / `Desativar VAR.bat` + `VAR_Opcional.ps1` que adicionam/comentam `lua.module = "var_mod.lua"` nos 3 arquivos (`sider.ini`, `sider-normal.ini`, `sider-capacidade.ini`) usando encoding `28591` (Latin-1), verificando se `PES2021.exe` está fechado e criando backup `.antes-var-opcional` antes da primeira edição.
-- Além disso, dentro do jogo, o usuário pode ligar/desligar a captura e o HUD do VAR em tempo real pelo menu do Sider (`overlay_on`).
+- O pacote fornece `VAR_Mod_Gerenciar.bat` + `VAR_Mod_Gerenciar.ps1` para instalar, ativar, desativar ou remover o módulo (`luajit.ext.enabled = 1` e `lua.module = "var_mod.lua"` nos arquivos `sider*.ini` com encoding Latin-1 `28591`), verificando se `PES2021.exe` está fechado e criando backup datado antes da edição.
+- Além disso, dentro do jogo, o usuário pode ligar/desligar o VAR em tempo real pelo menu do Sider (`overlay_on`).

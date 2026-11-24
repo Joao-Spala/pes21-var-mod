@@ -70,13 +70,12 @@ Para eliminar qualquer fragilidade de registradores volateis e garantir iniciali
 - **Stolen bytes (7 bytes):** `48 8B 49 20 45 33 C0`
 - **Papel no VAR Mod:** intercepta o `IDXGISwapChain*` real em `[rcx + 0x20]`, com fast-path lock-free fora do Replay e RTV transiente por frame (compativel com `ResizeBuffers`, Alt+Tab, Sider e Steam Overlay).
 
-### Hooks de Bloqueio de Input no Replay Manual (Teclado, Mouse e Controle)
+### Hooks de Input no Replay Manual (Bloqueio de Teclado/Mouse e Atalho `R3` no Controle)
 
 - **`DInputKeyboard_Poll` (`0x141B638B0`, 5 bytes):** zera buffer de 256 bytes em `[self + 0x268]` enquanto o painel VAR esta focado ou na janela de graca de 260 ms.
-- **`DInputJoystick_Poll` (`0x141B63900`, 5 bytes):** centraliza POV hats e limpa botoes em `DIJOYSTATE` (`[self + 0x268]`).
-- **`DInputMouse_Poll` (`0x141B63950`, 5 bytes):** zera deltas e botoes em `DIMOUSESTATE` (`[self + 0x268]`).
-- **`PesPad_Update` (`0x1403F86E0`, 8 bytes):** limpa 40 bytes em `[self + 0x20]` conforme `PesPad::ClearState` (`0x1403F8670`).
-- **IAT Hooks (`xinput1_3.dll` ordinal `2` e `user32.dll!GetKeyboardState`):** bloqueiam entrada no jogo durante foco do painel sem afetar o overlay do Sider.
+- **`DInputMouse_Poll` (`0x141B63950`, 5 bytes):** zera deltas e botoes em `DIMOUSESTATE` (`[self + 0x268]`) enquanto o painel VAR esta focado.
+- **`DInputJoystick_Poll` (`0x141B63900`, 5 bytes) e `PesPad_Update` (`0x1403F86E0`, 8 bytes):** repassam o estado original sem zerar o gamepad, mantendo o controle livre para operar o Replay 3D enquanto teclado e mouse operam o painel.
+- **IAT Hooks (`xinput1_3.dll` ordinal `2` e `user32.dll!GetKeyboardState`):** leem o atalho configuravel do controle (`R3` para abrir/recolher o painel) e bloqueiam `GetKeyboardState` no jogo durante foco do painel sem afetar o overlay do Sider.
 
 ---
 
@@ -97,7 +96,7 @@ Para eliminar qualquer fragilidade de registradores volateis e garantir iniciali
 | `TeamInfo_GetPlayerBySlot` | `0x140A3B5B0` | `0xA3B5B0` | Obter `PlayerRecord*` via call rel32 em `0x1404231DC + 6` |
 | `MatchRosterGetter` | `0x1414BC550` | `0x14BC550` | Resolver `MatchRoster*` (`0x143714240`: nomes, camisas, times e uniformes) |
 | `GrSwapChain::Present0` | `0x141FF46A0` | `0x1FF46A0` | Hook DX11 nativo sem dummy device |
-| `DInputKeyboard_Poll` | `0x141B638B0` | `0x1B638B0` | Bloqueio nativo de teclado no Replay |
-| `DInputJoystick_Poll` | `0x141B63900` | `0x1B63900` | Bloqueio nativo de joystick DInput no Replay |
-| `DInputMouse_Poll` | `0x141B63950` | `0x1B63950` | Bloqueio nativo de mouse DInput no Replay |
-| `PesPad_Update` | `0x1403F86E0` | `0x3F86E0` | Bloqueio nativo do gamepad unificado do PES 2021 |
+| `DInputKeyboard_Poll` | `0x141B638B0` | `0x1B638B0` | Bloqueio nativo de teclado no Replay quando o painel esta focado |
+| `DInputJoystick_Poll` | `0x141B63900` | `0x1B63900` | Pass-through limpo do joystick DInput para controle livre do Replay |
+| `DInputMouse_Poll` | `0x141B63950` | `0x1B63950` | Bloqueio nativo de mouse DInput no Replay quando o painel esta focado |
+| `PesPad_Update` | `0x1403F86E0` | `0x3F86E0` | Pass-through do gamepad unificado mantendo XInput/DInput ativos |

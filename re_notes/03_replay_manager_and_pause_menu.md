@@ -37,9 +37,9 @@ Verificado em `0x1420C6760` e `0x140A6C3B0`:
 ### 1.2. Condicao Exata de Deteccao do Replay Manual
 
 Para distinguir **Replay Manual** (acionado pelo usuario via menu de pausa) de **Replay Automatico** (gol/falta/highlight):
-- **Condicao primaria verificada:**
+- **Condicao primaria verificada e validada ao vivo:**
   `ReplayMgr != nullptr && ReplayMgr->Mode >= 1 && ReplayMgr->Mode <= 3 && ReplayMgr->ManualReplayScreenFlag (+0x07) != 0`
-- **Validacao complementar `[Validar Live]`:** confirmar em partida real com Cheat Engine os valores exatos de `ReplayMgr+0x00` (`1` vs `2` vs `3` vs `4`) e `ReplayMgr+0x07` nos 3 contextos (Replay Manual da Pausa, Replay Automatico de Gol/Falta, Melhores Momentos pos-jogo) para garantir que o HUD VAR nunca apareca em replays automaticos indesejados.
+- Em replays automaticos de gol/falta (`Mode == 1`, `ManualReplayScreenFlag == 0`) e highlights pos-jogo (`Mode == 4`), o painel permanece oculto.
 
 ---
 
@@ -62,7 +62,7 @@ Inspecao direta de `<Steam>\steamapps\common\BMPES\modules\MenuServer.lua` (linh
   - Patchear arquivos `.bin`/`.json` de menu entraria em conflito direto com dezenas de temas do `Servidor de Menus` e `Estilos de Menus` do BMPES 16.3, quebrando atualizacoes do patch e layouts por campeonato.
   - Hackear o vetor interno de itens em `MatchPause@menu+0x88` exige recriar handlers de foco, localizacao de texto e transicao de `ProcessMatchReplay` (`0x1412FF730`), adicionando risco real de soft-lock no menu de pausa sem ganho funcional, ja que o usuario ainda precisa abrir o Replay para ver o lance.
 - **Integrar diretamente na Tela de Replay Manual: RECOMENDADO (100% seguro e nativo).**
-  - Fluxo natural: usuario pausa -> entra no **Replay** nativo -> usa livremente camera, angulo, slow-motion e timeline do jogo -> aciona o painel VAR discreto (badge -> painel completo via `SELECT/Back` ou `F9`) -> escolhe o veredito -> sai do Replay normalmente para aplicar a decisao no campo.
+  - Fluxo natural: usuario pausa -> entra no **Replay** nativo -> o painel VAR abre automaticamente (ou recolhe/reabre via `V`, `F7` ou `R3`) -> navega pelos lances com `Seek` nativo e escolhe o veredito por teclado/mouse enquanto o controle segue operando a camera do Replay -> sai do Replay normalmente para aplicar a decisao no campo.
   - Zero alteracao em qualquer arquivo de menu do BMPES ou CPK do jogo.
 
 ---
@@ -72,8 +72,7 @@ Inspecao direta de `<Steam>\steamapps\common\BMPES\modules\MenuServer.lua` (linh
 Inspecao dos imports e strings de `<Steam>\steamapps\common\BMPES\sider.dll`:
 - **Graficos:** Sider 7.3.3 faz hook em `IDXGISwapChain::Present` para renderizar sua faixa superior de overlay (`overlay.enabled = 1`).
 - **Input:** Sider importa `XINPUT9_1_0.dll` (`XInputGetState`), `DINPUT8.dll` (`DirectInput8Create`) e `USER32.dll` (`SetWindowsHookExW`).
-- **Ordem de inicializacao e encadeamento seguro:**
-  - `var_mod.lua` carrega `var_core.dll` durante o `init(ctx)` do Sider (apos o Sider ja ter se anexado ao processo).
-  - `var_core.dll` cria um dummy `IDXGISwapChain` temporario (ou captura o `SwapChain` real da janela do PES 2021) para obter o endereco da vtable de `Present` (`[8]`) e `ResizeBuffers` (`[13]`) e instala MinHook **encadeando** para o `oPresent` anterior (que preserva integralmente o overlay do Sider).
-  - Em `ResizeBuffers`, libera e recria o `ID3D11RenderTargetView` do ImGui de forma limpa, garantindo suporte a troca de resolucao, Alt+Tab e fullscreen/borderless sem crash.
-  - Se o usuario abrir o overlay do Sider (`Espaco` / `overlay_on`), `var_mod.lua` notifica `var_core.dll` para ceder foco de teclado/gamepad temporariamente.
+- **Ordem de inicializacao e encadeamento seguro na v4.0:**
+  - `var_mod.lua` registra apenas callbacks leves no boot e carrega `var_core.dll` sob demanda (`set_teams` / `overlay_on`), garantindo zero impacto no tempo de abertura do jogo.
+  - `var_core.dll` faz hook direto em `GrSwapChain::Present0` (`0x141FF46A0`, lendo o `IDXGISwapChain*` real em `[rcx + 0x20]`), sem criar dispositivo DX11 dummy, usando shaders DXBC pre-compilados e RTV transiente por frame (suporte nativo a troca de resolucao, Alt+Tab e fullscreen/borderless sem hook em `ResizeBuffers`).
+  - Se o usuario abrir o overlay do Sider (`Espaco` / `overlay_on`), `var_mod.lua` envia heartbeat para `var_core.dll` ceder o teclado imediatamente.
