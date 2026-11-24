@@ -1,0 +1,20 @@
+# Build intermediario (o pacote final fica em dist/)
+native/build_tmp/
+
+# Backups locais de versoes instaladas
+backups/
+
+# Logs e temporarios
+*.log
+*.bak
+*.tmp
+*.o
+*.a
+*.exe
+!dist/**/*.exe
+
+# SO e IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
