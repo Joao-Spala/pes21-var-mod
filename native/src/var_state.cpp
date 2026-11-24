@@ -235,6 +235,7 @@ void VarState::ResetMatch() {
     ++dataRevision_;
     ++rosterRevision_;
     ++teamsRevision_;
+    matchGeneration_.fetch_add(1, std::memory_order_acq_rel);
     pendingVerdict_ = VarVerdict{};
     hasArmedVerdict_.store(false, std::memory_order_release);
     pendingReplayCmd_ = ReplayControlCommand{};

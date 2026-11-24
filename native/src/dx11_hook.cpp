@@ -38,7 +38,9 @@ std::mutex g_renderMutex;
 std::atomic<bool> g_stopRequested{ false };
 std::atomic<bool> g_hooked{ false };
 std::atomic<bool> g_initFinished{ false };
-std::thread g_initThread;
+// Heap-owned on purpose: a joinable std::thread with static storage calls std::terminate
+// from its destructor at process exit (ucrtbase 0xC0000409), when DllMain skips var_shutdown.
+std::thread* g_initThread = nullptr;
 
 IDXGISwapChain*      g_swapChain = nullptr;
 IDXGISwapChain*      g_trackedSwapChain = nullptr;
@@ -366,19 +368,23 @@ void InitWorker() {
 } // namespace
 
 bool Dx11Hook::StartAsync() {
-    if (g_hooked.load(std::memory_order_acquire) || g_initThread.joinable()) {
+    if (g_hooked.load(std::memory_order_acquire) || (g_initThread && g_initThread->joinable())) {
         return true;
     }
     g_stopRequested.store(false, std::memory_order_release);
     g_initFinished.store(false, std::memory_order_release);
-    g_initThread = std::thread(InitWorker);
+    g_initThread = new std::thread(InitWorker);
     return true;
 }
 
 void Dx11Hook::Shutdown() {
     g_stopRequested.store(true, std::memory_order_release);
-    if (g_initThread.joinable()) {
-        g_initThread.join();
+    if (g_initThread) {
+        if (g_initThread->joinable()) {
+            g_initThread->join();
+        }
+        delete g_initThread;
+        g_initThread = nullptr;
     }
 
     g_hookGrPresent.Uninstall();

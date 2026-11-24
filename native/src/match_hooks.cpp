@@ -71,6 +71,9 @@ bool     g_forceRosterSyncNextTick = false;
 int32_t  g_recentBallOwnerSlot = -1;
 uint32_t g_recentBallOwnerTick = 0;
 std::atomic<bool> g_simResetPending{ false };
+uint32_t g_syncedStateGeneration = 0xFFFFFFFFU;
+int      g_rosterDiagCount = 0;
+uint64_t g_rosterDiagTick = 0;
 
 // Roster caches (refreshed automatically on substitutions or match reset)
 uint32_t g_cachedPlayerIds[22] = {};
@@ -103,18 +106,25 @@ bool     g_pollWasInReplay = false;
 
 bool IsMemoryRangeReadable(const void* ptr, size_t len) {
     if (!IsValidPtr(ptr) || len == 0) return false;
-    MEMORY_BASIC_INFORMATION mbi{};
-    if (VirtualQuery(ptr, &mbi, sizeof(mbi)) == 0) return false;
-    if (mbi.State != MEM_COMMIT) return false;
-    const DWORD p = mbi.Protect & 0xFF;
-    const bool readable = (p == PAGE_READONLY || p == PAGE_READWRITE ||
-                           p == PAGE_WRITECOPY || p == PAGE_EXECUTE_READ ||
-                           p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY);
-    if (!readable || (mbi.Protect & PAGE_GUARD)) return false;
-    const uintptr_t base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
-    const uintptr_t end  = base + mbi.RegionSize;
-    const uintptr_t want = reinterpret_cast<uintptr_t>(ptr) + len;
-    return want >= reinterpret_cast<uintptr_t>(ptr) && want <= end;
+    uintptr_t cur = reinterpret_cast<uintptr_t>(ptr);
+    const uintptr_t want = cur + len;
+    if (want < cur) return false;
+    // A range may span several VirtualQuery regions (same allocation, different attributes):
+    // walk them all instead of requiring a single region.
+    for (int guard = 0; cur < want && guard < 64; ++guard) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(reinterpret_cast<const void*>(cur), &mbi, sizeof(mbi)) == 0) return false;
+        if (mbi.State != MEM_COMMIT) return false;
+        const DWORD p = mbi.Protect & 0xFF;
+        const bool readable = (p == PAGE_READONLY || p == PAGE_READWRITE ||
+                               p == PAGE_WRITECOPY || p == PAGE_EXECUTE_READ ||
+                               p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY);
+        if (!readable || (mbi.Protect & PAGE_GUARD)) return false;
+        const uintptr_t end = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+        if (end <= cur) return false;
+        cur = end;
+    }
+    return cur >= want;
 }
 
 uint8_t* GetGmatch() {
@@ -377,7 +387,7 @@ void MakeFallbackShortName(const char* fullName, int teamIdx, char* outShort, si
     if (n > 0) {
         outShort[n] = '\0';
     } else {
-        outShort[0] = '\0'; // no real name available: never invent one
+        outShort[0] = '\0'; // unknown: the HUD shows its localized CAS/FOR fallback
     }
 }
 
@@ -414,6 +424,7 @@ void SyncTeamsAndColors() {
 
     bool anyReal = false;
     bool allReal = true;
+    bool allNamed = true;
     for (int t = 0; t < 2; ++t) {
         const uint8_t* teamEntry = rosterTable + Offsets::MatchRoster_TeamEntryBase +
                                    static_cast<size_t>(t) * Offsets::MatchRoster_TeamEntryStride;
@@ -422,7 +433,7 @@ void SyncTeamsAndColors() {
             reinterpret_cast<const char*>(teamEntry + Offsets::TeamEntry_FullName),
             63, teams[t].fullName, sizeof(teams[t].fullName));
         if (!hasFull) {
-            teams[t].fullName[0] = '\0'; // real club name only
+            teams[t].fullName[0] = '\0'; // unknown: the HUD shows its localized CASA/FORA fallback
         }
 
         const bool hasShort = CopySanitizedUtf8(
@@ -484,6 +495,7 @@ void SyncTeamsAndColors() {
         teams[t].hasRealData = hasFull || hasShort || gotColor;
         anyReal = anyReal || teams[t].hasRealData;
         allReal = allReal && teams[t].hasRealData;
+        allNamed = allNamed && hasFull;
     }
 
     ColorHelpers::EnsureDistinctTeamColors(
@@ -493,13 +505,13 @@ void SyncTeamsAndColors() {
     if (anyReal) {
         // Latch the O(1) cache only when BOTH teams are fully resolved, so a roster that is still
         // loading on one side keeps being re-read every 25 ticks exactly like before.
-        if (allReal) {
+        if (allReal && allNamed) {
             g_syncedTeamRosterTable = rosterTable;
             g_syncedTeamKitIds[0] = curKit0;
             g_syncedTeamKitIds[1] = curKit1;
         }
         VarState::Instance().UpdateTeams(teams);
-        if (!g_loggedTeamSyncOnce) {
+        if (!g_loggedTeamSyncOnce && allNamed) {
             g_loggedTeamSyncOnce = true;
             VAR_LOG_INF("Resolved real teams: HOME='%s' (%s) RGB(%u,%u,%u) vs AWAY='%s' (%s) RGB(%u,%u,%u)",
                         teams[0].fullName, teams[0].shortName,
@@ -510,9 +522,61 @@ void SyncTeamsAndColors() {
     }
 }
 
-void SyncPlayersAndCards(uint8_t* gmatch, uint8_t* matchInfo) {
-    SyncTeamsAndColors();
+// One-shot (max 3 per match) dump of every stage of the name resolution, so a failed mapping can be
+// diagnosed from var_core.log alone.
+void LogRosterDiagnostics(uint8_t* gmatch, int resolvedCount) {
+    const uint8_t* mr = g_matchRosterPtrAddr
+        ? *reinterpret_cast<const uint8_t* const*>(g_matchRosterPtrAddr) : nullptr;
+    const uint8_t* dataPtr = (IsValidPtr(mr) && IsMemoryRangeReadable(mr + Offsets::MatchRoster_DataPtr, 8))
+        ? *reinterpret_cast<const uint8_t* const*>(mr + Offsets::MatchRoster_DataPtr) : nullptr;
+    const uint8_t* table = IsValidPtr(dataPtr) ? dataPtr + Offsets::MatchRoster_TableOffset : nullptr;
+    const size_t span = Offsets::MatchRoster_PlayerBase + 2 * Offsets::MatchRoster_TeamStride;
+    const bool tableOk = table && IsMemoryRangeReadable(table, span);
+    VAR_LOG_INF("RosterDiag tick=%llu resolved=%d/22 rosterGlobal=0x%llX matchRoster=%p dataPtr=%p table=%p readable=%d",
+                static_cast<unsigned long long>(g_mainTickCount), resolvedCount,
+                static_cast<unsigned long long>(g_matchRosterPtrAddr),
+                static_cast<const void*>(mr), static_cast<const void*>(dataPtr),
+                static_cast<const void*>(table), tableOk ? 1 : 0);
+    for (int t = 0; t < 2; ++t) {
+        uint8_t* ti = GetTeamInfo(gmatch, t);
+        char full[64] = "", shortN[8] = "", p0[48] = "";
+        uint32_t teamId = 0;
+        uint64_t key0 = 0;
+        unsigned char raw[8] = {};
+        if (tableOk) {
+            const uint8_t* te = table + Offsets::MatchRoster_TeamEntryBase +
+                                static_cast<size_t>(t) * Offsets::MatchRoster_TeamEntryStride;
+            teamId = *reinterpret_cast<const uint32_t*>(te + Offsets::TeamEntry_TeamId);
+            std::memcpy(raw, te + Offsets::TeamEntry_FullName, sizeof(raw));
+            CopySanitizedUtf8(reinterpret_cast<const char*>(te + Offsets::TeamEntry_FullName), 63, full, sizeof(full));
+            CopySanitizedUtf8(reinterpret_cast<const char*>(te + Offsets::TeamEntry_ShortName), 7, shortN, sizeof(shortN));
+            const uint8_t* e0 = table + Offsets::MatchRoster_PlayerBase +
+                                static_cast<size_t>(t) * Offsets::MatchRoster_TeamStride;
+            key0 = *reinterpret_cast<const uint64_t*>(e0 + Offsets::PlayerEntry_PlayerKey);
+            CopySanitizedUtf8(reinterpret_cast<const char*>(e0 + Offsets::PlayerEntry_DisplayName), 47, p0, sizeof(p0));
+        }
+        const int slot0 = t * 11;
+        uint8_t* rec = GetPlayerRecord(gmatch, slot0);
+        const uint64_t recKey = rec ? *reinterpret_cast<const uint64_t*>(rec + Offsets::PlayerRecord_PlayerKey) : 0;
+        VAR_LOG_INF("RosterDiag team%d teamInfo=%p teamId=0x%X full='%s' short='%s' raw=%02X %02X %02X %02X %02X %02X %02X %02X "
+                    "entry0key=0x%llX entry0name='%s' slot%d rec=%p recKey=0x%llX rosterIdx=%d",
+                    t, static_cast<void*>(ti), teamId, full, shortN,
+                    raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+                    static_cast<unsigned long long>(key0), p0, slot0, static_cast<void*>(rec),
+                    static_cast<unsigned long long>(recKey), ReadActiveRosterIndex(gmatch, slot0));
+    }
+}
 
+void SyncPlayersAndCards(uint8_t* gmatch, uint8_t* matchInfo) {
+    // VarState::ResetMatch (Lua thread) wipes names. If it lands after this thread already latched
+    // its caches, nothing would ever be pushed again: re-arm on every state generation change.
+    const uint32_t gen = VarState::Instance().MatchGeneration();
+    if (gen != g_syncedStateGeneration) {
+        g_syncedStateGeneration = gen;
+        g_syncedTeamRosterTable = nullptr;
+        g_hasPushedPlayersOnce = false;
+    }
+    SyncTeamsAndColors();
     std::array<PlayerSlotInfo, 22> list{};
     int resolvedCount = 0;
     bool anyChanged = !g_hasPushedPlayersOnce;
@@ -564,7 +628,7 @@ void SyncPlayersAndCards(uint8_t* gmatch, uint8_t* matchInfo) {
             g_cachedPlayerNames[slot][0] = '\0';
             g_cachedShirtNames[slot][0] = '\0';
             info.shirtNumber = 0;
-            info.name[0] = '\0'; // unresolved: no invented name (the HUD shows a neutral dash)
+            info.name[0] = '\0'; // unknown: the HUD shows its localized "Casa N" / "Fora N" fallback
         }
 
         if (info.yellows != g_cachedYellows[slot] ||
@@ -588,6 +652,14 @@ void SyncPlayersAndCards(uint8_t* gmatch, uint8_t* matchInfo) {
     if (anyChanged) {
         g_hasPushedPlayersOnce = true;
         VarState::Instance().UpdatePlayers(list);
+    }
+
+    const bool incomplete = (resolvedCount < 22) || !g_loggedTeamSyncOnce;
+    if (g_rosterDiagCount < 3 &&
+        (g_rosterDiagCount == 0 || (incomplete && g_mainTickCount - g_rosterDiagTick >= 900))) {
+        ++g_rosterDiagCount;
+        g_rosterDiagTick = g_mainTickCount;
+        LogRosterDiagnostics(gmatch, resolvedCount);
     }
 }
 
@@ -1107,6 +1179,8 @@ void ResetSimTrackersOnSimThread() {
     g_syncedTeamKitIds[0] = 0xFFFFFFFFU;
     g_syncedTeamKitIds[1] = 0xFFFFFFFFU;
     g_hasPushedPlayersOnce = false;
+    g_rosterDiagCount = 0;
+    g_rosterDiagTick = 0;
     g_loggedRosterSyncOnce = false;
     g_loggedTeamSyncOnce = false;
     std::memset(g_cachedPlayerIds, 0, sizeof(g_cachedPlayerIds));

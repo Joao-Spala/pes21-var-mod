@@ -66,8 +66,9 @@ void Logger::Log(LogLevel level, const char* fmt, ...) {
     va_end(args);
 
     std::fputc('\n', g_logFile);
-    // Only force synchronous disk flush on warnings/errors so hot threads never block on HDD I/O
-    if (level >= LogLevel::Warn) {
+    // Info and above are rare lifecycle events: flush so a crash never loses them.
+    // Debug stays buffered so hot threads never block on disk I/O.
+    if (level >= LogLevel::Info) {
         std::fflush(g_logFile);
     }
 }

@@ -10,6 +10,14 @@ I18N("OPÇÕES", "OPTIONS")
 I18N("Recolher painel", "Collapse panel")
 I18N("Abrir painel", "Open panel")
 
+// ---- Generic fallback when the game roster cannot be read
+I18N("CASA", "HOME")
+I18N("FORA", "AWAY")
+I18N("CAS", "HOM")
+I18N("FOR", "AWY")
+I18N("Casa", "Home")
+I18N("Fora", "Away")
+
 // ---- Timeline
 I18N("Lance %d de %d", "Incident %d of %d")
 I18N("%d lances", "%d incidents")

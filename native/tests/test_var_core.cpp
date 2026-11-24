@@ -1575,16 +1575,22 @@ void TestRemapAndLanguage() {
         VarHudController c2;
         std::array<PlayerSlotInfo, 22> pl{};
         pl[4].shirtNumber = 0; // completely unresolved slot
+        pl[13].team = 1;       // unresolved away slot
         pl[7].shirtNumber = 7; // number known, name not yet
         std::snprintf(pl[15].name, sizeof(pl[15].name), "%s", "Fora Cardoso"); // real name that starts with "Fora "
         pl[15].shirtNumber = 9;
         c2.UpdateContext(LiveTelemetry{}, ReplaySyncResult{}, pl, st.GetTeams(), {}, MatchVarStats{}, st.GetHudConfig());
-        EXPECT_TRUE(c2.FormatPlayerBroadcast(4) == "\xE2\x80\x93", "Unresolved player must show a neutral dash, never CASA/FORA");
+        EXPECT_TRUE(c2.FormatPlayerBroadcast(4) == "Home 5", "Unresolved home player must fall back to localized side + number");
+        EXPECT_TRUE(c2.FormatPlayerBroadcast(15 - 2) == "Away 3", "Unresolved away player must fall back to localized side + number");
         EXPECT_TRUE(c2.FormatPlayerBroadcast(7) == "#7", "Number-only player");
         EXPECT_TRUE(c2.FormatPlayerBroadcast(15) == "#9 Fora Cardoso", "Real player names must never be translated");
         VarState::Instance().ResetMatch();
-        EXPECT_TRUE(VarState::Instance().GetTeams()[0].fullName[0] == '\0' && VarState::Instance().GetTeams()[1].fullName[0] == '\0',
-                    "Default teams must be empty (no CASA/FORA placeholder)");
+        VarHudController c3;
+        c3.UpdateContext(LiveTelemetry{}, ReplaySyncResult{}, pl, VarState::Instance().GetTeams(), {}, MatchVarStats{}, st.GetHudConfig());
+        EXPECT_TRUE(std::strcmp(c3.TeamFullName(0), "HOME") == 0 && std::strcmp(c3.TeamFullName(1), "AWAY") == 0,
+                    "Unknown teams must fall back to localized CASA/FORA");
+        EXPECT_TRUE(std::strcmp(c3.TeamShortName(0), "HOM") == 0 && std::strcmp(c3.TeamShortName(1), "AWY") == 0,
+                    "Unknown short names must fall back to localized CAS/FOR");
     }
     i18n::SetLanguage(Language::PtBr);
     EXPECT_TRUE(Tr(lbl) == lbl, "PT-BR mode must return the input pointer (zero cost)");

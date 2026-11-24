@@ -236,7 +236,8 @@ struct PlayerSlotInfo {
         } else if (hasNum) {
             std::snprintf(outBuf, outSize, "#%u", static_cast<unsigned>(shirtNumber));
         } else {
-            std::snprintf(outBuf, outSize, "%s", "\xE2\x80\x93"); // unknown player: neutral dash
+            // Unknown player: generic side + position in the starting XI (the HUD localizes it)
+            std::snprintf(outBuf, outSize, "%s %d", team == 1 ? "Fora" : "Casa", (slot % 11) + 1);
         }
     }
 };
@@ -396,6 +397,8 @@ public:
     static VarState& Instance();
 
     void ResetMatch();
+    // Bumped by every ResetMatch so the sim thread knows its pushed names were wiped
+    uint32_t MatchGeneration() const { return matchGeneration_.load(std::memory_order_acquire); }
 
     // Controls (called by Lua / UI)
     void SetEnabled(bool enabled);
@@ -542,6 +545,7 @@ private:
     uint32_t dataRevision_   = 1;
     uint32_t rosterRevision_ = 1;
     uint32_t teamsRevision_  = 1;
+    std::atomic<uint32_t> matchGeneration_{ 0 };
 
     std::array<PlayerSlotInfo, 22> players_{};
     std::array<TeamDisplayInfo, 2> teams_{};

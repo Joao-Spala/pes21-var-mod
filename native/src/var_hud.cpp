@@ -177,7 +177,13 @@ void VarHudController::FormatPlayerBroadcastBuf(int32_t slot, char* outBuf, size
         std::snprintf(outBuf, outSize, "%s", Tr("Jogador"));
         return;
     }
-    players_[slot].FormatBroadcastName(outBuf, outSize);
+    const PlayerSlotInfo& p = players_[slot];
+    if (p.name[0] == '\0' && p.shirtName[0] == '\0' && p.shirtNumber == 0) {
+        // Name not found in the game roster: localized generic fallback ("Casa 4" / "Away 4")
+        std::snprintf(outBuf, outSize, "%s %d", Tr(p.team == 1 ? "Fora" : "Casa"), (slot % 11) + 1);
+        return;
+    }
+    p.FormatBroadcastName(outBuf, outSize);
 }
 
 std::string VarHudController::FormatPlayerBroadcast(int32_t slot) const {
@@ -188,14 +194,15 @@ std::string VarHudController::FormatPlayerBroadcast(int32_t slot) const {
 
 const char* VarHudController::TeamFullName(int32_t team) const {
     const int idx = (team == 1) ? 1 : 0;
-    // Real club name from the game, or empty while it is still unknown (never a generic placeholder)
-    return teams_[idx].fullName;
+    if (teams_[idx].fullName[0] != '\0') return teams_[idx].fullName;
+    return Tr(idx == 0 ? "CASA" : "FORA"); // club name not found in the game roster
 }
 
 const char* VarHudController::TeamShortName(int32_t team) const {
     const int idx = (team == 1) ? 1 : 0;
     if (teams_[idx].shortName[0] != '\0') return teams_[idx].shortName;
-    return teams_[idx].fullName; // short name missing: the renderer clips the full name
+    if (teams_[idx].fullName[0] != '\0') return teams_[idx].fullName; // the renderer clips the full name
+    return Tr(idx == 0 ? "CAS" : "FOR");
 }
 
 bool VarHudController::ComputeSecondLastDefenderX(const PlaySnapshot& snap, int32_t defendingTeam,
