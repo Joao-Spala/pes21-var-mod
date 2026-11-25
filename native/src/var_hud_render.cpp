@@ -663,6 +663,8 @@ void RenderCollapsedPill(float vw, float vh, const VarVerdict& pending, const Ve
     (void)vh;
     const float margin = U(20);
     const size_t poolCount = pool.Count();
+    const std::string pillSummaryStr = poolCount > 0 ? g_controller.FormatPoolSummary(pool) : std::string(Tr(pending.summary));
+    const char* pillSummary = pillSummaryStr.c_str();
     const bool armed = pending.armed || poolCount > 0;
     const bool pad = InputManager::PreferPadGlyphs();
     const float h = U(44);
@@ -678,7 +680,7 @@ void RenderCollapsedPill(float vw, float vh, const VarVerdict& pending, const Ve
     const float badgeW = Measure(Txt::Strong, "VAR") + U(14);
     float contentW = 0.0f;
     if (armed) {
-        contentW = std::max(TrackedW(poolHdr), std::min(Measure(Txt::Strong, Tr(pending.summary)), U(340)));
+        contentW = std::max(TrackedW(poolHdr), std::min(Measure(Txt::Strong, pillSummary), U(340)));
     } else {
         contentW = Measure(Txt::Small, Tr("Abrir painel")) + U(8) +
                    ActionGlyph(nullptr, ImVec2(0, 0), gh, cfg.bindings, BindAction::ToggleFocus, pad, false);
@@ -700,7 +702,7 @@ void RenderCollapsedPill(float vw, float vh, const VarVerdict& pending, const Ve
     const float x = p.x + U(12) + badgeW + U(12);
     if (armed) {
         Tracked(dl, ImVec2(x, p.y + U(9)), C::Green, poolHdr);
-        TextFit(dl, Txt::Strong, ImVec2(x, p.y + U(9) + LineH(Txt::Caption) + U(3)), U(340), C::Text, Tr(pending.summary));
+        TextFit(dl, Txt::Strong, ImVec2(x, p.y + U(9) + LineH(Txt::Caption) + U(3)), U(340), C::Text, pillSummary);
     } else {
         const char* lbl = Tr("Abrir painel");
         Text(dl, Txt::Small, ImVec2(x, p.y + (h - LineH(Txt::Small)) * 0.5f), C::Text2, lbl);
@@ -1669,6 +1671,7 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
         const char* text   = "";
     };
     std::array<PoolRow, kMaxCardPoolEntries + 1> rows{};
+    std::array<std::string, kMaxCardPoolEntries + 1> rowTexts{}; // current-language summaries
     size_t rowCount = 0;
 
     if (pool.hasPlayDecision) {
@@ -1678,7 +1681,9 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
                                  pv.action == VarAction::RestartGoalKick ||
                                  pv.action == VarAction::RestartThrowIn);
         const ImU32 col = (pv.targetCard == CardKind::Red) ? C::Red : isOverturn ? C::Yellow : C::Accent;
-        rows[rowCount++] = PoolRow{ true, 0U, pool.playOrder, col, Tr("LANCE"), pv.summary[0] ? pv.summary : Tr("DECISÃO PRONTA") };
+        rowTexts[rowCount] = g_controller.FormatSummaryOf(pv);
+        rows[rowCount] = PoolRow{ true, 0U, pool.playOrder, col, Tr("LANCE"), rowTexts[rowCount].c_str() };
+        ++rowCount;
     }
 
     const size_t cardStart = rowCount;
@@ -1688,7 +1693,9 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
         const bool hasRed = (cv.targetCard == CardKind::Red) || (cv.directCardEdit && cv.directReds > 0);
         const bool hasYel = (cv.targetCard == CardKind::Yellow) || (cv.directCardEdit && cv.directYellows > 0 && cv.directReds == 0);
         const ImU32 col = hasRed ? C::Red : hasYel ? C::Yellow : C::Neutral;
-        rows[rowCount++] = PoolRow{ false, cv.sequence, ce.order, col, Tr("CARTÃO"), cv.summary };
+        rowTexts[rowCount] = g_controller.FormatSummaryOf(cv);
+        rows[rowCount] = PoolRow{ false, cv.sequence, ce.order, col, Tr("CARTÃO"), rowTexts[rowCount].c_str() };
+        ++rowCount;
     }
     if (rowCount > cardStart + 1) {
         std::sort(rows.begin() + cardStart, rows.begin() + rowCount, [](const PoolRow& a, const PoolRow& b) {
@@ -1735,7 +1742,7 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
     const float hdrCy = bp.y + padY + hdrH * 0.5f;
     const float capW = TrackedW(hdrTitle);
     Tracked(dl, ImVec2(tx, hdrCy - LineH(Txt::Caption) * 0.5f), C::Green, hdrTitle);
-    const char* sub = (total > 1) ? Tr("Aplicadas juntas ao sair do replay") : Tr("Aplicada ao sair do replay");
+    const char* sub = (total > 1) ? Tr("Aplicadas ao sair do replay") : Tr("Aplicada ao sair do replay");
     const float subX = tx + capW + U(8);
     const float subMaxW = cb.x - subX - U(8);
     if (subMaxW > U(40)) {
@@ -1913,9 +1920,20 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& poo
             RenderDecisionPool(dl, contentW, pool, cfg, state);
         }
 
-        // Pitch height: true pitch aspect, capped so the panel always fits the screen alongside the Pool
+        // Pitch height: true pitch aspect, capped so the panel always fits the screen alongside the Pool.
+        // The rest of the page (rows, description, hint bar) is measured every frame, so the pitch shrinks to
+        // exactly what is left instead of pushing the hint bar out of the window (720p, Large, full pool).
+        static float s_restH[2] = { 0.0f, 0.0f }; // [0] REVISÃO, [1] decision page
+        const int restKey = (page == HudPage::Configure) ? 1 : 0;
+        const bool hasPitch = (page == HudPage::Main || page == HudPage::Configure);
+        const float pitchScale = (page == HudPage::Configure) ? 0.9f : 1.0f;
         const float pitchBudget = (poolCount == 0) ? 0.34f : (poolCount == 1) ? 0.28f : 0.24f;
-        const float radarH = std::clamp(contentW / 1.56f, U(112), maxPanelH * pitchBudget);
+        float radarH = std::clamp(contentW / 1.56f, U(112), maxPanelH * pitchBudget);
+        const float bodyTopY = ImGui::GetCursorPosY();
+        if (hasPitch && s_restH[restKey] > 0.0f) {
+            const float avail = (maxPanelH - ImGui::GetStyle().WindowPadding.y - bodyTopY - s_restH[restKey]) / pitchScale;
+            radarH = std::max(U(112), std::min(radarH, avail));
+        }
 
         // 4. Page body
         if (page == HudPage::Main) {
@@ -1927,7 +1945,7 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& poo
         } else if (page == HudPage::Controls) {
             RenderControlsPage(dl, contentW, maxPanelH, mouseMoved, state);
         } else if (page == HudPage::Configure) {
-            RenderDecisionPage(dl, contentW, radarH * 0.9f, cfg, pool, mouseMoved, state);
+            RenderDecisionPage(dl, contentW, radarH * pitchScale, cfg, pool, mouseMoved, state);
         }
 
         // 5. Context hints
@@ -1958,6 +1976,9 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& poo
             const Hint hs[] = { { H::AxisV, BindAction::Up, 0, "Navegar" }, { H::AxisH, BindAction::Left, 0, "Ajustar" },
                                 { H::Action, BindAction::Confirm, 0, "Confirmar" }, { H::Action, BindAction::Back, 0, "Voltar" } };
             HintBar(dl, contentW, hs, 4);
+        }
+        if (hasPitch) {
+            s_restH[restKey] = std::max(0.0f, ImGui::GetCursorPosY() - bodyTopY - radarH * pitchScale);
         }
     }
     ImGui::End();

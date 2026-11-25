@@ -629,7 +629,7 @@ void VarHudController::RebuildMainOptions() {
         mainOptions_.push_back({ "Anular pênalti", "Remove o cartão e reinicia com tiro de meta", VarAction::OverturnCancel, CardKind::None, false, false, false });
         mainOptions_.push_back({ "Falta fora da área", "Recua a cobrança para fora da área", VarAction::ConvertToFreeKick, activeEvent_.cardKind, false, false, false });
         mainOptions_.push_back({ "Alterar cartão", "Sem cartão, amarelo ou vermelho", VarAction::EditCard, activeEvent_.cardKind, false, false, false });
-        mainOptions_.push_back({ "Manter decisão", "Fecha o painel e segue o replay", VarAction::None, CardKind::None, true, false, false });
+        mainOptions_.push_back({ "Manter decisão", "Mantém a decisão do árbitro neste lance", VarAction::None, CardKind::None, true, false, false });
     } else {
         mainOptions_.push_back({ "Alterar cartão", "Sem cartão, amarelo ou vermelho", VarAction::EditCard, activeEvent_.cardKind, false, false, false });
         mainOptions_.push_back({ "Marcar falta", "Falta no lance selecionado", VarAction::RetroactiveFreeKick, activeEvent_.cardKind, false, false, false });
@@ -1030,7 +1030,7 @@ void VarHudController::TriggerSettingsRow(int row, int delta, VarState& state) {
 // ---------------------------------------------------------------------------
 const char* VarHudController::BindActionLabel(int action) {
     static constexpr const char* kLabels[kBindActionCount] = {
-        "Abrir / recolher painel", "Confirmar", "Voltar", "Cancelar decisão", "Aba anterior",
+        "Abrir / recolher painel", "Confirmar", "Voltar", "Limpar pool", "Aba anterior",
         "Próxima aba", "Inverter / trocar time", "Lance anterior", "Próximo lance", "Reproduzir / pausar",
         "Cima", "Baixo", "Esquerda", "Direita", "Telemetria",
     };
@@ -1163,6 +1163,7 @@ void VarHudController::SelectMainOption(int index, VarState& state) {
             if (pool.hasPlayDecision && pool.playDecision.sourceEventId == activeEvent_.id) {
                 state.RemovePlayFromPool();
             }
+            state.RemoveCardEntriesForEvent(activeEvent_.id);
         }
         CollapseToReplay();
         return;
@@ -1208,7 +1209,16 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
         v.directReds    = (draftDirectCardPreset_ >= 2) ? 1 : 0;
         // Straight red keeps a yellow the player already had (yellow + straight red is legal)
         if (draftDirectCardPreset_ == 3 && IsValidSlot(draftOffenderSlot_)) {
-            v.directYellows = std::min<uint8_t>(players_[draftOffenderSlot_].yellows, 1);
+            // Base = the pending direct edit of this player if there is one, else the live cards
+            uint8_t baseYellows = players_[draftOffenderSlot_].yellows;
+            VarVerdict probe{};
+            probe.action = VarAction::EditCard;
+            probe.directCardEdit = true;
+            probe.offenderSlot = draftOffenderSlot_;
+            if (const CardPoolEntry* pend = state.PeekVerdictPool().FindSameKey(probe)) {
+                baseYellows = pend->verdict.directYellows;
+            }
+            v.directYellows = std::min<uint8_t>(baseYellows, 1);
         }
     }
     v.spotPos = draftSpotPos_;
@@ -1219,11 +1229,15 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
 
     bool replacedPlay = false;
     const VerdictPool before = state.PeekVerdictPool();
-    state.AddToVerdictPool(v, &replacedPlay);
+    bool evictedCard = false;
+    state.AddToVerdictPoolEx(v, &replacedPlay, &evictedCard);
     const VerdictPool after = state.PeekVerdictPool();
     const bool droppedEventCard = (v.action != VarAction::EditCard) && (after.CardCount() < before.CardCount());
     if (replacedPlay) {
         poolNoticeMsg_ = "Lance substituído no pool (máx. 1 falta ou reinício)";
+        poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
+    } else if (evictedCard) {
+        poolNoticeMsg_ = "Pool cheio: a edição de cartão mais antiga foi removida";
         poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
     } else if (droppedEventCard) {
         poolNoticeMsg_ = "Cartão do lance incorporado à decisão";
@@ -1280,35 +1294,79 @@ std::string VarHudController::FormatActiveContextTitle() const {
     return std::string(buf);
 }
 
-std::string VarHudController::FormatVerdictSummary() const {
+std::string VarHudController::FormatSummaryOf(const VarVerdict& v) const {
     char buf[128];
-    const char* teamStr = TeamShortName(draftBenefitedTeam_);
-    const std::string offName = FormatPlayerBroadcast(draftOffenderSlot_);
-
-    if (draftAction_ == VarAction::OverturnCancel) {
+    const char* teamStr = TeamShortName(v.benefitedTeam);
+    if (v.action == VarAction::OverturnCancel) {
         std::snprintf(buf, sizeof(buf), Tr("Anular lance · posse %s"), teamStr);
-    } else if (draftAction_ == VarAction::RestartCorner) {
+    } else if (v.action == VarAction::RestartCorner) {
         std::snprintf(buf, sizeof(buf), Tr("Escanteio · %s"), teamStr);
-    } else if (draftAction_ == VarAction::RestartGoalKick) {
+    } else if (v.action == VarAction::RestartGoalKick) {
         std::snprintf(buf, sizeof(buf), Tr("Tiro de meta · %s"), teamStr);
-    } else if (draftAction_ == VarAction::RestartThrowIn) {
+    } else if (v.action == VarAction::RestartThrowIn) {
         std::snprintf(buf, sizeof(buf), Tr("Lateral · %s"), teamStr);
-    } else if (draftAction_ == VarAction::ConvertToPenalty || draftAction_ == VarAction::RetroactivePenalty) {
-        std::snprintf(buf, sizeof(buf), Tr("Pênalti · %s · %s"), teamStr, CardLabel(draftCard_));
-    } else if (draftAction_ == VarAction::ConvertToFreeKick || draftAction_ == VarAction::RetroactiveFreeKick) {
-        std::snprintf(buf, sizeof(buf), Tr("Falta · %s · %s"), teamStr, CardLabel(draftCard_));
-    } else if (draftAction_ == VarAction::EditCard) {
-        if (draftDirectCardMode_) {
-            std::snprintf(buf, sizeof(buf), Tr("Cartão · %s · %s"), offName.c_str(), DirectCardPresetLabel(draftDirectCardPreset_));
+    } else if (v.action == VarAction::ConvertToPenalty || v.action == VarAction::RetroactivePenalty) {
+        std::snprintf(buf, sizeof(buf), Tr("Pênalti · %s · %s"), teamStr, CardLabel(v.targetCard));
+    } else if (v.action == VarAction::ConvertToFreeKick || v.action == VarAction::RetroactiveFreeKick) {
+        std::snprintf(buf, sizeof(buf), Tr("Falta · %s · %s"), teamStr, CardLabel(v.targetCard));
+    } else if (v.action == VarAction::EditCard) {
+        // No "Cartão ·" prefix: the pool row already carries the CARTÃO tag, so the result stays visible
+        const std::string offName = FormatPlayerBroadcast(v.offenderSlot);
+        if (v.directCardEdit) {
+            const int preset = (v.directReds > 0 && v.directYellows >= 2) ? 2 : (v.directReds > 0) ? 3 : (v.directYellows > 0) ? 1 : 0;
+            std::snprintf(buf, sizeof(buf), "%s · %s", offName.c_str(), DirectCardPresetLabel(preset));
         } else {
-            std::snprintf(buf, sizeof(buf), Tr("Cartão · %s · %s"), offName.c_str(), CardLabel(draftCard_));
+            std::snprintf(buf, sizeof(buf), "%s · %s", offName.c_str(), CardLabel(v.targetCard));
         }
     } else {
         std::snprintf(buf, sizeof(buf), "%s", Tr("Manter decisão"));
     }
+    Utf8TrimIncompleteTail(buf);
     return std::string(buf);
 }
 
+std::string VarHudController::FormatPoolSummary(const VerdictPool& pool) const {
+    const size_t total = pool.Count();
+    if (total == 0) return std::string();
+    std::string first;
+    std::string second;
+    if (pool.hasPlayDecision) first = FormatSummaryOf(pool.playDecision);
+    std::array<const CardPoolEntry*, kMaxCardPoolEntries> sorted{};
+    size_t sc = 0;
+    for (const auto& e : pool.cardEntries) {
+        if (e.active) sorted[sc++] = &e;
+    }
+    std::sort(sorted.begin(), sorted.begin() + sc,
+              [](const CardPoolEntry* a, const CardPoolEntry* b) { return a->order < b->order; });
+    for (size_t i = 0; i < sc && second.empty(); ++i) {
+        if (first.empty()) first = FormatSummaryOf(sorted[i]->verdict);
+        else second = FormatSummaryOf(sorted[i]->verdict);
+    }
+    char buf[160];
+    if (total == 1 || second.empty()) {
+        std::snprintf(buf, sizeof(buf), "%s", first.c_str());
+    } else if (total == 2) {
+        std::snprintf(buf, sizeof(buf), "%s  +  %s", first.c_str(), second.c_str());
+    } else {
+        std::snprintf(buf, sizeof(buf), "%s  (+%zu)", first.c_str(), total - 1);
+    }
+    Utf8TrimIncompleteTail(buf);
+    return std::string(buf);
+}
+
+std::string VarHudController::FormatVerdictSummary() const {
+    VarVerdict v{};
+    v.action = draftAction_;
+    v.benefitedTeam = draftBenefitedTeam_;
+    v.offenderSlot = draftOffenderSlot_;
+    v.targetCard = draftCard_;
+    v.directCardEdit = draftDirectCardMode_;
+    if (draftDirectCardMode_) {
+        v.directYellows = (draftDirectCardPreset_ == 1) ? 1 : (draftDirectCardPreset_ == 2) ? 2 : 0;
+        v.directReds    = (draftDirectCardPreset_ >= 2) ? 1 : 0;
+    }
+    return FormatSummaryOf(v);
+}
 void VarHudController::HandleAction(NavAction action, VarState& state) {
     if (action == NavAction::ToggleDebug) {
         state.SetDebugOverlayOpen(!state.IsDebugOverlayOpen());
@@ -1476,7 +1534,13 @@ void VarHudController::HandleAction(NavAction action, VarState& state) {
             const ConfigField f = configFields_[selectedIndex_];
             if (f == ConfigField::Confirm) ArmCurrentDraft(state);
             else if (f == ConfigField::Back) { page_ = returnPage_; selectedIndex_ = 0; }
-            else AdjustField(f, +1, state);
+            else {
+                // Enter on a value row goes to the Confirm button (values change with left / right),
+                // so following the "Enter Confirmar" hint never silently changes a value.
+                for (size_t i = 0; i < configFields_.size(); ++i) {
+                    if (configFields_[i] == ConfigField::Confirm) { selectedIndex_ = static_cast<int>(i); break; }
+                }
+            }
         }
     }
 }

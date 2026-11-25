@@ -2205,6 +2205,43 @@ void TestCompositeVerdictPoolAndRcuOffsets() {
         st.CancelVerdict();
     }
 
+    // 9. Event scoping: latest official foul of a player, and removal of one event's card edits
+    {
+        VarEvent official{};
+        official.type = VarEventType::Foul;
+        official.offenderSlot = 9;
+        official.matchTick = 1000;
+        const uint32_t idOld = st.PushEvent(official);
+        official.matchTick = 5000; // a later, separate foul (same-incident merge window is 30 ticks)
+        const uint32_t idNew = st.PushEvent(official);
+        VarEvent byVar = official;
+        byVar.matchTick = 9000;
+        byVar.reviewedByVar = true;
+        st.PushEvent(byVar);
+        EXPECT_EQ(st.FindLatestOfficialFoulEventId(9), idNew, "Latest official foul must ignore VAR-made events");
+        EXPECT_TRUE(idOld != idNew, "Event ids must be unique");
+        EXPECT_EQ(st.FindLatestOfficialFoulEventId(3), 0U, "No official foul for slot 3");
+
+        VarVerdict ev1{};
+        ev1.action = VarAction::EditCard;
+        ev1.sourceEventId = idOld;
+        ev1.offenderSlot = 9;
+        ev1.origCard = CardKind::Simple;
+        ev1.targetCard = CardKind::Yellow;
+        st.AddToVerdictPool(ev1);
+        VarVerdict direct9{};
+        direct9.action = VarAction::EditCard;
+        direct9.directCardEdit = true;
+        direct9.offenderSlot = 9;
+        direct9.directYellows = 1;
+        st.AddToVerdictPool(direct9);
+        st.RemoveCardEntriesForEvent(idOld);
+        const VerdictPool p9 = st.PeekVerdictPool();
+        EXPECT_EQ(p9.CardCount(), static_cast<size_t>(1), "Only the event edit is removed");
+        EXPECT_TRUE(p9.FindCardForSlot(9) && p9.FindCardForSlot(9)->verdict.directCardEdit, "Direct edit must survive");
+        st.CancelVerdict();
+    }
+
     // 8. UTF-8 safe truncation never leaves half a multi-byte character
     {
         char buf[7];

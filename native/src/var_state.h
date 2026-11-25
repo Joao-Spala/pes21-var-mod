@@ -579,6 +579,10 @@ public:
 
     // Recording API (called from simulation thread / live poll)
     uint32_t PushEvent(const VarEvent& ev);
+    // Id of the most recent official (engine-called) foul or penalty event of this offender, 0 if none
+    uint32_t FindLatestOfficialFoulEventId(int32_t offenderSlot) const;
+    // Removes non-direct card edits made on one official event
+    void RemoveCardEntriesForEvent(uint32_t eventId);
     void PushSnapshot(const PlaySnapshot& snap);
     void PushDetectedIncident(const DetectedIncident& inc);
     void UpdatePlayers(const std::array<PlayerSlotInfo, 22>& players);
@@ -622,6 +626,8 @@ public:
     void RemovePlayFromPool();
     void RemoveCardFromPool(int32_t slot);          // every card entry targeting this player
     void RemoveCardPoolEntry(uint32_t sequence);    // one entry, by its unique sequence
+    // Same as AddToVerdictPool, also reports when a full pool evicted its oldest card edit
+    void AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPlay, bool* outEvictedCard);
     void CancelVerdict();
     VarVerdict PeekVerdict() const;
     VerdictPool PeekVerdictPool() const;

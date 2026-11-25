@@ -1,5 +1,20 @@
 # Changelog
 
+## v4.2.4
+
+Revisão profunda com três auditorias independentes (memória do jogo, código novo e interface).
+
+- **Nada é executado durante cutscenes**: o mod chamava `EnterOutOfPlay` no meio de cutscenes (estados `0x03` a `0x11`), algo que a engine nunca faz, abortando a cutscene e deixando objetos pendurados até o fim da partida. Agora o pool espera a partida chegar a `SetPlayReady` ou `InPlay`.
+- **Expulsão e revogação só na bola parada**: um pool só de cartões que tira ou devolve jogador de campo espera a próxima parada, quando a engine retira ou recoloca o jogador no fluxo dela.
+- **Falta injetada só com jogadores em campo**: quem já estava fora de campo (substituído ou expulso antes) nunca entra como infrator ou vítima.
+- **Sem escrita em campo sem escritor nativo**: o mod não grava mais o byte `PlayerStatus + 0x0D`, e o `QuickRestartFlag` é gravado com o mesmo tamanho que a engine usa.
+- **Edição de cartão presa ao lance certo**: editar o cartão de um lance antigo não altera mais a falta que está sendo cobrada.
+- **Decisão sem reinício não fica registrada**: se o lance muda antes da injeção, o histórico não ganha um pênalti que não aconteceu, e o aviso diz que só os cartões foram aplicados.
+- **Pool e painel**: "Manter decisão" também descarta as edições de cartão daquele lance, o vermelho direto respeita a edição pendente, o pool cheio avisa quando descarta a edição mais antiga, os resumos seguem o idioma atual, o resultado do cartão não é mais cortado e o painel não corta a barra de atalhos em 720p ou com o pool cheio.
+- **Enter na tela de decisão** leva ao botão Confirmar em vez de mudar o valor da linha.
+- **Instalador** ativa `luajit.ext.enabled = 1` mesmo quando a linha não existe ou está comentada.
+- **README** com mensagens de erro reais, momento de carga da DLL e nomes de atalhos iguais aos do painel.
+
 ## v4.2.3
 
 - **Linha de spray corrigida**: marcar uma falta pelo VAR com o jogo já parado em outra falta não desenha mais uma linha de spray do local antigo até o novo. O spray do árbitro (`VanishingSprayInfo`) é limpo pela mesma rotina da engine (`0x140A5CCE0`) antes da nova cobrança, como acontece em toda falta normal.

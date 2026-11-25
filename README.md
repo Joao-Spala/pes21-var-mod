@@ -1,6 +1,6 @@
-# PES 2021 - VAR Mod v4.2.3 (PT-BR & EN)
+# PES 2021 - VAR Mod v4.2.4 (PT-BR & EN)
 
-![Version](https://img.shields.io/badge/Version-v4.2.3-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.2.4-38BDF8?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Idiomas](https://img.shields.io/badge/Idiomas-PT--BR_%7C_English-2EA043?style=for-the-badge)
 ![Sider Compatible](https://img.shields.io/badge/Sider_7.3_%2F_BMPES_16.3-100%25_Compatible-F59E0B?style=for-the-badge)
@@ -24,10 +24,10 @@
 
 ### Instalação
 
-1. Baixe o **`PES2021_VAR_Mod_v4.2.3.zip`** na página de [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
+1. Baixe o **`PES2021_VAR_Mod_v4.2.4.zip`** na página de [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
 2. Feche o jogo e rode o **`VAR_Mod_Gerenciar.bat`**. No menu, escolha **`1 - Instalar ou atualizar`**.
    - O instalador acha a pasta do Sider ou do BMPES (ou pede o caminho), copia os arquivos, ativa `luajit.ext.enabled = 1` e registra `lua.module = "var_mod.lua"` no `sider.ini`. Antes de mexer no `sider.ini`, ele cria um backup datado.
-3. Abra o jogo pelo **Sider** (no BMPES, pelo atalho do próprio patch). A DLL só carrega ao montar a primeira partida, então a abertura do jogo não fica mais lenta.
+3. Abra o jogo pelo **Sider** (no BMPES, pelo atalho do próprio patch). A DLL só carrega na primeira partida (ou ao abrir o menu do Sider), então a abertura do jogo não fica mais lenta.
 
 **Instalação manual:** copie `modules\var_mod.lua` para `<pasta do sider>\modules\` e `modules\var_mod\var_core.dll` para `<pasta do sider>\modules\var_mod\`. Depois adicione ao `sider.ini`:
 
@@ -36,14 +36,14 @@ luajit.ext.enabled = 1
 lua.module = "var_mod.lua"
 ```
 
-**Atualizar:** rode o instalador da versão nova e escolha a opção 1 de novo. **Desativar sem apagar:** opção 3. **Remover tudo:** opção 4.
+**Atualizar:** rode o instalador da versão nova e escolha a opção 1 de novo. **Desativar sem apagar:** opção 3. **Remover tudo:** opção 4 (apaga os arquivos e a linha `lua.module` do mod, e mantém `luajit.ext.enabled = 1`, que outros módulos do Sider também usam).
 
 ### Como usar
 
 1. Jogue uma partida **offline** (Exibição, Master Liga, Rumo ao Estrelato ou Copas).
 2. Num lance polêmico, **pause** e abra o **Replay Manual**. O painel VAR abre sozinho na lateral.
 3. Na aba **`REVISÃO`**, escolha o lance na barra de lances (clique, ou use `[` e `]`). O painel leva o replay até o momento e já preenche infrator, vítima, local e zona.
-4. Escolha a decisão: marcar falta ou pênalti, anular, converter, inverter, alterar cartão ou bola parada. Ajuste infrator, cartão, time e local (clique no campo tático para mover a cobrança) e confirme com **`Enter`**.
+4. Escolha a decisão: marcar falta ou pênalti, anular, converter, inverter, alterar cartão ou bola parada. Ajuste infrator, cartão, time e local com as setas esquerda e direita ou com o mouse (clique no campo tático para mover a cobrança). **`Enter`** leva ao botão Confirmar e um segundo **`Enter`** confirma.
 5. Para corrigir cartões sem lance associado, use a aba **`CARTÕES`**: escolha o jogador e defina o cartão exato.
 6. As decisões vão para o **pool de decisões**. Você pode juntar uma decisão de lance com vários ajustes de cartão. Cada item tem `[X]` para remover, e **`Delete`** limpa tudo.
 7. **Saia do replay** e volte ao jogo. O pool inteiro é aplicado na engine de uma vez e um aviso confirma a decisão.
@@ -57,9 +57,9 @@ Idioma (Português ou English) e remap de atalhos ficam na aba **`OPÇÕES`**. N
 | Abrir ou recolher o painel | `V` ou `F7` | `R3` |
 | Confirmar | `Enter` | |
 | Voltar | `Esc` ou `Backspace` | |
-| Limpar o pool de decisões | `Delete` | |
-| Aba anterior / próxima | `PgUp` ou `Q` / `PgDn` ou `E` | |
-| Trocar infrator e vítima / trocar time | `Tab` | |
+| Limpar pool | `Delete` | |
+| Aba anterior / próxima | `Page Up` ou `Q` / `Page Down` ou `E` | |
+| Inverter / trocar time | `Tab` | |
 | Lance anterior / próximo | `[` / `]` | |
 | Play / Pause do replay | `P` | |
 | Navegar | Setas ou `W` `A` `S` `D` | |
@@ -80,7 +80,7 @@ O controle só abre e recolhe o painel. Ele continua controlando o replay normal
 
 ### Solução de problemas
 
-- **O módulo aparece no Sider sem descrição:** a DLL não carregou. Confira se `var_core.dll` está em `<pasta do sider>\modules\var_mod\` e veja o `sider.log`.
+- **O menu do Sider mostra `Status: ERRO (...)` no VAR Mod:** a DLL não carregou. A mensagem entre parênteses diz o motivo (arquivo não encontrado, falha ao carregar ou falha ao iniciar). Confira se `var_core.dll` está em `<pasta do sider>\modules\var_mod\`, se `luajit.ext.enabled = 1` está no `sider.ini` e veja o `sider.log`.
 - **O painel não abre no replay:** confirme que a partida é offline e que o VAR está ligado (tecla `7` no menu do Sider). Use `V`, `F7` ou `R3` para reabrir o painel recolhido.
 - **Algo deu errado numa partida:** o log fica em `<pasta do sider>\modules\var_mod\var_core.log`. Ele é recriado a cada abertura do jogo, então copie o arquivo antes de abrir o jogo de novo e anexe numa [issue](https://github.com/Joao-Spala/pes21-var-mod/issues).
 - **Configuração:** atalhos, idioma e estado ligado/desligado ficam em `<pasta do sider>\modules\var_mod\var_mod.ini`. Apagar o arquivo restaura o padrão.
@@ -99,10 +99,10 @@ Video assistant referee (**VAR**) for **eFootball PES 2021 (`v1.7.2.0`, Steam)**
 
 ### Installation
 
-1. Download **`PES2021_VAR_Mod_v4.2.3.zip`** from the [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) page and extract it anywhere.
+1. Download **`PES2021_VAR_Mod_v4.2.4.zip`** from the [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) page and extract it anywhere.
 2. Close the game and run **`VAR_Mod_Gerenciar.bat`**. In the menu, pick **`1 - Instalar ou atualizar`** (install or update).
    - The installer finds your Sider or BMPES folder (or asks for the path), copies the files, enables `luajit.ext.enabled = 1` and registers `lua.module = "var_mod.lua"` in `sider.ini`. It makes a timestamped backup of `sider.ini` first.
-3. Launch the game through **Sider** (for BMPES, through the patch launcher). The DLL only loads when the first match is set up, so game startup is not slowed down.
+3. Launch the game through **Sider** (for BMPES, through the patch launcher). The DLL only loads on the first match (or when the Sider menu is opened), so game startup is not slowed down.
 
 **Manual install:** copy `modules\var_mod.lua` to `<sider folder>\modules\` and `modules\var_mod\var_core.dll` to `<sider folder>\modules\var_mod\`. Then add to `sider.ini`:
 
@@ -111,14 +111,14 @@ luajit.ext.enabled = 1
 lua.module = "var_mod.lua"
 ```
 
-**Update:** run the new version's installer and pick option 1 again. **Disable without deleting:** option 3. **Remove everything:** option 4.
+**Update:** run the new version's installer and pick option 1 again. **Disable without deleting:** option 3. **Remove everything:** option 4 (deletes the files and the mod's `lua.module` line, and keeps `luajit.ext.enabled = 1`, which other Sider modules also use).
 
 ### How to use
 
 1. Play an **offline** match (Exhibition, Master League, Become a Legend or Cups).
 2. On a controversial play, **pause** and open the **Manual Replay**. The VAR panel opens by itself on the side.
 3. In the **`REVIEW`** tab, pick the play on the incident bar (click it, or use `[` and `]`). The panel seeks the replay to that moment and fills in offender, fouled player, spot and zone.
-4. Choose the decision: give a foul or penalty, overturn, upgrade, reverse, change the card or award a set piece. Adjust offender, card, team and spot (click the tactical pitch to move the restart) and confirm with **`Enter`**.
+4. Choose the decision: give a foul or penalty, overturn, upgrade, reverse, change the card or award a set piece. Adjust offender, card, team and spot with the left and right arrows or the mouse (click the tactical pitch to move the restart). **`Enter`** jumps to the Confirm button and a second **`Enter`** confirms.
 5. To fix cards with no play attached, use the **`CARDS`** tab: pick the player and set the exact card count.
 6. Decisions go into the **decision pool**. You can combine one play decision with several card edits. Each item has an `[X]` to remove it, and **`Delete`** clears everything.
 7. **Leave the replay** and resume the match. The whole pool is applied to the engine at once and a banner confirms the decision.
@@ -132,9 +132,9 @@ Language (Português or English) and shortcut remapping live in the **`OPTIONS`*
 | Open or collapse the panel | `V` or `F7` | `R3` |
 | Confirm | `Enter` | |
 | Back | `Esc` or `Backspace` | |
-| Clear the decision pool | `Delete` | |
-| Previous / next tab | `PgUp` or `Q` / `PgDn` or `E` | |
-| Swap offender and fouled player / switch team | `Tab` | |
+| Clear pool | `Delete` | |
+| Previous / next tab | `Page Up` or `Q` / `Page Down` or `E` | |
+| Swap / switch team | `Tab` | |
 | Previous / next incident | `[` / `]` | |
 | Replay Play / Pause | `P` | |
 | Navigate | Arrow keys or `W` `A` `S` `D` | |
@@ -155,7 +155,7 @@ The gamepad only opens and collapses the panel and keeps controlling the replay.
 
 ### Troubleshooting
 
-- **The module shows in Sider without a description:** the DLL did not load. Check that `var_core.dll` is in `<sider folder>\modules\var_mod\` and look at `sider.log`.
+- **The Sider menu shows `Status: ERROR (...)` for the VAR Mod:** the DLL did not load. The text in brackets gives the reason (file not found, load failure or start failure). Check that `var_core.dll` is in `<sider folder>\modules\var_mod\`, that `luajit.ext.enabled = 1` is in `sider.ini`, and look at `sider.log`.
 - **The panel does not open in the replay:** make sure the match is offline and the VAR is on (key `7` in the Sider menu). Use `V`, `F7` or `R3` to reopen a collapsed panel.
 - **Something went wrong in a match:** the log is at `<sider folder>\modules\var_mod\var_core.log`. It is recreated every time the game starts, so copy it before relaunching and attach it to an [issue](https://github.com/Joao-Spala/pes21-var-mod/issues).
 - **Settings:** shortcuts, language and on/off state are stored in `<sider folder>\modules\var_mod\var_mod.ini`. Deleting it restores the defaults.

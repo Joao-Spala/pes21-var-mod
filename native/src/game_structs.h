@@ -242,7 +242,7 @@ namespace Offsets {
     constexpr uintptr_t MatchFSM_EmbeddedJudge     = 0x908;  // Judge@ai@match
     constexpr uintptr_t MatchFSM_WorkingState      = 0x2790;
     constexpr uintptr_t MatchFSM_WorkingStatus     = 0x2794; // int32_t
-    constexpr uintptr_t MatchFSM_QuickRestartFlag  = 0x27FC; // uint8_t (copied to MatchControl + 0x74C; 0 = formal set-play)
+    constexpr uintptr_t MatchFSM_QuickRestartFlag  = 0x27FC; // uint32_t, written as a dword by 0x1404541E9 (copied to MatchControl + 0x74C; 0 = formal set-play)
     constexpr uintptr_t MatchFSM_KickerCache       = 0x4954; // uint64_t (0x000000FF000000FF clears)
     constexpr uintptr_t MatchFSM_JudgeResult       = 0x49C0; // RawSetPlayInfo (+0x00) + RawFoulInfo (+0x30)
     constexpr uintptr_t MatchFSM_JudgeFoulInfo     = 0x49F0; // RawFoulInfo

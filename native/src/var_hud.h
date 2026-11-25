@@ -122,6 +122,9 @@ public:
     const char* ControlsMessage() const; // translated, nullptr when expired
     bool ControlsMessageIsError() const { return controlsMsgError_; }
     const char* PoolNoticeMessage() const; // translated, nullptr when expired
+    // Summaries rebuilt in the CURRENT language from the verdict fields (stored text is only for logs)
+    std::string FormatSummaryOf(const VarVerdict& v) const;
+    std::string FormatPoolSummary(const VerdictPool& pool) const;
     void ClearPoolNotice() { poolNoticeMsg_ = nullptr; poolNoticeUntilMs_ = 0; }
     static const char* BindActionLabel(int action); // translated
 

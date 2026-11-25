@@ -75,6 +75,8 @@ function Set-IniModuleState([string]$iniPath, [bool]$enable) {
     $list = [System.Collections.Generic.List[string]]::new()
     $found = $false
     $lastLuaIdx = -1
+    $firstLuaIdx = -1
+    $luajitOn = $false
 
     for ($i = 0; $i -lt $lines.Length; $i++) {
         $ln = $lines[$i]
@@ -89,13 +91,26 @@ function Set-IniModuleState([string]$iniPath, [bool]$enable) {
                 $list.Add(";" + $ModuleLine)
             }
             $lastLuaIdx = $list.Count - 1
-        } elseif ($enable -and $ln -match '^\s*;?\s*luajit\.ext\.enabled\s*=\s*0\s*$') {
-            $list.Add("luajit.ext.enabled = 1")
+        } elseif ($enable -and $ln -match '^\s*;*\s*luajit\.ext\.enabled\s*=\s*\d+\s*$') {
+            # Covers "= 0" and a commented-out line: the module needs LuaJIT FFI to load its DLL
+            if (-not $luajitOn) { $list.Add("luajit.ext.enabled = 1") }
+            $luajitOn = $true
         } else {
             $list.Add($ln)
             if ($ln -match '^\s*lua\.module\s*=') {
                 $lastLuaIdx = $list.Count - 1
+                if ($firstLuaIdx -lt 0) { $firstLuaIdx = $list.Count - 1 }
             }
+        }
+    }
+
+    if ($enable -and -not $luajitOn) {
+        # Key missing entirely: add it before the first module line (or at the end)
+        if ($firstLuaIdx -ge 0) {
+            $list.Insert($firstLuaIdx, "luajit.ext.enabled = 1")
+            if ($lastLuaIdx -ge $firstLuaIdx) { $lastLuaIdx++ }
+        } else {
+            $list.Add("luajit.ext.enabled = 1")
         }
     }
 

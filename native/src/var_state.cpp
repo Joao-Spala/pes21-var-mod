@@ -1208,7 +1208,33 @@ void VarState::ArmVerdict(const VarVerdict& verdict) {
 }
 
 void VarState::AddToVerdictPool(const VarVerdict& verdict, bool* outReplacedPlay) {
+    AddToVerdictPoolEx(verdict, outReplacedPlay, nullptr);
+}
+
+uint32_t VarState::FindLatestOfficialFoulEventId(int32_t offenderSlot) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (size_t i = 0; i < eventCount_; ++i) {
+        const VarEvent& e = events_[(eventHead_ + kMaxEvents - 1 - i) % kMaxEvents];
+        if (e.reviewedByVar || e.offenderSlot != offenderSlot) continue;
+        if (e.type == VarEventType::Foul || e.type == VarEventType::Penalty || e.type == VarEventType::CardOnly) {
+            return e.id;
+        }
+    }
+    return 0;
+}
+
+void VarState::RemoveCardEntriesForEvent(uint32_t eventId) {
+    if (eventId == 0) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& e : verdictPool_.cardEntries) {
+        if (e.active && !e.verdict.directCardEdit && e.verdict.sourceEventId == eventId) e = CardPoolEntry{};
+    }
+    hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+}
+
+void VarState::AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPlay, bool* outEvictedCard) {
     if (outReplacedPlay) *outReplacedPlay = false;
+    if (outEvictedCard) *outEvictedCard = false;
 
     // A "None" decision has nothing to execute and would keep the pool armed forever
     if (verdict.action == VarAction::None) return;
@@ -1231,10 +1257,11 @@ void VarState::AddToVerdictPool(const VarVerdict& verdict, bool* outReplacedPlay
             if (!e.active) { slotFor = &e; break; }
         }
         if (!slotFor) {
-            // Pool full (32 card edits): drop the oldest card entry
+            // Pool full (32 card edits): drop the oldest card entry and tell the HUD
             for (auto& e : verdictPool_.cardEntries) {
                 if (!slotFor || e.order < slotFor->order) slotFor = &e;
             }
+            if (outEvictedCard) *outEvictedCard = true;
         }
         slotFor->active = true;
         slotFor->order = stored.sequence;
