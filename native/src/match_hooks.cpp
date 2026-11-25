@@ -842,10 +842,21 @@ bool SetPlayerCardsAbsolute(uint8_t* gmatch, uint8_t* matchInfo, int32_t slot, u
     }
 
     const bool wasOnPitch = (*reinterpret_cast<const uint8_t*>(matchInfo + Offsets::MatchInfo_PlayerOnPitch + slot) != 0);
+    const uint8_t oldYellows = rec[Offsets::PlayerRecord_Yellows];
+    const uint8_t oldReds = rec[Offsets::PlayerRecord_Reds];
     rec[Offsets::PlayerRecord_Yellows] = newYellows;
     rec[Offsets::PlayerRecord_Reds] = newReds;
 
-    const bool shouldBeOnPitch = (newReds == 0 && newYellows < 2);
+    // Cards decide the on-pitch flag only in the two transitions cards can cause:
+    //  - on the pitch and now red / second yellow  -> sent off
+    //  - off the pitch BECAUSE of a red / second yellow, and now clean -> sending-off revoked
+    // A player off the pitch for any other reason (substituted, injured) must never be put back:
+    // that created a 12th "ghost" player (log 24/11 21:15: Y=1 R=0 onPitch=1 was=0).
+    const bool wasSentOff = (oldReds > 0 || oldYellows >= 2);
+    const bool cleanNow = (newReds == 0 && newYellows < 2);
+    bool shouldBeOnPitch = wasOnPitch;
+    if (wasOnPitch && !cleanNow) shouldBeOnPitch = false;
+    else if (!wasOnPitch && wasSentOff && cleanNow) shouldBeOnPitch = true;
     if (wasOnPitch == shouldBeOnPitch) {
         // Card count only: never touch the on-pitch flags or PlayerStatus when nothing changes
         VAR_LOG_INF("SetPlayerCardsAbsolute slot=%d -> Y=%u R=%u (on-pitch unchanged=%d)",

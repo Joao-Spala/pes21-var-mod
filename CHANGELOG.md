@@ -1,5 +1,9 @@
 # Changelog
 
+## v4.2.2
+
+- **Jogador fantasma corrigido**: editar os cartões de um jogador que já estava fora de campo (substituído ou lesionado) não o recoloca mais em campo. O mod só tira um jogador de campo por vermelho ou segundo amarelo e só devolve quem tinha saído por expulsão. Antes, isso podia deixar um time com 12 jogadores na engine.
+
 ## v4.2.1
 
 - **Módulo do Sider em português e inglês**: o texto do módulo no menu do Sider, incluindo as mensagens de erro, segue o idioma escolhido no painel. A escolha fica salva no `var_mod.ini` e vale na próxima vez que o jogo for aberto.
