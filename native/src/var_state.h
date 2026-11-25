@@ -261,6 +261,91 @@ struct VarVerdict {
     char     summary[128]     = {};
 };
 
+struct CardPoolEntry {
+    bool       active  = false;
+    uint32_t   order   = 0;
+    VarVerdict verdict{};
+};
+
+// Composite VAR Decision Pool:
+// Holds at most ONE play/restart decision (two simultaneous fouls/restarts are invalid)
+// plus 0..22 independent per-player card decisions, all executed atomically when leaving Manual Replay.
+struct VerdictPool {
+    uint32_t                       sequence        = 0;
+    bool                           hasPlayDecision = false;
+    uint32_t                       playOrder       = 0;
+    VarVerdict                     playDecision{};
+    std::array<CardPoolEntry, 22>  cardEntries{};
+
+    size_t CardCount() const {
+        size_t n = 0;
+        for (const auto& e : cardEntries) {
+            if (e.active) ++n;
+        }
+        return n;
+    }
+
+    size_t Count() const {
+        return (hasPlayDecision ? 1U : 0U) + CardCount();
+    }
+
+    bool Empty() const {
+        return !hasPlayDecision && CardCount() == 0;
+    }
+
+    bool HasExecutableItems() const {
+        if (hasPlayDecision && playDecision.armed && playDecision.action != VarAction::None) {
+            return true;
+        }
+        for (const auto& e : cardEntries) {
+            if (e.active && e.verdict.armed && e.verdict.action != VarAction::None) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void FormatCombinedSummary(char* outBuf, size_t outSize) const {
+        if (!outBuf || outSize == 0) return;
+        outBuf[0] = '\0';
+        const size_t total = Count();
+        if (total == 0) return;
+
+        const char* first = nullptr;
+        const char* second = nullptr;
+        if (hasPlayDecision && playDecision.summary[0] != '\0') {
+            first = playDecision.summary;
+        }
+        // Collect active card summaries sorted by insertion order
+        std::array<const CardPoolEntry*, 22> sorted{};
+        size_t sc = 0;
+        for (const auto& e : cardEntries) {
+            if (e.active) sorted[sc++] = &e;
+        }
+        std::sort(sorted.begin(), sorted.begin() + sc, [](const CardPoolEntry* a, const CardPoolEntry* b) {
+            return a->order < b->order;
+        });
+        for (size_t i = 0; i < sc; ++i) {
+            const char* s = sorted[i]->verdict.summary;
+            if (!s[0]) continue;
+            if (!first) first = s;
+            else if (!second) { second = s; break; }
+        }
+
+        if (!first) {
+            std::snprintf(outBuf, outSize, "%s", "DECISÃO PRONTA");
+            return;
+        }
+        if (total == 1 || !second) {
+            std::snprintf(outBuf, outSize, "%s", first);
+        } else if (total == 2) {
+            std::snprintf(outBuf, outSize, "%s  +  %s", first, second);
+        } else {
+            std::snprintf(outBuf, outSize, "%s  (+%zu)", first, total - 1);
+        }
+    }
+};
+
 struct ReplayControlCommand {
     bool    hasSeek        = false;
     bool    seekByTime     = false;
@@ -368,6 +453,7 @@ struct LiveTelemetry {
 struct HudRenderSnapshot {
     LiveTelemetry                  tel{};
     VarVerdict                     pending{};
+    VerdictPool                    pool{};
     MatchVarStats                  stats{};
     HudConfig                      cfg{};
     std::array<PlayerSlotInfo, 22> players{};
@@ -482,12 +568,17 @@ public:
     void RequestReplayCameraFocus(int32_t focusSlot);
     bool ConsumeReplayCommand(ReplayControlCommand& outCmd);
 
-    // Verdict queue (DX11 HUD -> Simulation thread)
+    // Verdict Pool queue (DX11 HUD -> Simulation thread)
     bool HasArmedVerdict() const { return hasArmedVerdict_.load(std::memory_order_acquire); }
     void ArmVerdict(const VarVerdict& verdict);
+    void AddToVerdictPool(const VarVerdict& verdict, bool* outReplacedPlay = nullptr);
+    void RemovePlayFromPool();
+    void RemoveCardFromPool(int32_t slot);
     void CancelVerdict();
     VarVerdict PeekVerdict() const;
+    VerdictPool PeekVerdictPool() const;
     bool ConsumeVerdict(VarVerdict& outVerdict);
+    bool ConsumeVerdictPool(VerdictPool& outPool);
     void UpdateEventAfterVerdict(const VarVerdict& applied);
     void IncrementInterventions();
     void SetPostApplyBanner(const char* text, uint64_t durationMs = 4500, BannerStyle style = BannerStyle::Applied);
@@ -551,7 +642,7 @@ private:
     std::array<TeamDisplayInfo, 2> teams_{};
     LiveTelemetry telemetry_{};
 
-    VarVerdict pendingVerdict_{};
+    VerdictPool verdictPool_{};
     uint32_t verdictSeq_ = 1;
 
     ReplayControlCommand pendingReplayCmd_{};

@@ -121,6 +121,7 @@ public:
     int  CaptureColumn() const { return captureCol_; }
     const char* ControlsMessage() const; // translated, nullptr when expired
     bool ControlsMessageIsError() const { return controlsMsgError_; }
+    const char* PoolNoticeMessage() const; // translated, nullptr when expired
     static const char* BindActionLabel(int action); // translated
 
     bool IsInManualReplay() const { return inManualReplay_; }
@@ -250,6 +251,8 @@ private:
     const char* controlsMsg_        = nullptr; // PT-BR key, translated on read
     bool        controlsMsgError_   = false;
     uint64_t    controlsMsgUntilMs_ = 0;
+    const char* poolNoticeMsg_      = nullptr; // PT-BR key, translated on read
+    uint64_t    poolNoticeUntilMs_  = 0;
     void SetControlsMessage(const char* ptMsg, bool isError);
 
     // Draft verdict configuration

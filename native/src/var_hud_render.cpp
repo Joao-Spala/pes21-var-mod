@@ -242,6 +242,13 @@ void IconMinimize(ImDrawList* dl, ImVec2 c, float sz, ImU32 col) {
     dl->AddLine(ImVec2(c.x - h, c.y), ImVec2(c.x + h, c.y), col, std::max(1.5f, Uf(1.8f)));
 }
 
+void IconClose(ImDrawList* dl, ImVec2 c, float sz, ImU32 col) {
+    const float h = sz * 0.40f;
+    const float th = std::max(1.4f, Uf(1.6f));
+    dl->AddLine(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), col, th);
+    dl->AddLine(ImVec2(c.x + h, c.y - h), ImVec2(c.x - h, c.y + h), col, th);
+}
+
 void IconSwap(ImDrawList* dl, ImVec2 c, float sz, ImU32 col) {
     const float w = sz * 0.5f, dy = sz * 0.22f, head = sz * 0.2f;
     const float th = std::max(1.4f, Uf(1.6f));
@@ -652,17 +659,26 @@ void RenderDebugTelemetry(float vw, float vh, const LiveTelemetry& tel, const Va
     ImGui::End();
 }
 
-void RenderCollapsedPill(float vw, float vh, const VarVerdict& pending, const HudConfig& cfg) {
+void RenderCollapsedPill(float vw, float vh, const VarVerdict& pending, const VerdictPool& pool, const HudConfig& cfg) {
+    (void)vh;
     const float margin = U(20);
-    const bool armed = pending.armed;
+    const size_t poolCount = pool.Count();
+    const bool armed = pending.armed || poolCount > 0;
     const bool pad = InputManager::PreferPadGlyphs();
     const float h = U(44);
     const float gh = U(20);
 
+    char poolHdr[64];
+    if (poolCount > 1) {
+        std::snprintf(poolHdr, sizeof(poolHdr), Tr("POOL PRONTO (%zu)"), poolCount);
+    } else {
+        std::snprintf(poolHdr, sizeof(poolHdr), "%s", Tr("DECISÃO PRONTA"));
+    }
+
     const float badgeW = Measure(Txt::Strong, "VAR") + U(14);
     float contentW = 0.0f;
     if (armed) {
-        contentW = std::max(TrackedW(Tr("DECISÃO PRONTA")), std::min(Measure(Txt::Strong, pending.summary), U(320)));
+        contentW = std::max(TrackedW(poolHdr), std::min(Measure(Txt::Strong, pending.summary), U(340)));
     } else {
         contentW = Measure(Txt::Small, Tr("Abrir painel")) + U(8) +
                    ActionGlyph(nullptr, ImVec2(0, 0), gh, cfg.bindings, BindAction::ToggleFocus, pad, false);
@@ -683,8 +699,8 @@ void RenderCollapsedPill(float vw, float vh, const VarVerdict& pending, const Hu
     VarBadge(dl, ImVec2(p.x + U(12), p.y + ((e.y - p.y) - bh) * 0.5f), bh);
     const float x = p.x + U(12) + badgeW + U(12);
     if (armed) {
-        Tracked(dl, ImVec2(x, p.y + U(9)), C::Green, Tr("DECISÃO PRONTA"));
-        TextFit(dl, Txt::Strong, ImVec2(x, p.y + U(9) + LineH(Txt::Caption) + U(3)), U(320), C::Text, pending.summary);
+        Tracked(dl, ImVec2(x, p.y + U(9)), C::Green, poolHdr);
+        TextFit(dl, Txt::Strong, ImVec2(x, p.y + U(9) + LineH(Txt::Caption) + U(3)), U(340), C::Text, pending.summary);
     } else {
         const char* lbl = Tr("Abrir painel");
         Text(dl, Txt::Small, ImVec2(x, p.y + (h - LineH(Txt::Small)) * 0.5f), C::Text2, lbl);
@@ -1149,7 +1165,7 @@ void RenderReviewPage(ImDrawList* dl, float contentW, float radarH, const HudCon
     }
 }
 
-void RenderSquadPage(ImDrawList* dl, float contentW, float maxPanelH, bool mouseMoved, VarState& state) {
+void RenderSquadPage(ImDrawList* dl, float contentW, float maxPanelH, const VerdictPool& pool, bool mouseMoved, VarState& state) {
     const auto& teams = g_controller.Teams();
     const auto& players = g_controller.Players();
     const int team = g_controller.SquadTeamFilter();
@@ -1182,7 +1198,7 @@ void RenderSquadPage(ImDrawList* dl, float contentW, float maxPanelH, bool mouse
     const float rowGap = U(2);
     const float natural = 11.0f * (rowH + rowGap);
     const float reserved = U(130);
-    const float maxListH = std::max(U(150), maxPanelH - ImGui::GetCursorPosY() - reserved);
+    const float maxListH = std::max(U(140), maxPanelH - ImGui::GetCursorPosY() - reserved);
     const float listH = std::min(natural, maxListH);
     const bool scroll = natural > maxListH + 1.0f;
 
@@ -1210,7 +1226,7 @@ void RenderSquadPage(ImDrawList* dl, float contentW, float maxPanelH, bool mouse
             const float numColW = U(30);
             if (pl.shirtNumber > 0) Text(cdl, Txt::Strong, ImVec2(rp.x + U(10) + numColW - Measure(Txt::Strong, num), ty), off ? C::Text3 : C::Text2, num);
 
-            // Right side: cards and sent-off tag
+            // Right side: cards, sent-off tag, and pending POOL badge
             float right = rp.x + innerW - U(12);
             const float chipW = U(9), chipH = U(13);
             const float cy = rp.y + rowH * 0.5f;
@@ -1225,6 +1241,16 @@ void RenderSquadPage(ImDrawList* dl, float contentW, float maxPanelH, bool mouse
                 const float tw = Measure(Txt::Small, tag);
                 Text(cdl, Txt::Small, ImVec2(right - tw - U(2), rp.y + (rowH - LineH(Txt::Small)) * 0.5f), C::Red, tag);
                 right -= tw + U(10);
+            }
+            if (pool.cardEntries[static_cast<size_t>(slot)].active) {
+                const char* pTag = Tr("POOL");
+                const float ptw = TrackedW(pTag);
+                const float pw = ptw + U(10);
+                const float ph = U(18);
+                const ImVec2 pa(right - pw, cy - ph * 0.5f);
+                cdl->AddRectFilled(pa, ImVec2(pa.x + pw, pa.y + ph), C::AccentSoft, U(kRadChip));
+                Tracked(cdl, ImVec2(pa.x + U(5), pa.y + (ph - LineH(Txt::Caption)) * 0.5f), C::AccentHi, pTag);
+                right -= pw + U(8);
             }
             // Name (without the "#N" prefix: the number has its own column)
             char full[80];
@@ -1425,7 +1451,7 @@ void RenderControlsPage(ImDrawList* dl, float contentW, float maxPanelH, bool mo
                     if (gw > 0.0f) PadGlyph(cdl, ImVec2(cx + (cellW - gw) * 0.5f, rp.y + (rowH - gh) * 0.5f), gh, m);
                 }
                 if (gw <= 0.0f) {
-                    const char* dash = "\xE2\x80\x93";
+                    const char* dash = "-";
                     Text(cdl, Txt::Body, ImVec2(cx + (cellW - Measure(Txt::Body, dash)) * 0.5f, rp.y + (rowH - LineH(Txt::Body)) * 0.5f), C::Text3, dash);
                 }
             }
@@ -1473,7 +1499,7 @@ void RenderControlsPage(ImDrawList* dl, float contentW, float maxPanelH, bool mo
 
 void BackIconAdapter(ImDrawList* dl, ImVec2 c, float sz, ImU32 col) { IconChevron(dl, c, sz * 0.8f, Dir::Left, col); }
 
-void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudConfig& cfg, bool mouseMoved, VarState& state) {
+void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudConfig& cfg, const VerdictPool& pool, bool mouseMoved, VarState& state) {
     const bool pad = InputManager::PreferPadGlyphs();
     // Title block with back button
     {
@@ -1504,6 +1530,12 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
         }
     }
 
+    const bool updatingExistingInPool =
+        (g_controller.DraftAction() == VarAction::EditCard)
+            ? (IsValidSlot(g_controller.DraftOffenderSlot()) &&
+               pool.cardEntries[static_cast<size_t>(g_controller.DraftOffenderSlot())].active)
+            : (pool.hasPlayDecision && pool.playDecision.action != VarAction::None);
+
     const int sel = g_controller.SelectedIndex();
     const float rowH = U(40);
     const float valueW = std::min(U(200), contentW * 0.56f);
@@ -1533,7 +1565,7 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
             dl->AddRectFilled(bp, ImVec2(bp.x + contentW, bp.y + bh), hov ? C::AccentHi : C::Accent, U(kRadCtl));
             if (isSel) dl->AddRect(ImVec2(bp.x - U(3), bp.y - U(3)), ImVec2(bp.x + contentW + U(3), bp.y + bh + U(3)),
                                    WithAlpha(C::Accent, 0.55f), U(kRadCtl) + U(3), 0, std::max(1.5f, Uf(2.0f)));
-            const char* lbl = Tr("Confirmar decisão");
+            const char* lbl = updatingExistingInPool ? Tr("Atualizar no pool") : Tr("Adicionar ao pool");
             const float lw = Measure(Txt::Strong, lbl);
             Text(dl, Txt::Strong, ImVec2(bp.x + (contentW - lw) * 0.5f, bp.y + (bh - LineH(Txt::Strong)) * 0.5f), IM_COL32(255, 255, 255, 255), lbl);
             const float gh = U(20);
@@ -1616,8 +1648,161 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
 // Open panel
 // ============================================================================
 void CollapseIconAdapter(ImDrawList* dl, ImVec2 c, float sz, ImU32 col) { IconMinimize(dl, c, sz, col); }
+void CloseIconAdapter(ImDrawList* dl, ImVec2 c, float sz, ImU32 col) { IconClose(dl, c, sz, col); }
 
-void RenderOpenPanel(float vw, float vh, VarState& state, const VarVerdict& pending) {
+void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool, const HudConfig& cfg, VarState& state) {
+    const size_t total = pool.Count();
+    if (total == 0) return;
+
+    struct PoolRow {
+        bool        isPlay = false;
+        int         slot   = -1;
+        uint32_t    order  = 0;
+        ImU32       tagCol = C::Accent;
+        const char* tag    = "";
+        const char* text   = "";
+    };
+    std::array<PoolRow, 23> rows{};
+    size_t rowCount = 0;
+
+    if (pool.hasPlayDecision) {
+        const auto& pv = pool.playDecision;
+        const bool isOverturn = (pv.action == VarAction::OverturnCancel ||
+                                 pv.action == VarAction::RestartCorner ||
+                                 pv.action == VarAction::RestartGoalKick ||
+                                 pv.action == VarAction::RestartThrowIn);
+        const ImU32 col = (pv.targetCard == CardKind::Red) ? C::Red : isOverturn ? C::Yellow : C::Accent;
+        rows[rowCount++] = PoolRow{ true, -1, pool.playOrder, col, Tr("LANCE"), pv.summary[0] ? pv.summary : Tr("DECISÃO PRONTA") };
+    }
+
+    const size_t cardStart = rowCount;
+    for (int s = 0; s < 22; ++s) {
+        const auto& ce = pool.cardEntries[static_cast<size_t>(s)];
+        if (!ce.active) continue;
+        const auto& cv = ce.verdict;
+        const bool hasRed = (cv.targetCard == CardKind::Red) || (cv.directCardEdit && cv.directReds > 0);
+        const bool hasYel = (cv.targetCard == CardKind::Yellow) || (cv.directCardEdit && cv.directYellows > 0 && cv.directReds == 0);
+        const ImU32 col = hasRed ? C::Red : hasYel ? C::Yellow : C::Neutral;
+        rows[rowCount++] = PoolRow{ false, s, ce.order, col, Tr("CARTÃO"), cv.summary };
+    }
+    if (rowCount > cardStart + 1) {
+        std::sort(rows.begin() + cardStart, rows.begin() + rowCount, [](const PoolRow& a, const PoolRow& b) {
+            return a.order < b.order;
+        });
+    }
+
+    const bool pad = InputManager::PreferPadGlyphs();
+    const char* notice = g_controller.PoolNoticeMessage();
+    const float padX = U(12);
+    const float padY = U(10);
+    const float hdrH = U(26);
+    const float itemH = U(26);
+    const float itemGap = U(3);
+    const size_t visRows = std::min<size_t>(rowCount, 3);
+    const float listH = static_cast<float>(visRows) * itemH + static_cast<float>(visRows > 0 ? visRows - 1 : 0) * itemGap;
+    const float noticeH = notice ? (U(5) + LineH(Txt::Small)) : 0.0f;
+    const float cardH = padY + hdrH + U(6) + listH + noticeH + padY;
+
+    const ImVec2 bp = ImGui::GetCursorScreenPos();
+    dl->AddRectFilled(bp, ImVec2(bp.x + contentW, bp.y + cardH), IM_COL32(18, 40, 30, 255), U(kRadCard));
+    dl->AddRect(bp, ImVec2(bp.x + contentW, bp.y + cardH), WithAlpha(C::Green, 0.35f), U(kRadCard), 0, 1.0f);
+    dl->AddRectFilled(ImVec2(bp.x, bp.y + U(8)), ImVec2(bp.x + U(3), bp.y + cardH - U(8)), C::Green, U(2));
+
+    // Header: POOL DE DECISOES (N)  Aplicadas juntas ao sair do replay .... [Limpar Del]
+    const char* clearLbl = (total > 1) ? Tr("Limpar") : Tr("Cancelar");
+    const float gh = U(18);
+    const float gw = ActionGlyph(dl, ImVec2(0, 0), gh, cfg.bindings, BindAction::CancelVerdict, pad, false);
+    const float cbw = U(10) + Measure(Txt::Small, clearLbl) + (gw > 0.0f ? U(6) + gw : 0.0f) + U(8);
+    const float cbh = U(26);
+    const ImVec2 cb(bp.x + contentW - padX - cbw, bp.y + padY);
+    bool clearHov = false;
+    if (HitArea("##pool_clear", cb, ImVec2(cbw, cbh), &clearHov)) state.CancelVerdict();
+    dl->AddRectFilled(cb, ImVec2(cb.x + cbw, cb.y + cbh), clearHov ? IM_COL32(255, 255, 255, 32) : IM_COL32(255, 255, 255, 14), U(kRadCtl));
+    Text(dl, Txt::Small, ImVec2(cb.x + U(10), cb.y + (cbh - LineH(Txt::Small)) * 0.5f), C::Text, clearLbl);
+    if (gw > 0.0f) {
+        ActionGlyph(dl, ImVec2(cb.x + cbw - U(8) - gw, cb.y + (cbh - gh) * 0.5f), gh, cfg.bindings, BindAction::CancelVerdict, pad);
+    }
+    if (clearHov) Tooltip(Tr("Limpar pool"));
+
+    char hdrTitle[64];
+    std::snprintf(hdrTitle, sizeof(hdrTitle), Tr("POOL DE DECISÕES (%zu)"), total);
+    const float tx = bp.x + padX + U(2);
+    const float hdrCy = bp.y + padY + hdrH * 0.5f;
+    const float capW = TrackedW(hdrTitle);
+    Tracked(dl, ImVec2(tx, hdrCy - LineH(Txt::Caption) * 0.5f), C::Green, hdrTitle);
+    const char* sub = (total > 1) ? Tr("Aplicadas juntas ao sair do replay") : Tr("Aplicada ao sair do replay");
+    const float subX = tx + capW + U(8);
+    const float subMaxW = cb.x - subX - U(8);
+    if (subMaxW > U(40)) {
+        TextFit(dl, Txt::Small, ImVec2(subX, hdrCy - LineH(Txt::Small) * 0.5f), subMaxW, C::Text2, sub);
+    }
+
+    // Items list (up to 3 visible without scroll, scrollable if > 3)
+    const ImVec2 listPos(bp.x + padX, bp.y + padY + hdrH + U(6));
+    const float listW = contentW - padX * 2.0f;
+    const bool useScroll = (rowCount > 3);
+
+    auto drawRow = [&](ImDrawList* rdl, const PoolRow& r, ImVec2 rp, float rw, int idx) {
+        rdl->AddRectFilled(rp, ImVec2(rp.x + rw, rp.y + itemH), IM_COL32(10, 22, 18, 175), U(kRadChip));
+        const float rcy = rp.y + itemH * 0.5f;
+
+        // Category pill ([LANCE] / [CARTAO])
+        const float tagTw = TrackedW(r.tag);
+        const float tagW = tagTw + U(10);
+        const float tagH = U(18);
+        const ImVec2 tp(rp.x + U(6), rcy - tagH * 0.5f);
+        rdl->AddRectFilled(tp, ImVec2(tp.x + tagW, tp.y + tagH), WithAlpha(r.tagCol, 0.22f), U(kRadChip));
+        Tracked(rdl, ImVec2(tp.x + U(5), tp.y + (tagH - LineH(Txt::Caption)) * 0.5f), r.tagCol, r.tag);
+
+        // Remove [X] button
+        const float xb = U(22);
+        const ImVec2 xp(rp.x + rw - U(4) - xb, rcy - xb * 0.5f);
+        char xid[24];
+        std::snprintf(xid, sizeof(xid), "##pool_rm_%d", idx);
+        if (IconButton(rdl, xid, xp, xb, CloseIconAdapter, Tr("Remover do pool"), false)) {
+            if (r.isPlay) state.RemovePlayFromPool();
+            else state.RemoveCardFromPool(r.slot);
+        }
+
+        // Summary
+        const float sx = tp.x + tagW + U(8);
+        const float sMaxW = std::max(U(30), xp.x - sx - U(6));
+        TextFit(rdl, Txt::Strong, ImVec2(sx, rcy - LineH(Txt::Strong) * 0.5f), sMaxW, C::Text, r.text);
+    };
+
+    ImGui::SetCursorScreenPos(listPos);
+    if (useScroll) {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+        if (ImGui::BeginChild("##pool_scroll", ImVec2(listW, listH), ImGuiChildFlags_None)) {
+            ImDrawList* cdl = ImGui::GetWindowDrawList();
+            const float innerW = ImGui::GetContentRegionAvail().x;
+            for (size_t i = 0; i < rowCount; ++i) {
+                const ImVec2 rp = ImGui::GetCursorScreenPos();
+                drawRow(cdl, rows[i], rp, innerW, static_cast<int>(i));
+                ImGui::SetCursorScreenPos(rp);
+                ImGui::Dummy(ImVec2(innerW, itemH + (i + 1 < rowCount ? itemGap : 0.0f)));
+            }
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+    } else {
+        for (size_t i = 0; i < rowCount; ++i) {
+            const ImVec2 rp(listPos.x, listPos.y + static_cast<float>(i) * (itemH + itemGap));
+            drawRow(dl, rows[i], rp, listW, static_cast<int>(i));
+        }
+    }
+
+    if (notice) {
+        const float ny = listPos.y + listH + U(5);
+        dl->AddCircleFilled(ImVec2(bp.x + padX + U(4), ny + LineH(Txt::Small) * 0.5f), U(3), C::Yellow, 10);
+        TextFit(dl, Txt::Small, ImVec2(bp.x + padX + U(12), ny), listW - U(12), C::Yellow, notice);
+    }
+
+    ImGui::SetCursorScreenPos(bp);
+    ImGui::Dummy(ImVec2(contentW, cardH + U(10)));
+}
+
+void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& pool) {
     const HudConfig cfg = g_controller.Config();
     const auto& tel = g_controller.Telemetry();
     const auto& teams = g_controller.Teams();
@@ -1642,7 +1827,6 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VarVerdict& pend
         const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
         PanelShadow(wp, ImVec2(wp.x + ws.x, wp.y + ws.y), U(kRadPanel)); // background list: always behind the panel
         state.SetMouseOverPanel(ImGui::IsMouseHoveringRect(wp, ImVec2(wp.x + ws.x, wp.y + ws.y), false));
-        const bool pad = InputManager::PreferPadGlyphs();
 
         // 1. Header: [VAR] | HOME vs AWAY | clock ........ [collapse]
         {
@@ -1716,48 +1900,27 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VarVerdict& pend
             ImGui::Dummy(ImVec2(contentW, th + U(14)));
         }
 
-        // 3. Armed verdict
-        if (pending.armed) {
-            const ImVec2 bp = ImGui::GetCursorScreenPos();
-            const float bh = U(14) + LineH(Txt::Caption) + U(4) + LineH(Txt::Strong) + U(14);
-            dl->AddRectFilled(bp, ImVec2(bp.x + contentW, bp.y + bh), IM_COL32(22, 46, 34, 255), U(kRadCard));
-            dl->AddRectFilled(ImVec2(bp.x, bp.y + U(10)), ImVec2(bp.x + U(3), bp.y + bh - U(10)), C::Green, U(2));
-            const char* cancel = Tr("Cancelar");
-            const float gh = U(20);
-            const float gw = ActionGlyph(dl, ImVec2(0, 0), gh, cfg.bindings, BindAction::CancelVerdict, pad, false);
-            const float cbw = U(12) + Measure(Txt::Small, cancel) + U(8) + gw + U(10);
-            const float cbh = U(30);
-            const ImVec2 cb(bp.x + contentW - U(10) - cbw, bp.y + (bh - cbh) * 0.5f);
-            bool hov = false;
-            if (HitArea("##cancel_verdict", cb, ImVec2(cbw, cbh), &hov)) state.CancelVerdict();
-            dl->AddRectFilled(cb, ImVec2(cb.x + cbw, cb.y + cbh), hov ? IM_COL32(255, 255, 255, 30) : IM_COL32(255, 255, 255, 14), U(kRadCtl));
-            Text(dl, Txt::Small, ImVec2(cb.x + U(12), cb.y + (cbh - LineH(Txt::Small)) * 0.5f), C::Text, cancel);
-            ActionGlyph(dl, ImVec2(cb.x + cbw - U(10) - gw, cb.y + (cbh - gh) * 0.5f), gh, cfg.bindings, BindAction::CancelVerdict, pad);
-            const float tx = bp.x + U(16);
-            const float maxTw = cb.x - tx - U(10);
-            const float capW = TrackedW(Tr("DECISÃO PRONTA"));
-            Tracked(dl, ImVec2(tx, bp.y + U(14)), C::Green, Tr("DECISÃO PRONTA"));
-            TextFit(dl, Txt::Small, ImVec2(tx + capW + U(10), bp.y + U(14) - (LineH(Txt::Small) - LineH(Txt::Caption)) * 0.5f),
-                    std::max(0.0f, maxTw - capW - U(10)), C::Text3, Tr("Aplicada ao sair do replay"));
-            TextFit(dl, Txt::Strong, ImVec2(tx, bp.y + U(14) + LineH(Txt::Caption) + U(4)), maxTw, C::Text, pending.summary);
-            ImGui::SetCursorScreenPos(bp);
-            ImGui::Dummy(ImVec2(contentW, bh + U(12)));
+        // 3. Decision Pool (composite decisions: max 1 play/restart + independent per-player cards)
+        const size_t poolCount = pool.Count();
+        if (poolCount > 0) {
+            RenderDecisionPool(dl, contentW, pool, cfg, state);
         }
 
-        // Pitch height: true pitch aspect, capped so the panel always fits the screen
-        const float radarH = std::clamp(contentW / 1.56f, U(120), maxPanelH * (pending.armed ? 0.30f : 0.34f));
+        // Pitch height: true pitch aspect, capped so the panel always fits the screen alongside the Pool
+        const float pitchBudget = (poolCount == 0) ? 0.34f : (poolCount == 1) ? 0.28f : 0.24f;
+        const float radarH = std::clamp(contentW / 1.56f, U(112), maxPanelH * pitchBudget);
 
         // 4. Page body
         if (page == HudPage::Main) {
             RenderReviewPage(dl, contentW, radarH, cfg, mouseMoved, state);
         } else if (page == HudPage::Squad) {
-            RenderSquadPage(dl, contentW, maxPanelH, mouseMoved, state);
+            RenderSquadPage(dl, contentW, maxPanelH, pool, mouseMoved, state);
         } else if (page == HudPage::Config) {
             RenderOptionsPage(dl, contentW, cfg, mouseMoved, state);
         } else if (page == HudPage::Controls) {
             RenderControlsPage(dl, contentW, maxPanelH, mouseMoved, state);
         } else if (page == HudPage::Configure) {
-            RenderDecisionPage(dl, contentW, radarH * 0.9f, cfg, mouseMoved, state);
+            RenderDecisionPage(dl, contentW, radarH * 0.9f, cfg, pool, mouseMoved, state);
         }
 
         // 5. Context hints
@@ -1922,6 +2085,7 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
     g_frameDataRevision = s_renderSnap.historyRev;
     const LiveTelemetry& tel = s_renderSnap.tel;
     const VarVerdict& pending = s_renderSnap.pending;
+    const VerdictPool& pool = s_renderSnap.pool;
     const HudConfig& cfg = s_renderSnap.cfg;
     g_lastScalePreset = cfg.scalePreset;
     S = (F.baked > 0.0f) ? F.baked : ComputeUiScale(viewportH, cfg.scalePreset);
@@ -1976,11 +2140,11 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
 
     if (g_controller.IsInManualReplay() && !tel.siderOverlayOpen) {
         if (g_controller.IsFocused()) {
-            RenderOpenPanel(viewportW, viewportH, state, pending);
+            RenderOpenPanel(viewportW, viewportH, state, pool);
             state.SetPanelFocused(g_controller.IsFocused());
         } else {
             state.SetMouseOverPanel(false);
-            RenderCollapsedPill(viewportW, viewportH, pending, cfg);
+            RenderCollapsedPill(viewportW, viewportH, pending, pool, cfg);
         }
     } else {
         state.SetMouseOverPanel(false);

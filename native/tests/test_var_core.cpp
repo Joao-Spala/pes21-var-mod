@@ -1921,12 +1921,21 @@ void TestHudRenderSmoke() {
             frame();
             EXPECT_TRUE(!InputManager::IsCapturing(), "Controller reset must cancel any armed capture");
 
-            // Collapsed pill with an armed verdict + post-apply banner
+            // Multi-item Decision Pool (1 play + 4 cards -> exercises >3 scrollable pool + CARTOES badges + collapsed pill)
             VarVerdict armedV{};
             armedV.action = VarAction::RetroactivePenalty;
             armedV.offenderSlot = 4;
             std::snprintf(armedV.summary, sizeof(armedV.summary), "%s", lang ? "Penalty \xC2\xB7 AWY \xC2\xB7 Yellow" : "P\xC3\xAAnalti \xC2\xB7 FOR \xC2\xB7 Amarelo");
             st.ArmVerdict(armedV);
+            for (int cs : { 2, 5, 10, 15 }) {
+                VarVerdict cv{};
+                cv.action = VarAction::EditCard;
+                cv.offenderSlot = cs;
+                cv.directCardEdit = true;
+                cv.directYellows = (cs == 10) ? 0 : 1;
+                std::snprintf(cv.summary, sizeof(cv.summary), "Cart\xC3\xA3o \xC2\xB7 #%d \xC2\xB7 1 amarelo", cs + 1);
+                st.ArmVerdict(cv);
+            }
             st.SetPostApplyBanner("DECISÃO DO VAR APLICADA", 4000);
             InputManager::QueueKeyboardAction(NavAction::ToggleFocus);
             frame();
@@ -1938,6 +1947,11 @@ void TestHudRenderSmoke() {
             frame();
             std::snprintf(shotName, sizeof(shotName), "%s_%d_7_aberto_pronta", langTag, resTag);
             DumpDrawDataBmp(shotName, px, tw, th);
+            InputManager::QueueKeyboardAction(NavAction::NextTab); // CARTOES with POOL badges
+            frame();
+            frame();
+            InputManager::QueueKeyboardAction(NavAction::PrevTab); // back to REVISAO
+            frame();
             st.CancelVerdict();
             InputManager::QueueKeyboardAction(NavAction::ToggleFocus);
             frame();
@@ -1965,6 +1979,163 @@ void TestHudRenderSmoke() {
     MarkPass("TestHudRenderSmoke");
 }
 
+// ---------------------------------------------------------------------------
+// Test 18: Composite VerdictPool (max 1 play/restart + 0..22 per-player cards,
+// single-foul replacement guard, individual removal, official event dedup, RCU offsets)
+// ---------------------------------------------------------------------------
+void TestCompositeVerdictPoolAndRcuOffsets() {
+    EXPECT_EQ(Offsets::MatchInfo_StructSize, static_cast<size_t>(0x2378),
+              "MatchInfo RCU double-buffer stride must be 0x2378");
+    EXPECT_TRUE(Offsets::MatchInfo_FoulSnapshotIds + 12 <= Offsets::MatchInfo_StructSize,
+                "FoulSnapshotIds must reside inside MatchInfo RCU buffer");
+    EXPECT_EQ(Offsets::MatchFSM_QuickRestartFlag, static_cast<uintptr_t>(0x27FC),
+              "MatchFSM_QuickRestartFlag must be 0x27FC");
+
+    auto& st = VarState::Instance();
+    st.ResetMatch();
+    st.SetIniPath(L"");
+    st.SetHudConfig(HudConfig{}, false);
+
+    auto players = st.GetPlayers();
+    players[10].shirtNumber = 9;
+    players[10].yellows = 1;
+    std::snprintf(players[10].name, sizeof(players[10].name), "%s", "PEDRO");
+    players[15].shirtNumber = 15;
+    std::snprintf(players[15].name, sizeof(players[15].name), "%s", "ZARACHO");
+    st.UpdatePlayers(players);
+
+    auto teams = st.GetTeams();
+    std::snprintf(teams[0].fullName, sizeof(teams[0].fullName), "%s", "FLAMENGO");
+    std::snprintf(teams[0].shortName, sizeof(teams[0].shortName), "%s", "FLA");
+    std::snprintf(teams[1].fullName, sizeof(teams[1].fullName), "%s", "ATLETICO");
+    std::snprintf(teams[1].shortName, sizeof(teams[1].shortName), "%s", "CAM");
+    st.UpdateTeams(teams);
+
+    LiveTelemetry tel{};
+    tel.enabled = true;
+    tel.offlineAllowed = true;
+    tel.matchActive = true;
+    tel.matchPhase = 0;
+    tel.matchStatus = static_cast<int32_t>(MatchStatus::SetPlayReady);
+    tel.fsmState = 0x1A;
+    tel.replayMode = 2;
+    tel.replayManualFlag = 1;
+
+    VarHudController ctrl;
+    ctrl.UpdateContext(tel, ReplaySyncResult{}, players, teams, {}, MatchVarStats{}, HudConfig{});
+
+    // 1. Remove card on #9 PEDRO (slot 10) via CARTOES -> returns to Squad so multi-edits stay fluid
+    ctrl.SelectTab(HudPage::Squad);
+    ctrl.SelectSquadPlayer(10);
+    EXPECT_EQ(ctrl.Page(), HudPage::Configure, "Expected Configure for slot 10");
+    EXPECT_EQ(ctrl.DraftDirectCardPreset(), 1, "Should sync to 1 yellow");
+    ctrl.SetDraftDirectCardPreset(0); // Sem cartoes
+    ctrl.TriggerConfigField(ConfigField::Confirm, 1, st);
+    EXPECT_EQ(ctrl.Page(), HudPage::Squad, "Confirming card from CARTOES must return to CARTOES");
+
+    VerdictPool pool = st.PeekVerdictPool();
+    EXPECT_EQ(pool.Count(), static_cast<size_t>(1), "Pool must have 1 decision");
+    EXPECT_TRUE(!pool.hasPlayDecision && pool.cardEntries[10].active, "Slot 10 card removal must be active in pool");
+    EXPECT_TRUE(ctrl.PoolNoticeMessage() == nullptr, "No play replacement notice yet");
+
+    // 2. Switch to REVISAO and award Free Kick + Red Card against #15 ZARACHO (slot 15) -> BOTH coexist in Pool!
+    ctrl.SelectTab(HudPage::Main);
+    ReplayMarker mk{};
+    mk.matchPhase = 0;
+    mk.time60Hz = 1200.0f;
+    mk.kind = IncidentKind::SlideTackle;
+    mk.offenderSlot = 15;
+    mk.victimSlot = 6;
+    mk.pos = Vec3{ 20.0f, 0.0f, 4.0f };
+    std::snprintf(mk.label, sizeof(mk.label), "%s", "CARRINHO");
+    ctrl.UpdateReplayMarkers({ mk });
+    ctrl.SelectReplayMarker(0, st, false);
+    ctrl.SelectMainOption(0, st); // Marcar falta
+    EXPECT_EQ(ctrl.DraftAction(), VarAction::RetroactiveFreeKick, "Expected RetroactiveFreeKick");
+    ctrl.SetDraftCardDirect(CardKind::Red);
+    ctrl.TriggerConfigField(ConfigField::Confirm, 1, st);
+    EXPECT_EQ(ctrl.Page(), HudPage::Main, "Confirming play from REVISAO returns to REVISAO");
+
+    pool = st.PeekVerdictPool();
+    EXPECT_EQ(pool.Count(), static_cast<size_t>(2), "Pool must hold card removal + free kick together");
+    EXPECT_TRUE(pool.hasPlayDecision && pool.playDecision.action == VarAction::RetroactiveFreeKick, "Free kick must be in pool");
+    EXPECT_TRUE(pool.cardEntries[10].active && pool.cardEntries[10].verdict.directYellows == 0,
+                "PEDRO card removal must NOT be overwritten by the foul decision");
+    EXPECT_TRUE(pool.cardEntries[10].order < pool.playOrder, "Chronological order must be preserved");
+    EXPECT_TRUE(ctrl.PoolNoticeMessage() == nullptr, "First play decision must not trigger replacement notice");
+
+    // 3. Domain guardrail: adding a SECOND play decision (Marcar penalti) replaces the previous play decision
+    //    (never two simultaneous fouls!), raises notice, and STILL preserves PEDRO's card removal!
+    ctrl.SelectMainOption(1, st); // Marcar penalti
+    EXPECT_EQ(ctrl.DraftAction(), VarAction::RetroactivePenalty, "Expected RetroactivePenalty");
+    ctrl.SetDraftCardDirect(CardKind::Yellow);
+    ctrl.TriggerConfigField(ConfigField::Confirm, 1, st);
+
+    pool = st.PeekVerdictPool();
+    EXPECT_EQ(pool.Count(), static_cast<size_t>(2), "Second play must replace first play, keeping count == 2");
+    EXPECT_EQ(pool.playDecision.action, VarAction::RetroactivePenalty, "Play decision must update to Penalty");
+    EXPECT_TRUE(pool.cardEntries[10].active, "Independent card decision must remain intact on play replacement");
+    EXPECT_TRUE(ctrl.PoolNoticeMessage() != nullptr, "Replacing an existing play must surface pool notice");
+
+    // 4. Individual item removal & per-slot deduplication
+    VarVerdict c2{};
+    c2.action = VarAction::EditCard;
+    c2.offenderSlot = 3;
+    c2.directCardEdit = true;
+    c2.directYellows = 1;
+    std::snprintf(c2.summary, sizeof(c2.summary), "%s", "Cartão · #4 · 1 amarelo");
+    st.AddToVerdictPool(c2);
+    c2.directYellows = 0;
+    c2.directReds = 1;
+    st.AddToVerdictPool(c2); // same slot 3 -> deduplicated in-place!
+    pool = st.PeekVerdictPool();
+    EXPECT_EQ(pool.CardCount(), static_cast<size_t>(2), "Same-slot card edit must deduplicate");
+    EXPECT_EQ(pool.cardEntries[3].verdict.directReds, static_cast<uint8_t>(1), "Slot 3 card must update to Red");
+
+    st.RemoveCardFromPool(3);
+    pool = st.PeekVerdictPool();
+    EXPECT_TRUE(!pool.cardEntries[3].active && pool.cardEntries[10].active && pool.hasPlayDecision,
+                "RemoveCardFromPool(3) must only remove slot 3");
+
+    st.RemovePlayFromPool();
+    pool = st.PeekVerdictPool();
+    EXPECT_TRUE(!pool.hasPlayDecision && pool.cardEntries[10].active && st.HasArmedVerdict(),
+                "RemovePlayFromPool must keep remaining card entries armed");
+
+    // 5. Official event card-tweak + play conversion deduplication (prevents double origCard subtraction)
+    VarVerdict evCard{};
+    evCard.action = VarAction::EditCard;
+    evCard.sourceEventId = 88;
+    evCard.offenderSlot = 15;
+    evCard.directCardEdit = false;
+    evCard.origCard = CardKind::Yellow;
+    evCard.targetCard = CardKind::Red;
+    st.AddToVerdictPool(evCard);
+    EXPECT_EQ(st.PeekVerdictPool().CardCount(), static_cast<size_t>(2), "Should hold slot 10 direct + slot 15 event card");
+
+    VarVerdict evPlay{};
+    evPlay.action = VarAction::ConvertToPenalty;
+    evPlay.sourceEventId = 88;
+    evPlay.offenderSlot = 15;
+    evPlay.benefitedTeam = 0;
+    evPlay.origCard = CardKind::Yellow;
+    evPlay.targetCard = CardKind::Red;
+    st.AddToVerdictPool(evPlay);
+
+    VerdictPool consumed{};
+    EXPECT_TRUE(st.ConsumeVerdictPool(consumed), "ConsumeVerdictPool must succeed");
+    EXPECT_TRUE(!st.HasArmedVerdict(), "ConsumeVerdictPool must disarm pool atomically");
+    EXPECT_TRUE(consumed.hasPlayDecision && consumed.playDecision.action == VarAction::ConvertToPenalty,
+                "Consumed pool must carry ConvertToPenalty");
+    EXPECT_TRUE(!consumed.cardEntries[15].active,
+                "Non-direct card tweak on same sourceEventId 88 must be superseded by ConvertToPenalty");
+    EXPECT_TRUE(consumed.cardEntries[10].active,
+                "Direct card removal on slot 10 must be preserved in atomic consumption");
+    EXPECT_TRUE(!st.ConsumeVerdictPool(consumed), "Second ConsumeVerdictPool must return false");
+
+    MarkPass("TestCompositeVerdictPoolAndRcuOffsets");
+}
+
 } // namespace
 
 int main() {
@@ -1986,6 +2157,7 @@ int main() {
     TestPerfOverhaulEquivalence();
     TestRemapAndLanguage();
     TestHudRenderSmoke();
+    TestCompositeVerdictPoolAndRcuOffsets();
 
     std::printf("\nResumo: %d PASS, %d FAIL\n", g_passed, g_failed);
     return (g_failed == 0) ? 0 : 1;

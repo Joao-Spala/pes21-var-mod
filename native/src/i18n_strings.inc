@@ -111,6 +111,8 @@ I18N("Centro do campo", "Centre of the pitch")
 I18N("Personalizado", "Custom")
 I18N("Cartão removido. O jogador volta a campo na próxima parada.", "Card removed. The player returns at the next stoppage.")
 I18N("Confirmar decisão", "Confirm decision")
+I18N("Adicionar ao pool", "Add to pool")
+I18N("Atualizar no pool", "Update in pool")
 I18N("Voltar", "Back")
 
 // ---- Verdict summaries (stored when armed)
@@ -122,10 +124,18 @@ I18N("Pênalti · %s · %s", "Penalty · %s · %s")
 I18N("Falta · %s · %s", "Free kick · %s · %s")
 I18N("Cartão · %s · %s", "Card · %s · %s")
 
-// ---- Armed verdict / pill
+// ---- Armed verdict / Decision Pool / pill
 I18N("DECISÃO PRONTA", "DECISION READY")
+I18N("POOL DE DECISÕES (%zu)", "DECISION POOL (%zu)")
+I18N("POOL PRONTO (%zu)", "POOL READY (%zu)")
 I18N("Aplicada ao sair do replay", "Applied when you leave the replay")
+I18N("Aplicadas juntas ao sair do replay", "Applied together when you leave the replay")
 I18N("Cancelar", "Cancel")
+I18N("Limpar pool", "Clear pool")
+I18N("Remover do pool", "Remove from pool")
+I18N("CARTÃO", "CARD")
+I18N("POOL", "POOL")
+I18N("Lance substituído no pool (máx. 1 falta ou reinício)", "Play replaced in pool (max 1 foul or restart)")
 
 // ---- Players
 I18N("Expulso", "Sent off")

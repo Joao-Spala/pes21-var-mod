@@ -140,3 +140,19 @@ Duas funcoes limpas da propria Fox Engine governam quase todas as intervencoes V
 3. **Gate de modo offline:** O controlador Sider Lua bloqueia a ativacao se detectar modo online ou lobby.
 4. **Anti-reentrancia e anti-duplicacao de cartao:** Flag de transacao `var_tx_active` garante que `MatchControl::CommitToRegistry` (`0x1404231DC`) nunca conte o mesmo cartao duas vezes ao reconstruir um SetPlay.
 5. **Clamp de coordenadas:** Toda posicao injetada em `SetPlayPosA/B` passa por verificacao de limites do campo (`GMATCH + 0x2AA8`) e `Pitch_ClassifyZone` (`0x140A73470`).
+
+---
+
+## 5. Descoberta Critica v4.1: Double-Buffer RCU de `MatchInfo` e Transicao em `SetPlayReady` (`0x1A`)
+
+A investigacao binaria das funcoes `0x140412870`, `0x1404237C0`, `0x14042DCD0`, `0x14041BEC0`, `0x14044DD50`, `0x14044DB80`, `0x1404530C0` e `0x140454280` revelou por que chamar `MatchFSM_RebuildSetPlay` (`0x140454280`) diretamente em `0x1A` fazia a tela dar fade mantendo o batedor antigo parado na falta anterior:
+
+1. **Double-Buffer RCU em `MatchInfo` (`0x2378` bytes por buffer):**
+   - O alocador `0x140412870` reserva `0x46F8` bytes (`8` bytes de cabecalho + dois buffers `MatchInfo` de `0x2378` bytes).
+   - `GMATCH + 0x270` aponta para o **Read Buffer `[0]`** (`alloc + 0x08`). Adjacente em **`matchInfo + 0x2378`** (`alloc + 0x2380`, retornado por `BeginWriteMatchInfo` `0x1404237C0`) fica o **Write Buffer `[1]`**.
+   - Nos estados `0x45` (`0x140446DB0`) e `0x16` (`0x14044A780`), `EndWriteMatchInfo` (`0x14041BEC0`) copia integralmente os `0x2378` bytes do **Write Buffer `[1]`** por cima do **Read Buffer `[0]`**. Escrever apenas em `matchInfo` sem atualizar `matchInfo + 0x2378` (ou sem passar por `CommitToRegistry` `0x140422A3F`) faz a falta antiga ser restaurada no primeiro tick da transicao.
+2. **Limitacao de `MatchFSM_RebuildSetPlay` (`0x140454280`):**
+   - `0x140454280` foi projetada apenas para troca de cobrador no mesmo local: ela pula `State_01` (`0x14044DB80`), nao recalcula o modo geometrico da falta (`0x14044F950`), nao reexecuta `SelectKicker` (`0x1404A8730`) com `SequenceCategory` real e forca `stoppageReason = 6`.
+3. **Fluxo Deterministico Unificado (`Judge::FinalizeFrame` + `StoppageReason::SilentRestart = 7`):**
+   - `State_SetPlayReady` (`0x14044DD50`) executa o pipeline `Judge` (`0x14050BC60` -> `0x14050D6F0` -> `0x14050CD70`) em todo frame e dispara `MatchFSM_EnterOutOfPlay` (`0x1404541A0`) sempre que `*(int32_t*)(MatchFSM + 0x49C0) != 0`.
+   - Ao injetar `SetPlayInfo` + `FoulInfo` em `Detour_JudgeFinalizeFrame` (com `StoppageReason::SilentRestart = 7` quando em `0x1A` ou `0x03..0x11`, espelhando tambem `SetPlayInfo`, `FoulInfo`, `PlayerOnPitch` e `FoulSnapshotPool` em `matchInfo + 0x2378` e zerando `uint8_t QuickRestartFlag` em `MatchFSM + 0x27FC`), a propria engine executa `MatchFSM_EnterOutOfPlay` + `CommitToRegistry` no Tick `T`, roda `State_01` completo no Tick `T+1` (onde `MatchFSM + 0x49C0` e limpo com sentinelas `0xFF` para evitar re-commits durante `0x0F..0x19`, ja que `SilentRestart` nao empilha `State_23`) e reposiciona bola, barreira, cobrador e os 22 jogadores no novo local exato.

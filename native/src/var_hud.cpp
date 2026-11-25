@@ -1034,6 +1034,11 @@ const char* VarHudController::ControlsMessage() const {
     return Tr(controlsMsg_);
 }
 
+const char* VarHudController::PoolNoticeMessage() const {
+    if (!poolNoticeMsg_ || GetTickCount64() >= poolNoticeUntilMs_) return nullptr;
+    return Tr(poolNoticeMsg_);
+}
+
 void VarHudController::OpenControlsPage() {
     CancelBindingCapture();
     page_ = HudPage::Controls;
@@ -1186,12 +1191,25 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     const std::string sum = FormatVerdictSummary();
     std::snprintf(v.summary, sizeof(v.summary), "%s", sum.c_str());
 
-    state.ArmVerdict(v);
-    VAR_LOG_INF("HUD v4.0 armed verdict: %s", v.summary);
+    bool replacedPlay = false;
+    state.AddToVerdictPool(v, &replacedPlay);
+    if (replacedPlay) {
+        poolNoticeMsg_ = "Lance substituído no pool (máx. 1 falta ou reinício)";
+        poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
+    } else {
+        poolNoticeMsg_ = nullptr;
+    }
+    VAR_LOG_INF("HUD v4.0 added verdict to pool (replacedPlay=%d): %s", replacedPlay ? 1 : 0, v.summary);
 
-    page_ = HudPage::Main;
-    returnPage_ = HudPage::Main;
-    selectedIndex_ = 0;
+    if (returnPage_ == HudPage::Squad && IsValidSlot(draftOffenderSlot_)) {
+        page_ = HudPage::Squad;
+        squadTeamFilter_ = SlotToTeam(draftOffenderSlot_);
+        selectedIndex_ = (draftOffenderSlot_ % 11) + 1;
+    } else {
+        page_ = HudPage::Main;
+        returnPage_ = HudPage::Main;
+        selectedIndex_ = 0;
+    }
 }
 
 bool VarHudController::IsPostState13RedRescindWarning() const {
@@ -1283,6 +1301,7 @@ void VarHudController::HandleAction(NavAction action, VarState& state) {
     if (page_ == HudPage::Controls && capturing_) return;
 
     if (action == NavAction::CancelVerdict && page_ != HudPage::Controls) { // on Controls it clears a shortcut
+        poolNoticeMsg_ = nullptr;
         state.CancelVerdict();
         return;
     }

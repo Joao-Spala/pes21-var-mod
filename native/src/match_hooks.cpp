@@ -25,7 +25,6 @@ using FnJudgeFinalizeFrame  = void(__fastcall*)(void* judge);
 using FnUpdateFoulCounters  = void(__fastcall*)(void* matchControl, void* matchInfo, void* workingState);
 using FnReplayCtrlSync      = void(__fastcall*)(void* replayCtrl);
 using FnEnterOutOfPlay      = void(__fastcall*)(void* matchFsm);
-using FnRebuildSetPlay      = void(__fastcall*)(void* matchFsm);
 using FnGetTimeFloat        = float(__fastcall*)(void* matchInfoTimeBase);
 using FnSetPlayerOnPitch    = void(__fastcall*)(void* matchInfo, uint32_t slot, uint8_t onPitch);
 using FnGetPlayerBySlot     = uint8_t*(__fastcall*)(void* teamInfo, int32_t slot);
@@ -38,7 +37,6 @@ InlineHook g_hookUpdateFoulCounters;
 InlineHook g_hookReplayCtrlSync;
 
 FnEnterOutOfPlay    g_fnEnterOutOfPlay    = nullptr;
-FnRebuildSetPlay    g_fnRebuildSetPlay    = nullptr;
 FnGetTimeFloat      g_fnGetTimeFloat      = nullptr;
 FnSetPlayerOnPitch  g_fnSetPlayerOnPitch  = nullptr;
 FnGetPlayerBySlot   g_fnGetPlayerBySlot   = nullptr;
@@ -88,7 +86,26 @@ char     g_cachedShirtNames[22][32] = {};
 const uint8_t* g_verifiedRosterDataPtr = nullptr;
 const uint8_t* g_verifiedEditedKitPtr = nullptr;
 const uint8_t* g_verifiedBallStatePtr = nullptr;
+uint8_t*       g_verifiedMatchInfoWriteBuf = nullptr;
 std::atomic<const uint8_t*> g_verifiedReplayRingBufPtr{ nullptr };
+
+struct PendingSetPlayInjection {
+    bool           active        = false;
+    int32_t        ttlFrames     = 0;
+    SetPlayKind    spKind        = SetPlayKind::None;
+    int32_t        benefitedTeam = 0;
+    Vec3           spot{};
+    StoppageReason stopReason    = StoppageReason::SilentRestart;
+    bool           foulValid     = false;
+    CardKind       card          = CardKind::None;
+    int32_t        offenderSlot  = -1;
+    int32_t        victimSlot    = -1;
+    uint32_t       snapId        = 0;
+    uint32_t       safeSnapId    = 0;
+};
+PendingSetPlayInjection g_pendingSetPlayInjection{};
+bool                    g_clearFsmJudgeOnNextTick = false;
+uint32_t                g_clearFsmJudgeSafeSnapId = 0;
 const uint8_t* g_syncedTeamRosterTable = nullptr;
 uint32_t g_syncedTeamKitIds[2] = { 0xFFFFFFFFU, 0xFFFFFFFFU };
 bool     g_loggedRosterSyncOnce = false;
@@ -137,6 +154,20 @@ uint8_t* GetMatchInfo(uint8_t* gmatch) {
     if (!IsValidPtr(gmatch)) return nullptr;
     uint8_t* mi = *reinterpret_cast<uint8_t**>(gmatch + Offsets::GMATCH_MatchInfo);
     return IsValidPtr(mi) ? mi : nullptr;
+}
+
+// MatchInfo is an RCU double-buffered allocation (0x140412870: 0x46F8 bytes = 8B header + 2 * 0x2378B).
+// Read Buffer [0] is at matchInfo; Write Buffer [1] is adjacent at matchInfo + 0x2378 (0x1404237C0 / 0x14041BEC0).
+uint8_t* GetMatchInfoWriteBuffer(uint8_t* matchInfo) {
+    if (!IsValidPtr(matchInfo)) return nullptr;
+    uint8_t* wb = matchInfo + Offsets::MatchInfo_StructSize;
+    if (wb != g_verifiedMatchInfoWriteBuf) {
+        if (!IsMemoryRangeReadable(wb, Offsets::MatchInfo_StructSize)) {
+            return nullptr;
+        }
+        g_verifiedMatchInfoWriteBuf = wb;
+    }
+    return wb;
 }
 
 uint8_t* GetReplayMgr(uint8_t* gmatch) {
@@ -781,6 +812,9 @@ bool SetPlayerCardsAbsolute(uint8_t* gmatch, uint8_t* matchInfo, int32_t slot, u
     } else {
         *reinterpret_cast<uint8_t*>(matchInfo + Offsets::MatchInfo_PlayerOnPitch + slot) = shouldBeOnPitch ? 1 : 0;
     }
+    if (uint8_t* writeBuf = GetMatchInfoWriteBuffer(matchInfo)) {
+        *reinterpret_cast<uint8_t*>(writeBuf + Offsets::MatchInfo_PlayerOnPitch + slot) = shouldBeOnPitch ? 1 : 0;
+    }
 
     uint8_t* statusArr = *reinterpret_cast<uint8_t**>(gmatch + Offsets::GMATCH_PlayerStatus);
     if (IsValidPtr(statusArr)) {
@@ -858,9 +892,21 @@ uint32_t EnsureValidFoulSnapshotId(uint8_t* matchInfo, uint8_t* gmatch, uint32_t
         return 0;
     }
 
+    uint8_t* writeBuf = GetMatchInfoWriteBuffer(matchInfo);
     auto* ids = reinterpret_cast<uint32_t*>(matchInfo + Offsets::MatchInfo_FoulSnapshotIds);
     for (int i = 0; i < 3; ++i) {
-        if (ids[i] != 0) return ids[i];
+        if (ids[i] != 0) {
+            if (writeBuf) {
+                auto* wIds = reinterpret_cast<uint32_t*>(writeBuf + Offsets::MatchInfo_FoulSnapshotIds);
+                if (wIds[i] != ids[i]) {
+                    const size_t slotOff = Offsets::MatchInfo_FoulSnapshotPool +
+                                           static_cast<size_t>(i) * Offsets::MatchInfo_FoulSnapshotStride;
+                    std::memcpy(writeBuf + slotOff, matchInfo + slotOff, Offsets::MatchInfo_FoulSnapshotStride);
+                    wIds[i] = ids[i];
+                }
+            }
+            return ids[i];
+        }
     }
 
     uint8_t* slot0 = matchInfo + Offsets::MatchInfo_FoulSnapshotPool;
@@ -880,7 +926,11 @@ uint32_t EnsureValidFoulSnapshotId(uint8_t* matchInfo, uint8_t* gmatch, uint32_t
     }
     const uint32_t newId = (matchTick != 0) ? matchTick : 1U;
     ids[0] = newId;
-    VAR_LOG_INF("Initialized foul snapshot pool slot 0 with id=%u", newId);
+    if (writeBuf) {
+        std::memcpy(writeBuf + Offsets::MatchInfo_FoulSnapshotPool, slot0, Offsets::MatchInfo_FoulSnapshotStride);
+        reinterpret_cast<uint32_t*>(writeBuf + Offsets::MatchInfo_FoulSnapshotIds)[0] = newId;
+    }
+    VAR_LOG_INF("Initialized foul snapshot pool slot 0 with id=%u (RCU synced)", newId);
     return newId;
 }
 
@@ -888,7 +938,7 @@ void WriteSetPlayAndFoulToStruct(uint8_t* baseSetPlay, uint8_t* baseFoul,
                                  SetPlayKind spKind, int32_t benefitedTeam, const Vec3& pos,
                                  StoppageReason stopReason, bool foulValid,
                                  CardKind card, int32_t offenderSlot, int32_t victimSlot,
-                                 uint32_t snapshotTickIndex) {
+                                 uint32_t snapshotTickIndex, uint32_t safeFallbackSnapId) {
     auto* sp = reinterpret_cast<RawSetPlayInfo*>(baseSetPlay);
     std::memset(sp, 0, sizeof(RawSetPlayInfo));
     sp->setPlayKind     = static_cast<int32_t>(spKind);
@@ -907,254 +957,402 @@ void WriteSetPlayAndFoulToStruct(uint8_t* baseSetPlay, uint8_t* baseFoul,
         : 0;
     fi->offenderSlot      = IsValidSlot(offenderSlot) ? offenderSlot : 0xFF;
     fi->victimSlot        = IsValidSlot(victimSlot) ? victimSlot : 0xFF;
-    fi->snapshotTickIndex = foulValid ? snapshotTickIndex : 0U;
+    // Every FoulInfo must keep a valid snapshot id in the pool so 0x1404B4B40 -> 0x140A82120 never returns NULL
+    fi->snapshotTickIndex = foulValid ? snapshotTickIndex : safeFallbackSnapId;
 }
 
-void ExecuteRebuildSetPlayClean(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo,
-                                SetPlayKind spKind, int32_t benefitedTeam, const Vec3& pos,
-                                StoppageReason stopReason, bool foulValid,
-                                CardKind card, int32_t offenderSlot, int32_t victimSlot) {
+PendingSetPlayInjection BuildSetPlayInjection(uint8_t* matchInfo, uint8_t* gmatch,
+                                              SetPlayKind spKind, int32_t benefitedTeam, const Vec3& pos,
+                                              StoppageReason stopReason, bool foulValid,
+                                              CardKind card, int32_t offenderSlot, int32_t victimSlot) {
+    PendingSetPlayInjection req{};
+    req.active        = true;
+    req.ttlFrames     = 3;
+    req.spKind        = spKind;
+    req.benefitedTeam = (benefitedTeam == 1) ? 1 : 0;
+    req.spot          = pos;
+    req.stopReason    = stopReason;
+    req.foulValid     = foulValid;
+    req.card          = card;
+    req.offenderSlot  = offenderSlot;
+    req.victimSlot    = victimSlot;
+
     const uint32_t matchTick = *reinterpret_cast<const uint32_t*>(matchInfo + Offsets::MatchInfo_MatchTick);
-    const uint32_t snapId = foulValid ? EnsureValidFoulSnapshotId(matchInfo, gmatch, matchTick) : 0U;
+    req.safeSnapId = EnsureValidFoulSnapshotId(matchInfo, gmatch, matchTick);
+    req.snapId     = foulValid ? req.safeSnapId : 0U;
+    return req;
+}
 
-    // Every FoulInfo we leave behind must reference a snapshot id that exists in the pool: the game's
-    // set-piece setup (0x1404B4B40) looks it up via 0x140A82120, which returns NULL for id 0 or an unknown id,
-    // and dereferences it without a check (crash at PES2021.exe+0x4B4C25 when applying a decision).
-    const uint32_t safeSnapId = snapId ? snapId : EnsureValidFoulSnapshotId(matchInfo, gmatch, matchTick);
-
+void WriteSetPlayToMatchInfoBuffers(uint8_t* matchInfo, const PendingSetPlayInjection& req) {
+    if (!IsValidPtr(matchInfo)) return;
     WriteSetPlayAndFoulToStruct(
         matchInfo + Offsets::MatchInfo_SetPlayInfo,
         matchInfo + Offsets::MatchInfo_FoulInfo,
-        spKind, benefitedTeam, pos, stopReason, foulValid, card, offenderSlot, victimSlot, snapId);
-    if (!foulValid) {
-        reinterpret_cast<RawFoulInfo*>(matchInfo + Offsets::MatchInfo_FoulInfo)->snapshotTickIndex = safeSnapId;
-    }
-
-    // Clear the FSM judge result WITHOUT zeroing it: an all-zero FoulInfo means "offender slot 0, victim slot 0,
-    // snapshot 0" (two valid players + a missing snapshot), which is exactly the crash above. Use the engine's
-    // own empty sentinels (0xFF players) and a valid snapshot id instead.
-    WriteSetPlayAndFoulToStruct(
-        fsm + Offsets::MatchFSM_JudgeResult,
-        fsm + Offsets::MatchFSM_JudgeFoulInfo,
-        SetPlayKind::None, 0, Vec3{}, StoppageReason::InitOrKickOff, false, CardKind::None, -1, -1, 0U);
-    reinterpret_cast<RawFoulInfo*>(fsm + Offsets::MatchFSM_JudgeFoulInfo)->snapshotTickIndex = safeSnapId;
-    *reinterpret_cast<uint64_t*>(fsm + Offsets::MatchFSM_KickerCache) = 0x000000FF000000FFULL;
-    g_suppressNextFoulCommitFrames = 5;
-
-    if (g_fnRebuildSetPlay) {
-        g_fnRebuildSetPlay(fsm);
+        req.spKind, req.benefitedTeam, req.spot, req.stopReason,
+        req.foulValid, req.card, req.offenderSlot, req.victimSlot,
+        req.snapId, req.safeSnapId);
+    if (uint8_t* writeBuf = GetMatchInfoWriteBuffer(matchInfo)) {
+        WriteSetPlayAndFoulToStruct(
+            writeBuf + Offsets::MatchInfo_SetPlayInfo,
+            writeBuf + Offsets::MatchInfo_FoulInfo,
+            req.spKind, req.benefitedTeam, req.spot, req.stopReason,
+            req.foulValid, req.card, req.offenderSlot, req.victimSlot,
+            req.snapId, req.safeSnapId);
     }
 }
 
-void TryExecuteVerdictInMainTick(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, uint8_t* replayMgr, int32_t fsmState) {
+void InjectSetPlayIntoFsmJudgeResult(uint8_t* fsm, uint8_t* matchInfo, const PendingSetPlayInjection& req) {
+    WriteSetPlayToMatchInfoBuffers(matchInfo, req);
+    WriteSetPlayAndFoulToStruct(
+        fsm + Offsets::MatchFSM_JudgeResult,
+        fsm + Offsets::MatchFSM_JudgeFoulInfo,
+        req.spKind, req.benefitedTeam, req.spot, req.stopReason,
+        req.foulValid, req.card, req.offenderSlot, req.victimSlot,
+        req.snapId, req.safeSnapId);
+    // Prevent quick-restart scatter and CommitToRegistry out-of-bounds clamping (+0x27FC is 1-byte uint8_t)
+    *reinterpret_cast<uint8_t*>(fsm + Offsets::MatchFSM_QuickRestartFlag) = 0;
+    *reinterpret_cast<uint64_t*>(fsm + Offsets::MatchFSM_KickerCache) = 0x000000FF000000FFULL;
+    g_suppressNextFoulCommitFrames = 6;
+    // Clear fsm + 0x49C0 on the NEXT tick (after CommitToRegistry commits Tick T) because SilentRestart (7)
+    // skips State_23, so leaving JudgeResult non-zero would re-trigger CommitToRegistry on every OutOfPlay tick.
+    g_clearFsmJudgeOnNextTick = true;
+    g_clearFsmJudgeSafeSnapId = req.safeSnapId;
+}
+
+void ExecuteDirectEnterOutOfPlay(uint8_t* fsm, uint8_t* matchInfo, const PendingSetPlayInjection& req) {
+    InjectSetPlayIntoFsmJudgeResult(fsm, matchInfo, req);
+    if (g_fnEnterOutOfPlay) {
+        g_fnEnterOutOfPlay(fsm);
+    }
+    // EnterOutOfPlay sets QuickRestartFlag = 1 when spKind == 5: clear it back to 0 for formal set-piece placement
+    *reinterpret_cast<uint8_t*>(fsm + Offsets::MatchFSM_QuickRestartFlag) = 0;
+}
+
+void TryExecuteVerdictPoolInMainTick(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, uint8_t* replayMgr, int32_t fsmState) {
+    if (g_clearFsmJudgeOnNextTick) {
+        g_clearFsmJudgeOnNextTick = false;
+        const uint32_t safeId = g_clearFsmJudgeSafeSnapId
+            ? g_clearFsmJudgeSafeSnapId
+            : EnsureValidFoulSnapshotId(matchInfo, gmatch, *reinterpret_cast<const uint32_t*>(matchInfo + Offsets::MatchInfo_MatchTick));
+        WriteSetPlayAndFoulToStruct(
+            fsm + Offsets::MatchFSM_JudgeResult,
+            fsm + Offsets::MatchFSM_JudgeFoulInfo,
+            SetPlayKind::None, 0, Vec3{}, StoppageReason::InitOrKickOff,
+            false, CardKind::None, -1, -1, 0U, safeId);
+        *reinterpret_cast<uint8_t*>(fsm + Offsets::MatchFSM_QuickRestartFlag) = 0;
+    }
+
+    // Failsafe if a queued Judge::FinalizeFrame injection did not fire within its TTL (e.g. early branch in 0x1A)
+    if (g_pendingSetPlayInjection.active) {
+        if (--g_pendingSetPlayInjection.ttlFrames <= 0) {
+            VAR_LOG_WRN("PendingSetPlayInjection TTL expired in fsmState=0x%X, executing direct EnterOutOfPlay fallback", fsmState);
+            ExecuteDirectEnterOutOfPlay(fsm, matchInfo, g_pendingSetPlayInjection);
+            g_pendingSetPlayInjection.active = false;
+        }
+        return;
+    }
+
     if (!VarState::Instance().HasArmedVerdict()) return;
     if (!IsMatchEligibleForExecution(gmatch, matchInfo, replayMgr)) return;
-
-    const VarVerdict peek = VarState::Instance().PeekVerdict();
-    if (!peek.armed || peek.action == VarAction::None) return;
 
     const bool inPlay = (fsmState == 0x1C);
     const bool inSetPlayReady = (fsmState == 0x1A);
     const bool inCutscene = (fsmState >= 0x03 && fsmState <= 0x11);
-
-    if ((peek.action == VarAction::RetroactiveFreeKick || peek.action == VarAction::RetroactivePenalty) && inPlay) {
-        return;
-    }
     if (!inPlay && !inSetPlayReady && !inCutscene) {
         return;
     }
 
-    VarVerdict v{};
-    if (!VarState::Instance().ConsumeVerdict(v)) return;
+    VerdictPool pool{};
+    if (!VarState::Instance().ConsumeVerdictPool(pool)) return;
 
-    const PitchDims dims = ReadPitchDims(gmatch);
-    const int32_t offenderTeam = IsValidSlot(v.offenderSlot) ? SlotToTeam(v.offenderSlot) : (1 - v.benefitedTeam);
-    const float offenderAttackDir = ReadTeamAttackDir(gmatch, offenderTeam);
+    VAR_LOG_INF("Executing VAR VerdictPool seq=%u count=%zu hasPlay=%d cardCount=%zu fsmState=0x%X",
+                pool.sequence, pool.Count(), pool.hasPlayDecision ? 1 : 0, pool.CardCount(), fsmState);
+    Logger::Flush();
 
-    VAR_LOG_INF("Executing VAR verdict seq=%u action=%d fsmState=0x%X origOff=%d off=%d vic=%d team=%d origCard=%d targetCard=%d direct=%d",
-                v.sequence, static_cast<int>(v.action), fsmState, v.origOffenderSlot, v.offenderSlot, v.victimSlot,
-                v.benefitedTeam, static_cast<int>(v.origCard), static_cast<int>(v.targetCard),
-                v.directCardEdit ? 1 : 0);
-    Logger::Flush(); // a decision touches engine state: make sure this line reaches the disk first
+    struct PoolStep {
+        bool     isPlay   = false;
+        uint32_t order    = 0;
+        int      cardSlot = -1;
+    };
+    std::array<PoolStep, 23> steps{};
+    size_t stepCount = 0;
+    if (pool.hasPlayDecision) {
+        steps[stepCount++] = PoolStep{ true, pool.playOrder, -1 };
+    }
+    for (int s = 0; s < 22; ++s) {
+        if (pool.cardEntries[static_cast<size_t>(s)].active) {
+            steps[stepCount++] = PoolStep{ false, pool.cardEntries[static_cast<size_t>(s)].order, s };
+        }
+    }
+    std::sort(steps.begin(), steps.begin() + stepCount, [](const PoolStep& a, const PoolStep& b) {
+        return a.order < b.order;
+    });
 
-    switch (v.action) {
-        case VarAction::EditCard: {
-            const bool expulsionChanged = ApplyVerdictCards(gmatch, matchInfo, v);
+    // Check if a later non-direct EditCard on the exact same official event supersedes playDecision's card delta
+    bool playCardSuperseded = false;
+    CardKind supersedingCard = CardKind::None;
+    if (pool.hasPlayDecision && pool.playDecision.sourceEventId != 0) {
+        for (int s = 0; s < 22; ++s) {
+            const auto& ce = pool.cardEntries[static_cast<size_t>(s)];
+            if (ce.active && !ce.verdict.directCardEdit &&
+                ce.verdict.sourceEventId == pool.playDecision.sourceEventId &&
+                ce.order > pool.playOrder) {
+                playCardSuperseded = true;
+                supersedingCard = ce.verdict.targetCard;
+            }
+        }
+    }
 
-            auto* miFoul = reinterpret_cast<RawFoulInfo*>(matchInfo + Offsets::MatchInfo_FoulInfo);
-            const bool affectsActiveFoul = !v.directCardEdit ||
-                (miFoul->isValid != 0 && IsValidSlot(v.offenderSlot) && miFoul->offenderSlot == v.offenderSlot);
+    bool anyExpulsionChanged = false;
+    bool anyRedApplied = false;
 
-            if (affectsActiveFoul && miFoul->isValid) {
-                const CardKind effectiveCard = v.directCardEdit
-                    ? (v.directReds > 0 ? CardKind::Red : (v.directYellows > 0 ? CardKind::Yellow : CardKind::Simple))
-                    : v.targetCard;
-                miFoul->foulJudgementKind =
-                    (effectiveCard == CardKind::Yellow) ? 3 :
-                    (effectiveCard == CardKind::Red)    ? 4 : 1;
-                if (!v.directCardEdit && IsValidSlot(v.offenderSlot)) {
-                    miFoul->offenderSlot = v.offenderSlot;
+    // 1. Apply all card mutations in exact chronological order BEFORE Original(MainTick) copies PlayerOnPitch
+    for (size_t i = 0; i < stepCount; ++i) {
+        if (steps[i].isPlay) {
+            const VarVerdict& pv = pool.playDecision;
+            VAR_LOG_INF("  Pool[play] seq=%u action=%d origOff=%d off=%d vic=%d team=%d origCard=%d targetCard=%d",
+                        pv.sequence, static_cast<int>(pv.action), pv.origOffenderSlot, pv.offenderSlot,
+                        pv.victimSlot, pv.benefitedTeam, static_cast<int>(pv.origCard), static_cast<int>(pv.targetCard));
+            if (playCardSuperseded) continue;
+
+            if (pv.action == VarAction::OverturnCancel ||
+                pv.action == VarAction::RestartCorner ||
+                pv.action == VarAction::RestartGoalKick ||
+                pv.action == VarAction::RestartThrowIn) {
+                const int32_t cardSlot = IsValidSlot(pv.origOffenderSlot) ? pv.origOffenderSlot : pv.offenderSlot;
+                if (pv.origCard == CardKind::Yellow || pv.origCard == CardKind::Red) {
+                    anyExpulsionChanged |= ApplyCardDelta(gmatch, matchInfo, cardSlot, pv.origCard, CardKind::None);
+                }
+            } else if (pv.action == VarAction::ConvertToPenalty ||
+                       pv.action == VarAction::RetroactivePenalty ||
+                       pv.action == VarAction::ConvertToFreeKick ||
+                       pv.action == VarAction::RetroactiveFreeKick) {
+                anyExpulsionChanged |= ApplyVerdictCards(gmatch, matchInfo, pv);
+                if (pv.targetCard == CardKind::Red) anyRedApplied = true;
+            }
+        } else {
+            const VarVerdict& cv = pool.cardEntries[static_cast<size_t>(steps[i].cardSlot)].verdict;
+            VAR_LOG_INF("  Pool[card slot=%d] seq=%u direct=%d Y=%u R=%u origCard=%d targetCard=%d",
+                        steps[i].cardSlot, cv.sequence, cv.directCardEdit ? 1 : 0,
+                        static_cast<unsigned>(cv.directYellows), static_cast<unsigned>(cv.directReds),
+                        static_cast<int>(cv.origCard), static_cast<int>(cv.targetCard));
+            anyExpulsionChanged |= ApplyVerdictCards(gmatch, matchInfo, cv);
+            if (cv.targetCard == CardKind::Red || (cv.directCardEdit && cv.directReds > 0)) {
+                anyRedApplied = true;
+            }
+        }
+    }
+
+    // 2. Execute SetPlay / Foul state transition (at most ONE play decision per Pool)
+    if (pool.hasPlayDecision) {
+        const VarVerdict& pv = pool.playDecision;
+        const PitchDims dims = ReadPitchDims(gmatch);
+        const int32_t offenderTeam = IsValidSlot(pv.offenderSlot) ? SlotToTeam(pv.offenderSlot) : (1 - pv.benefitedTeam);
+        const float offenderAttackDir = ReadTeamAttackDir(gmatch, offenderTeam);
+
+        // Reflect final card on the play offender if a later card entry in the pool also modified this slot
+        CardKind effectivePlayCard = playCardSuperseded ? supersedingCard : pv.targetCard;
+        if (IsValidSlot(pv.offenderSlot)) {
+            const auto& ce = pool.cardEntries[static_cast<size_t>(pv.offenderSlot)];
+            if (ce.active && ce.order > pool.playOrder) {
+                effectivePlayCard = ce.verdict.directCardEdit
+                    ? (ce.verdict.directReds > 0 ? CardKind::Red : (ce.verdict.directYellows > 0 ? CardKind::Yellow : CardKind::Simple))
+                    : ce.verdict.targetCard;
+            }
+        }
+
+        bool wantTransition = false;
+        SetPlayKind spKind = SetPlayKind::FreeKick;
+        int32_t benefitedTeam = (pv.benefitedTeam == 1) ? 1 : 0;
+        Vec3 spot{};
+        StoppageReason stopReason = StoppageReason::SilentRestart;
+        bool foulValid = false;
+        int32_t effOff = pv.offenderSlot;
+        int32_t effVic = pv.victimSlot;
+
+        switch (pv.action) {
+            case VarAction::ConvertToPenalty:
+            case VarAction::RetroactivePenalty:
+                spKind        = SetPlayKind::PenaltyKick;
+                spot          = PitchGeometry::CalcPenaltySpot(dims, offenderAttackDir);
+                stopReason    = inPlay ? StoppageReason::Foul : StoppageReason::SilentRestart;
+                foulValid     = true;
+                wantTransition = true;
+                break;
+
+            case VarAction::ConvertToFreeKick:
+            case VarAction::RetroactiveFreeKick:
+                spKind        = SetPlayKind::FreeKick;
+                spot          = PitchGeometry::ProjectOutsideDefendingBox(dims, pv.spotPos, offenderAttackDir, 0.7f);
+                stopReason    = inPlay ? StoppageReason::Foul : StoppageReason::SilentRestart;
+                foulValid     = true;
+                wantTransition = true;
+                break;
+
+            case VarAction::OverturnCancel:
+                if (inSetPlayReady || inCutscene) {
+                    const auto curSp = *reinterpret_cast<const RawSetPlayInfo*>(matchInfo + Offsets::MatchInfo_SetPlayInfo);
+                    const bool wasPenalty = (curSp.setPlayKind == static_cast<int32_t>(SetPlayKind::PenaltyKick)) ||
+                                            PitchGeometry::IsInsideDefendingBox(dims, pv.spotPos, offenderAttackDir);
+                    benefitedTeam = (pv.benefitedTeam == 0 || pv.benefitedTeam == 1)
+                        ? pv.benefitedTeam
+                        : (1 - curSp.benefitedTeam);
+                    spKind        = wasPenalty ? SetPlayKind::GoalKick : SetPlayKind::FreeKick;
+                    spot          = wasPenalty
+                        ? PitchGeometry::CalcGoalKickSpot(dims, ReadTeamAttackDir(gmatch, benefitedTeam), pv.spotPos.z)
+                        : PitchGeometry::ClampToPitch(dims, pv.spotPos);
+                    stopReason    = StoppageReason::SilentRestart;
+                    foulValid     = false;
+                    effOff        = -1;
+                    effVic        = -1;
+                    wantTransition = true;
+                }
+                break;
+
+            case VarAction::RestartCorner:
+            case VarAction::RestartGoalKick:
+            case VarAction::RestartThrowIn:
+                if (pv.action == VarAction::RestartCorner) {
+                    spKind = SetPlayKind::CornerKick;
+                    spot   = PitchGeometry::CalcCornerSpot(dims, ReadTeamAttackDir(gmatch, 1 - benefitedTeam), pv.spotPos.z);
+                } else if (pv.action == VarAction::RestartGoalKick) {
+                    spKind = SetPlayKind::GoalKick;
+                    spot   = PitchGeometry::CalcGoalKickSpot(dims, ReadTeamAttackDir(gmatch, benefitedTeam), pv.spotPos.z);
+                } else {
+                    spKind = SetPlayKind::ThrowIn;
+                    spot   = PitchGeometry::CalcThrowInSpot(dims, pv.spotPos);
+                }
+                stopReason     = StoppageReason::SilentRestart;
+                foulValid      = false;
+                effOff         = -1;
+                effVic         = -1;
+                wantTransition = true;
+                break;
+
+            default:
+                break;
+        }
+
+        if (wantTransition) {
+            const PendingSetPlayInjection req = BuildSetPlayInjection(
+                matchInfo, gmatch, spKind, benefitedTeam, spot, stopReason,
+                foulValid, effectivePlayCard, effOff, effVic);
+            g_suppressNextFoulCommitFrames = 5;
+            if (inPlay || inSetPlayReady) {
+                // Both State_InPlay (0x140449F40) and State_SetPlayReady (0x14044DD50) run Judge::FinalizeFrame
+                // (0x14050CD70) and immediately transition via MatchFSM_EnterOutOfPlay + CommitToRegistry RCU sync!
+                g_pendingSetPlayInjection = req;
+            } else {
+                ExecuteDirectEnterOutOfPlay(fsm, matchInfo, req);
+            }
+        }
+
+        // If this was a retroactive foul/penalty on an uncalled play, record it directly as reviewedByVar
+        if (pv.sourceEventId == 0 && foulValid) {
+            VarEvent revEv{};
+            revEv.type          = (spKind == SetPlayKind::PenaltyKick) ? VarEventType::Penalty : VarEventType::Foul;
+            revEv.matchPhase    = *reinterpret_cast<const int32_t*>(matchInfo + Offsets::MatchInfo_MatchPhase);
+            revEv.time60Hz      = GetMatchTime60Hz(matchInfo);
+            revEv.matchTick     = *reinterpret_cast<const uint32_t*>(matchInfo + Offsets::MatchInfo_MatchTick);
+            revEv.setPlayKind   = spKind;
+            revEv.benefitedTeam = benefitedTeam;
+            revEv.offenderSlot  = effOff;
+            revEv.victimSlot    = effVic;
+            revEv.cardKind      = effectivePlayCard;
+            revEv.pos           = spot;
+            revEv.reviewedByVar = true;
+            std::snprintf(revEv.varNote, sizeof(revEv.varNote), "%s",
+                          (spKind == SetPlayKind::PenaltyKick) ? "Pênalti pelo VAR" : "Falta pelo VAR");
+            if (IsValidSlot(effOff)) {
+                if (uint8_t* rec = GetPlayerRecord(gmatch, effOff)) {
+                    revEv.offenderYellowsAfter = rec[Offsets::PlayerRecord_Yellows];
+                    revEv.offenderRedsAfter    = rec[Offsets::PlayerRecord_Reds];
                 }
             }
-            if (affectsActiveFoul && inCutscene) {
-                auto* fsmFoul = reinterpret_cast<RawFoulInfo*>(fsm + Offsets::MatchFSM_JudgeFoulInfo);
-                if (fsmFoul->isValid) {
-                    fsmFoul->foulJudgementKind = miFoul->foulJudgementKind;
-                    if (!v.directCardEdit && IsValidSlot(v.offenderSlot)) {
-                        fsmFoul->offenderSlot = v.offenderSlot;
+            VarState::Instance().PushEvent(revEv);
+        }
+    } else {
+        // Cards-only Pool: keep active MatchInfo->FoulInfo (both RCU buffers) consistent if an edited player is the active offender
+        auto syncActiveFoulBuffer = [&](uint8_t* miBase) {
+            if (!IsValidPtr(miBase)) return;
+            auto* miFoul = reinterpret_cast<RawFoulInfo*>(miBase + Offsets::MatchInfo_FoulInfo);
+            if (!miFoul->isValid) return;
+            for (int s = 0; s < 22; ++s) {
+                if (!pool.cardEntries[static_cast<size_t>(s)].active) continue;
+                const VarVerdict& cv = pool.cardEntries[static_cast<size_t>(s)].verdict;
+                const bool matchesFoul = !cv.directCardEdit ||
+                    (IsValidSlot(cv.offenderSlot) && miFoul->offenderSlot == cv.offenderSlot);
+                if (matchesFoul) {
+                    const CardKind effCard = cv.directCardEdit
+                        ? (cv.directReds > 0 ? CardKind::Red : (cv.directYellows > 0 ? CardKind::Yellow : CardKind::Simple))
+                        : cv.targetCard;
+                    miFoul->foulJudgementKind = (effCard == CardKind::Yellow) ? 3 : (effCard == CardKind::Red) ? 4 : 1;
+                    if (!cv.directCardEdit && IsValidSlot(cv.offenderSlot)) {
+                        miFoul->offenderSlot = cv.offenderSlot;
                     }
                 }
             }
-
-            if (expulsionChanged && inSetPlayReady) {
-                const auto curSp = *reinterpret_cast<const RawSetPlayInfo*>(matchInfo + Offsets::MatchInfo_SetPlayInfo);
-                const auto curFi = *reinterpret_cast<const RawFoulInfo*>(matchInfo + Offsets::MatchInfo_FoulInfo);
-                const CardKind rebuildCard = v.directCardEdit
-                    ? (curFi.foulJudgementKind == 4 ? CardKind::Red :
-                       curFi.foulJudgementKind == 3 ? CardKind::Yellow : CardKind::Simple)
-                    : v.targetCard;
-                const int32_t rebuildOff = v.directCardEdit ? curFi.offenderSlot : v.offenderSlot;
-                const int32_t rebuildVic = v.directCardEdit ? curFi.victimSlot   : v.victimSlot;
-                ExecuteRebuildSetPlayClean(
-                    fsm, gmatch, matchInfo,
-                    static_cast<SetPlayKind>(curSp.setPlayKind ? curSp.setPlayKind : static_cast<int32_t>(SetPlayKind::FreeKick)),
-                    curSp.benefitedTeam, curSp.posA, StoppageReason::RebuildSetPlay,
-                    curFi.isValid != 0, rebuildCard, rebuildOff, rebuildVic);
+        };
+        syncActiveFoulBuffer(matchInfo);
+        syncActiveFoulBuffer(GetMatchInfoWriteBuffer(matchInfo));
+        if (inCutscene) {
+            g_suppressNextFoulCommitFrames = 5;
+            auto* miFoul = reinterpret_cast<const RawFoulInfo*>(matchInfo + Offsets::MatchInfo_FoulInfo);
+            auto* fsmFoul = reinterpret_cast<RawFoulInfo*>(fsm + Offsets::MatchFSM_JudgeFoulInfo);
+            if (miFoul->isValid && fsmFoul->isValid) {
+                fsmFoul->foulJudgementKind = miFoul->foulJudgementKind;
+                fsmFoul->offenderSlot      = miFoul->offenderSlot;
             }
-            break;
         }
 
-        case VarAction::ConvertToPenalty:
-        case VarAction::RetroactivePenalty: {
-            const Vec3 penSpot = PitchGeometry::CalcPenaltySpot(dims, offenderAttackDir);
-            if (inPlay) {
-                const uint32_t matchTick = *reinterpret_cast<const uint32_t*>(matchInfo + Offsets::MatchInfo_MatchTick);
-                const uint32_t snapId = EnsureValidFoulSnapshotId(matchInfo, gmatch, matchTick);
-                WriteSetPlayAndFoulToStruct(
-                    fsm + Offsets::MatchFSM_JudgeResult,
-                    fsm + Offsets::MatchFSM_JudgeFoulInfo,
-                    SetPlayKind::PenaltyKick, v.benefitedTeam, penSpot,
-                    StoppageReason::Foul, true, v.targetCard, v.offenderSlot, v.victimSlot, snapId);
-                if (g_fnEnterOutOfPlay) g_fnEnterOutOfPlay(fsm);
+        if (anyExpulsionChanged && (inSetPlayReady || inCutscene)) {
+            const auto curSp = *reinterpret_cast<const RawSetPlayInfo*>(matchInfo + Offsets::MatchInfo_SetPlayInfo);
+            const auto curFi = *reinterpret_cast<const RawFoulInfo*>(matchInfo + Offsets::MatchInfo_FoulInfo);
+            const CardKind curCard = (curFi.foulJudgementKind == 4) ? CardKind::Red :
+                                     (curFi.foulJudgementKind == 3) ? CardKind::Yellow : CardKind::Simple;
+            const SetPlayKind spKind = curSp.setPlayKind
+                ? static_cast<SetPlayKind>(curSp.setPlayKind)
+                : SetPlayKind::FreeKick;
+            const PendingSetPlayInjection req = BuildSetPlayInjection(
+                matchInfo, gmatch, spKind, curSp.benefitedTeam, curSp.posA,
+                StoppageReason::SilentRestart, curFi.isValid != 0, curCard,
+                IsValidSlot(curFi.offenderSlot) ? curFi.offenderSlot : -1,
+                IsValidSlot(curFi.victimSlot) ? curFi.victimSlot : -1);
+            g_suppressNextFoulCommitFrames = 5;
+            if (inSetPlayReady) {
+                g_pendingSetPlayInjection = req;
             } else {
-                ApplyVerdictCards(gmatch, matchInfo, v);
-                ExecuteRebuildSetPlayClean(
-                    fsm, gmatch, matchInfo,
-                    SetPlayKind::PenaltyKick, v.benefitedTeam, penSpot,
-                    StoppageReason::Foul, true, v.targetCard, v.offenderSlot, v.victimSlot);
+                ExecuteDirectEnterOutOfPlay(fsm, matchInfo, req);
             }
-            break;
         }
-
-        case VarAction::ConvertToFreeKick:
-        case VarAction::RetroactiveFreeKick: {
-            const Vec3 fkSpot = PitchGeometry::ProjectOutsideDefendingBox(dims, v.spotPos, offenderAttackDir, 0.7f);
-            if (inPlay) {
-                const uint32_t matchTick = *reinterpret_cast<const uint32_t*>(matchInfo + Offsets::MatchInfo_MatchTick);
-                const uint32_t snapId = EnsureValidFoulSnapshotId(matchInfo, gmatch, matchTick);
-                WriteSetPlayAndFoulToStruct(
-                    fsm + Offsets::MatchFSM_JudgeResult,
-                    fsm + Offsets::MatchFSM_JudgeFoulInfo,
-                    SetPlayKind::FreeKick, v.benefitedTeam, fkSpot,
-                    StoppageReason::Foul, true, v.targetCard, v.offenderSlot, v.victimSlot, snapId);
-                if (g_fnEnterOutOfPlay) g_fnEnterOutOfPlay(fsm);
-            } else {
-                ApplyVerdictCards(gmatch, matchInfo, v);
-                ExecuteRebuildSetPlayClean(
-                    fsm, gmatch, matchInfo,
-                    SetPlayKind::FreeKick, v.benefitedTeam, fkSpot,
-                    StoppageReason::Foul, true, v.targetCard, v.offenderSlot, v.victimSlot);
-            }
-            break;
-        }
-
-        case VarAction::OverturnCancel: {
-            const int32_t cardSlot = IsValidSlot(v.origOffenderSlot) ? v.origOffenderSlot : v.offenderSlot;
-            if (v.origCard == CardKind::Yellow || v.origCard == CardKind::Red) {
-                ApplyCardDelta(gmatch, matchInfo, cardSlot, v.origCard, CardKind::None);
-            }
-
-            if (inSetPlayReady || inCutscene) {
-                const auto curSp = *reinterpret_cast<const RawSetPlayInfo*>(matchInfo + Offsets::MatchInfo_SetPlayInfo);
-                const bool wasPenalty = (curSp.setPlayKind == static_cast<int32_t>(SetPlayKind::PenaltyKick)) ||
-                                        PitchGeometry::IsInsideDefendingBox(dims, v.spotPos, offenderAttackDir);
-                const int32_t restartTeam = (v.benefitedTeam == 0 || v.benefitedTeam == 1)
-                    ? v.benefitedTeam
-                    : (1 - curSp.benefitedTeam);
-                const SetPlayKind restartKind = wasPenalty ? SetPlayKind::GoalKick : SetPlayKind::FreeKick;
-                const float restartDir = ReadTeamAttackDir(gmatch, restartTeam);
-                const Vec3 restartPos = wasPenalty
-                    ? PitchGeometry::CalcGoalKickSpot(dims, restartDir, v.spotPos.z)
-                    : PitchGeometry::ClampToPitch(dims, v.spotPos);
-
-                ExecuteRebuildSetPlayClean(
-                    fsm, gmatch, matchInfo,
-                    restartKind, restartTeam, restartPos,
-                    StoppageReason::SilentRestart, false, CardKind::None, -1, -1);
-            }
-            break;
-        }
-
-        case VarAction::RestartCorner:
-        case VarAction::RestartGoalKick:
-        case VarAction::RestartThrowIn: {
-            const int32_t cardSlot = IsValidSlot(v.origOffenderSlot) ? v.origOffenderSlot : v.offenderSlot;
-            if (v.origCard == CardKind::Yellow || v.origCard == CardKind::Red) {
-                ApplyCardDelta(gmatch, matchInfo, cardSlot, v.origCard, CardKind::None);
-            }
-
-            const int32_t restartTeam = (v.benefitedTeam == 1) ? 1 : 0;
-            SetPlayKind spKind = SetPlayKind::GoalKick;
-            Vec3 restartPos{};
-            if (v.action == VarAction::RestartCorner) {
-                spKind = SetPlayKind::CornerKick;
-                const float defDir = ReadTeamAttackDir(gmatch, 1 - restartTeam);
-                restartPos = PitchGeometry::CalcCornerSpot(dims, defDir, v.spotPos.z);
-            } else if (v.action == VarAction::RestartGoalKick) {
-                spKind = SetPlayKind::GoalKick;
-                const float ownDir = ReadTeamAttackDir(gmatch, restartTeam);
-                restartPos = PitchGeometry::CalcGoalKickSpot(dims, ownDir, v.spotPos.z);
-            } else {
-                spKind = SetPlayKind::ThrowIn;
-                restartPos = PitchGeometry::CalcThrowInSpot(dims, v.spotPos);
-            }
-
-            if (inPlay) {
-                const uint32_t matchTick = *reinterpret_cast<const uint32_t*>(matchInfo + Offsets::MatchInfo_MatchTick);
-                WriteSetPlayAndFoulToStruct(
-                    fsm + Offsets::MatchFSM_JudgeResult,
-                    fsm + Offsets::MatchFSM_JudgeFoulInfo,
-                    spKind, restartTeam, restartPos,
-                    StoppageReason::BallOut, false, CardKind::None, -1, -1, 0U);
-                // Never hand the engine a snapshot id it cannot find (see ExecuteRebuildSetPlayClean)
-                reinterpret_cast<RawFoulInfo*>(fsm + Offsets::MatchFSM_JudgeFoulInfo)->snapshotTickIndex =
-                    EnsureValidFoulSnapshotId(matchInfo, gmatch, matchTick);
-                if (g_fnEnterOutOfPlay) g_fnEnterOutOfPlay(fsm);
-            } else {
-                ExecuteRebuildSetPlayClean(
-                    fsm, gmatch, matchInfo,
-                    spKind, restartTeam, restartPos,
-                    StoppageReason::SilentRestart, false, CardKind::None, -1, -1);
-            }
-            break;
-        }
-
-        default:
-            break;
     }
 
-    const BannerStyle bStyle =
-        (v.targetCard == CardKind::Red || (v.directCardEdit && v.directReds > 0)) ? BannerStyle::RedCard :
-        (v.action == VarAction::OverturnCancel || v.action == VarAction::RestartCorner ||
-         v.action == VarAction::RestartGoalKick || v.action == VarAction::RestartThrowIn) ? BannerStyle::Amber :
-        BannerStyle::Applied;
-
+    // 3. Update event ledger, intervention counter, live roster cards & broadcast banner
     VarState::Instance().IncrementInterventions();
-    VarState::Instance().UpdateEventAfterVerdict(v);
+    if (pool.hasPlayDecision) {
+        VarState::Instance().UpdateEventAfterVerdict(pool.playDecision);
+    }
+    for (int s = 0; s < 22; ++s) {
+        if (pool.cardEntries[static_cast<size_t>(s)].active) {
+            VarState::Instance().UpdateEventAfterVerdict(pool.cardEntries[static_cast<size_t>(s)].verdict);
+        }
+    }
     SyncPlayersAndCards(gmatch, matchInfo);
+
+    const bool isOverturnOrRestart = pool.hasPlayDecision &&
+        (pool.playDecision.action == VarAction::OverturnCancel ||
+         pool.playDecision.action == VarAction::RestartCorner ||
+         pool.playDecision.action == VarAction::RestartGoalKick ||
+         pool.playDecision.action == VarAction::RestartThrowIn);
+    const BannerStyle bStyle = anyRedApplied ? BannerStyle::RedCard
+                             : isOverturnOrRestart ? BannerStyle::Amber
+                             : BannerStyle::Applied;
+
+    char bannerBuf[128] = {};
+    pool.FormatCombinedSummary(bannerBuf, sizeof(bannerBuf));
     VarState::Instance().SetPostApplyBanner(
-        v.summary[0] ? v.summary : "DECISÃO DO VAR APLICADA", 4800, bStyle);
-    VAR_LOG_INF("VAR verdict seq=%u applied", v.sequence);
+        bannerBuf[0] ? bannerBuf : "DECISÃO DO VAR APLICADA", 4800, bStyle);
+    VAR_LOG_INF("VAR VerdictPool seq=%u applied cleanly", pool.sequence);
     Logger::Flush();
 }
 
@@ -1174,6 +1372,10 @@ void ResetSimTrackersOnSimThread() {
     g_verifiedRosterDataPtr = nullptr;
     g_verifiedEditedKitPtr = nullptr;
     g_verifiedBallStatePtr = nullptr;
+    g_verifiedMatchInfoWriteBuf = nullptr;
+    g_pendingSetPlayInjection = PendingSetPlayInjection{};
+    g_clearFsmJudgeOnNextTick = false;
+    g_clearFsmJudgeSafeSnapId = 0;
     g_verifiedReplayRingBufPtr.store(nullptr, std::memory_order_release);
     g_syncedTeamRosterTable = nullptr;
     g_syncedTeamKitIds[0] = 0xFFFFFFFFU;
@@ -1220,7 +1422,7 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
         g_lastSeenMatchTick = matchTick;
 
         const int32_t fsmState = GetFsmCurrentState(fsm);
-        TryExecuteVerdictInMainTick(fsm, gmatch, matchInfo, replayMgr, fsmState);
+        TryExecuteVerdictPoolInMainTick(fsm, gmatch, matchInfo, replayMgr, fsmState);
 
         const int32_t matchPhase  = *reinterpret_cast<const int32_t*>(matchInfo + Offsets::MatchInfo_MatchPhase);
         const int32_t matchStatus = *reinterpret_cast<const int32_t*>(matchInfo + Offsets::MatchInfo_MatchStatus);
@@ -1334,69 +1536,47 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
 
 // ============================================================================
 // Detour 2: Judge::FinalizeFrame (0x14050CD70)
+// Called every tick inside BOTH State_InPlay (0x1C) and State_SetPlayReady (0x1A)
+// immediately before `if (*(fsm + 0x49c0) != 0) MatchFSM_EnterOutOfPlay(fsm)`.
 // ============================================================================
 void __fastcall Detour_JudgeFinalizeFrame(void* judge) {
     ++g_finalizeFrameCount;
 
-    if (IsValidPtr(judge)) {
-        auto* judgeBytes = static_cast<uint8_t*>(judge);
-        auto* expectedFsm = static_cast<uint8_t*>(g_lastMatchFsm.load(std::memory_order_relaxed));
-        uint8_t* fsm = judgeBytes - Offsets::MatchFSM_EmbeddedJudge;
+    // Run native Judge::FinalizeFrame first (unbinds judge + 0x3B8 / + 0x3C0)
+    g_hookJudgeFinalize.Original<FnJudgeFinalizeFrame>()(judge);
 
-        if (IsValidPtr(expectedFsm) && fsm == expectedFsm && VarState::Instance().HasArmedVerdict()) {
-            const int32_t fsmState = GetFsmCurrentState(fsm);
-            if (fsmState == 0x1C) {
-                uint8_t* gmatch = GetGmatch();
-                uint8_t* matchInfo = GetMatchInfo(gmatch);
-                uint8_t* replayMgr = GetReplayMgr(gmatch);
-
-                if (IsMatchEligibleForExecution(gmatch, matchInfo, replayMgr)) {
-                    const VarVerdict peek = VarState::Instance().PeekVerdict();
-                    if (peek.armed &&
-                        (peek.action == VarAction::RetroactiveFreeKick ||
-                         peek.action == VarAction::RetroactivePenalty)) {
-                        VarVerdict v{};
-                        if (VarState::Instance().ConsumeVerdict(v)) {
-                            const PitchDims dims = ReadPitchDims(gmatch);
-                            const int32_t offenderTeam = IsValidSlot(v.offenderSlot)
-                                ? SlotToTeam(v.offenderSlot)
-                                : (1 - v.benefitedTeam);
-                            const float offenderAttackDir = ReadTeamAttackDir(gmatch, offenderTeam);
-
-                            const bool isPen = (v.action == VarAction::RetroactivePenalty);
-                            const Vec3 spot = isPen
-                                ? PitchGeometry::CalcPenaltySpot(dims, offenderAttackDir)
-                                : PitchGeometry::ProjectOutsideDefendingBox(dims, v.spotPos, offenderAttackDir, 0.7f);
-
-                            const uint32_t matchTick = *reinterpret_cast<const uint32_t*>(matchInfo + Offsets::MatchInfo_MatchTick);
-                            const uint32_t snapId = EnsureValidFoulSnapshotId(matchInfo, gmatch, matchTick);
-
-                            WriteSetPlayAndFoulToStruct(
-                                fsm + Offsets::MatchFSM_JudgeResult,
-                                fsm + Offsets::MatchFSM_JudgeFoulInfo,
-                                isPen ? SetPlayKind::PenaltyKick : SetPlayKind::FreeKick,
-                                v.benefitedTeam, spot, StoppageReason::Foul,
-                                true, v.targetCard, v.offenderSlot, v.victimSlot, snapId);
-
-                            VAR_LOG_INF("Scenario 3 injected in Judge::FinalizeFrame (InPlay): %s team=%d off=%d vic=%d card=%d snapId=%u pos=(%.1f, %.1f)",
-                                        isPen ? "PENALTY" : "FREE_KICK",
-                                        v.benefitedTeam, v.offenderSlot, v.victimSlot,
-                                        static_cast<int>(v.targetCard), snapId, spot.x, spot.z);
-
-                            VarState::Instance().IncrementInterventions();
-                            VarState::Instance().UpdateEventAfterVerdict(v);
-                            VarState::Instance().SetPostApplyBanner(
-                                v.summary[0] ? v.summary : "DECISÃO DO VAR APLICADA",
-                                4800,
-                                (v.targetCard == CardKind::Red) ? BannerStyle::RedCard : BannerStyle::Applied);
-                        }
-                    }
-                }
-            }
-        }
+    if (!g_pendingSetPlayInjection.active || !IsValidPtr(judge)) {
+        return;
     }
 
-    g_hookJudgeFinalize.Original<FnJudgeFinalizeFrame>()(judge);
+    auto* judgeBytes = static_cast<uint8_t*>(judge);
+    auto* expectedFsm = static_cast<uint8_t*>(g_lastMatchFsm.load(std::memory_order_relaxed));
+    uint8_t* fsm = judgeBytes - Offsets::MatchFSM_EmbeddedJudge;
+    if (!IsValidPtr(expectedFsm) || fsm != expectedFsm) {
+        return;
+    }
+
+    const int32_t fsmState = GetFsmCurrentState(fsm);
+    if (fsmState != 0x1C && fsmState != 0x1A) {
+        return;
+    }
+
+    uint8_t* gmatch = GetGmatch();
+    uint8_t* matchInfo = GetMatchInfo(gmatch);
+    if (!IsValidPtr(matchInfo)) {
+        return;
+    }
+
+    const PendingSetPlayInjection req = g_pendingSetPlayInjection;
+    g_pendingSetPlayInjection.active = false;
+    g_pendingSetPlayInjection.ttlFrames = 0;
+
+    InjectSetPlayIntoFsmJudgeResult(fsm, matchInfo, req);
+    VAR_LOG_INF("Injected VAR SetPlay in Judge::FinalizeFrame (fsmState=0x%X): sp=%d reason=%d team=%d off=%d vic=%d card=%d snap=%u pos=(%.1f, %.1f)",
+                fsmState, static_cast<int>(req.spKind), static_cast<int>(req.stopReason),
+                req.benefitedTeam, req.offenderSlot, req.victimSlot,
+                static_cast<int>(req.card), req.foulValid ? req.snapId : req.safeSnapId,
+                req.spot.x, req.spot.z);
 }
 
 // ============================================================================
@@ -1651,7 +1831,6 @@ bool MatchHooks::Install(bool quietOnMiss) {
     const uintptr_t addrJudgeFinalize  = resolveUnique("Judge::FinalizeFrame", Aobs::JudgeFinalizeFrame, AobHints::JudgeFinalizeFrame);
     const uintptr_t addrUpdateFoul     = resolveUnique("MatchControl::UpdateFoulCounters", Aobs::UpdateFoulCounters, AobHints::UpdateFoulCounters);
     const uintptr_t addrEnterOutOfPlay = resolveUnique("MatchFSM_EnterOutOfPlay", Aobs::MatchFSM_EnterOutOfPlay, AobHints::MatchFSM_EnterOutOfPlay);
-    const uintptr_t addrRebuildSetPlay = resolveUnique("MatchFSM_RebuildSetPlay", Aobs::MatchFSM_RebuildSetPlay, AobHints::MatchFSM_RebuildSetPlay);
     const uintptr_t addrGetTimeFloat   = resolveUnique("MatchInfo_GetTimeFloat", Aobs::MatchInfo_GetTimeFloat, AobHints::MatchInfo_GetTimeFloat);
     const uintptr_t addrSetOnPitch     = resolveUnique("MatchInfo_SetPlayerOnPitch", Aobs::MatchInfo_SetPlayerOnPitch, AobHints::MatchInfo_SetPlayerOnPitch);
     const uintptr_t addrCommitCards    = resolveUnique("CommitCardsCallSite", Aobs::CommitCardsCallSite, AobHints::CommitCardsCallSite);
@@ -1666,7 +1845,7 @@ bool MatchHooks::Install(bool quietOnMiss) {
                                                        Aobs::ReplayPlayer_GetFocusPos, AobHints::ReplayPlayer_GetFocusPos);
 
     if (!addrMainTick || !addrJudgeFinalize || !addrUpdateFoul ||
-        !addrEnterOutOfPlay || !addrRebuildSetPlay || !addrGetTimeFloat ||
+        !addrEnterOutOfPlay || !addrGetTimeFloat ||
         !addrSetOnPitch || !addrCommitCards) {
         if (!quietOnMiss) {
             VAR_LOG_ERR("MatchHooks::Install aborted: one or more critical AOBs did not resolve uniquely");
@@ -1686,7 +1865,6 @@ bool MatchHooks::Install(bool quietOnMiss) {
     }
 
     g_fnEnterOutOfPlay    = reinterpret_cast<FnEnterOutOfPlay>(addrEnterOutOfPlay);
-    g_fnRebuildSetPlay    = reinterpret_cast<FnRebuildSetPlay>(addrRebuildSetPlay);
     g_fnGetTimeFloat      = reinterpret_cast<FnGetTimeFloat>(addrGetTimeFloat);
     g_fnSetPlayerOnPitch  = reinterpret_cast<FnSetPlayerOnPitch>(addrSetOnPitch);
     g_fnGetPlayerBySlot   = reinterpret_cast<FnGetPlayerBySlot>(addrGetPlayerBySlot);

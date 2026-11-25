@@ -1,5 +1,10 @@
 # Changelog
 
+## v4.1
+
+- **Pool de Decisões compostas (`VerdictPool`)**: permite empilhar múltiplas decisões na mesma ida ao Replay Manual (como retirar cartão de um jogador na aba `CARTÕES` e marcar falta ou pênalti com cartão em outro lance na aba `REVISÃO`) e aplicá-las atomicamente ao sair do replay. Garante no máximo 1 falta ou reinício ativo por vez (substituindo o lance anterior com aviso visual) combinado a ajustes independentes de cartão por jogador, com botão `[X]` individual e `Limpar`.
+- **Correção definitiva de falta e bola parada em `SetPlayReady` (`0x1A`)**: identificada e resolvida a causa raiz em que aplicar falta quando o batedor já estava posicionado gerava apenas fade de tela sem alterar a cobrança. A Fox Engine usa alocação RCU dupla em `MatchInfo` (`0x46F8` bytes, `Read Buffer [0]` em `+0x0000` e `Write Buffer [1]` em `+0x2378` copiado por `0x14041BEC0` em `State_16` e `State_45`), além de exigir passagem por `State_01` (`0x14044DB80` -> `0x1404530C0` com `StoppageReason::SilentRestart = 7`, `0x14044F950` e `0x1404A8730`) e limpeza de `MatchFSM + 0x49C0` no tick seguinte após o `CommitToRegistry`.
+
 ## v4.0
 
 - **Correção de crash ao aplicar decisão**: a falta deixada na máquina de estados da partida passa a usar os sentinelas da própria engine (`0xFF`) e um snapshot existente (crash em `PES2021.exe+0x4B4C25`).

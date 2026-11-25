@@ -178,6 +178,9 @@ namespace Offsets {
     constexpr size_t    MatchInfo_FoulSnapshotStride      = 0x3E4;
     constexpr size_t    MatchInfo_FoulSnapshotEntryStride = 0x2C;
     constexpr uintptr_t MatchInfo_FoulSnapshotIds         = 0x2358; // 0x17AC + 3 * 0x3E4
+    // MatchInfo RCU double-buffer stride (verified via 0x140412870, 0x1404237C0, 0x14041BEC0):
+    // Read Buffer [0] is at matchInfo (+0x0000); Write Buffer [1] is adjacent at matchInfo + 0x2378.
+    constexpr size_t    MatchInfo_StructSize              = 0x2378;
 
     // ReplayManager (verified in 0x1420C16A0..0x1420C1840)
     constexpr uintptr_t ReplayMgr_Mode             = 0x00; // uint8_t (0=off, 1..4=active)
@@ -234,6 +237,7 @@ namespace Offsets {
     constexpr uintptr_t MatchFSM_EmbeddedJudge     = 0x908;  // Judge@ai@match
     constexpr uintptr_t MatchFSM_WorkingState      = 0x2790;
     constexpr uintptr_t MatchFSM_WorkingStatus     = 0x2794; // int32_t
+    constexpr uintptr_t MatchFSM_QuickRestartFlag  = 0x27FC; // uint8_t (copied to MatchControl + 0x74C; 0 = formal set-play)
     constexpr uintptr_t MatchFSM_KickerCache       = 0x4954; // uint64_t (0x000000FF000000FF clears)
     constexpr uintptr_t MatchFSM_JudgeResult       = 0x49C0; // RawSetPlayInfo (+0x00) + RawFoulInfo (+0x30)
     constexpr uintptr_t MatchFSM_JudgeFoulInfo     = 0x49F0; // RawFoulInfo

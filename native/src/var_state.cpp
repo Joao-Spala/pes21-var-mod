@@ -236,7 +236,7 @@ void VarState::ResetMatch() {
     ++rosterRevision_;
     ++teamsRevision_;
     matchGeneration_.fetch_add(1, std::memory_order_acq_rel);
-    pendingVerdict_ = VarVerdict{};
+    verdictPool_ = VerdictPool{};
     hasArmedVerdict_.store(false, std::memory_order_release);
     pendingReplayCmd_ = ReplayControlCommand{};
     hasPendingReplayCmd_.store(false, std::memory_order_release);
@@ -1076,7 +1076,29 @@ void VarState::CaptureHudRenderSnapshot(HudRenderSnapshot& io) const {
 
     io.tel = telemetry_;
     io.tel.siderOverlayOpen = siderOpen;
-    io.pending = pendingVerdict_;
+    io.pool = verdictPool_;
+    if (verdictPool_.Empty()) {
+        io.pending = VarVerdict{};
+    } else if (verdictPool_.Count() == 1) {
+        if (verdictPool_.hasPlayDecision) {
+            io.pending = verdictPool_.playDecision;
+        } else {
+            for (const auto& e : verdictPool_.cardEntries) {
+                if (e.active) { io.pending = e.verdict; break; }
+            }
+        }
+    } else {
+        if (verdictPool_.hasPlayDecision) {
+            io.pending = verdictPool_.playDecision;
+        } else {
+            for (const auto& e : verdictPool_.cardEntries) {
+                if (e.active) { io.pending = e.verdict; break; }
+            }
+        }
+        io.pending.armed = true;
+        io.pending.sequence = verdictPool_.sequence;
+        verdictPool_.FormatCombinedSummary(io.pending.summary, sizeof(io.pending.summary));
+    }
     io.stats = stats_;
     io.cfg = hudConfig_;
 
@@ -1177,16 +1199,66 @@ bool VarState::ConsumeReplayCommand(ReplayControlCommand& outCmd) {
 }
 
 void VarState::ArmVerdict(const VarVerdict& verdict) {
+    AddToVerdictPool(verdict, nullptr);
+}
+
+void VarState::AddToVerdictPool(const VarVerdict& verdict, bool* outReplacedPlay) {
+    if (outReplacedPlay) *outReplacedPlay = false;
+
     std::lock_guard<std::mutex> lock(mutex_);
-    pendingVerdict_ = verdict;
-    pendingVerdict_.armed = true;
-    pendingVerdict_.sequence = verdictSeq_++;
-    hasArmedVerdict_.store(true, std::memory_order_release);
+    VarVerdict stored = verdict;
+    stored.armed = true;
+    stored.sequence = verdictSeq_++;
+    verdictPool_.sequence = stored.sequence;
+
+    if (stored.action == VarAction::EditCard && IsValidSlot(stored.offenderSlot)) {
+        auto& entry = verdictPool_.cardEntries[static_cast<size_t>(stored.offenderSlot)];
+        entry.active = true;
+        entry.order = stored.sequence;
+        entry.verdict = stored;
+    } else {
+        if (outReplacedPlay &&
+            verdictPool_.hasPlayDecision &&
+            verdictPool_.playDecision.action != VarAction::None &&
+            stored.action != VarAction::None) {
+            *outReplacedPlay = true;
+        }
+        verdictPool_.hasPlayDecision = true;
+        verdictPool_.playOrder = stored.sequence;
+        verdictPool_.playDecision = stored;
+
+        // If this play decision acts on an official incident, drop any earlier non-direct card-only
+        // tweak targeting the exact same official event so its original card is never reverted twice.
+        if (stored.sourceEventId != 0) {
+            for (auto& e : verdictPool_.cardEntries) {
+                if (e.active && !e.verdict.directCardEdit && e.verdict.sourceEventId == stored.sourceEventId) {
+                    e = CardPoolEntry{};
+                }
+            }
+        }
+    }
+
+    hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+}
+
+void VarState::RemovePlayFromPool() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    verdictPool_.hasPlayDecision = false;
+    verdictPool_.playOrder = 0;
+    verdictPool_.playDecision = VarVerdict{};
+    hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+}
+
+void VarState::RemoveCardFromPool(int32_t slot) {
+    if (!IsValidSlot(slot)) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    verdictPool_.cardEntries[static_cast<size_t>(slot)] = CardPoolEntry{};
+    hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
 }
 
 void VarState::CancelVerdict() {
     std::lock_guard<std::mutex> lock(mutex_);
-    pendingVerdict_ = VarVerdict{};
+    verdictPool_ = VerdictPool{};
     hasArmedVerdict_.store(false, std::memory_order_release);
 }
 
@@ -1195,7 +1267,40 @@ VarVerdict VarState::PeekVerdict() const {
         return VarVerdict{};
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    return pendingVerdict_;
+    if (verdictPool_.Empty()) {
+        return VarVerdict{};
+    }
+    if (verdictPool_.Count() == 1) {
+        if (verdictPool_.hasPlayDecision) return verdictPool_.playDecision;
+        for (const auto& e : verdictPool_.cardEntries) {
+            if (e.active) return e.verdict;
+        }
+        return VarVerdict{};
+    }
+    VarVerdict combined{};
+    if (verdictPool_.hasPlayDecision) {
+        combined = verdictPool_.playDecision;
+    } else {
+        uint32_t bestOrder = 0xFFFFFFFFU;
+        for (const auto& e : verdictPool_.cardEntries) {
+            if (e.active && e.order < bestOrder) {
+                bestOrder = e.order;
+                combined = e.verdict;
+            }
+        }
+    }
+    combined.armed = true;
+    combined.sequence = verdictPool_.sequence;
+    verdictPool_.FormatCombinedSummary(combined.summary, sizeof(combined.summary));
+    return combined;
+}
+
+VerdictPool VarState::PeekVerdictPool() const {
+    if (!hasArmedVerdict_.load(std::memory_order_acquire)) {
+        return VerdictPool{};
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    return verdictPool_;
 }
 
 bool VarState::ConsumeVerdict(VarVerdict& outVerdict) {
@@ -1203,13 +1308,59 @@ bool VarState::ConsumeVerdict(VarVerdict& outVerdict) {
         return false;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!pendingVerdict_.armed || pendingVerdict_.action == VarAction::None) {
-        // Keep the flag mirroring pendingVerdict_.armed so PeekVerdict stays identical to v4.0
-        hasArmedVerdict_.store(pendingVerdict_.armed, std::memory_order_release);
+    if (!verdictPool_.HasExecutableItems()) {
+        hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
         return false;
     }
-    outVerdict = pendingVerdict_;
-    pendingVerdict_ = VarVerdict{};
+
+    // Pop the earliest executable decision in chronological order
+    bool pickPlay = (verdictPool_.hasPlayDecision &&
+                     verdictPool_.playDecision.armed &&
+                     verdictPool_.playDecision.action != VarAction::None);
+    int bestCardSlot = -1;
+    uint32_t bestCardOrder = 0xFFFFFFFFU;
+    for (int s = 0; s < 22; ++s) {
+        const auto& e = verdictPool_.cardEntries[static_cast<size_t>(s)];
+        if (e.active && e.verdict.armed && e.verdict.action != VarAction::None && e.order < bestCardOrder) {
+            bestCardOrder = e.order;
+            bestCardSlot = s;
+        }
+    }
+
+    if (pickPlay && (bestCardSlot < 0 || verdictPool_.playOrder <= bestCardOrder)) {
+        outVerdict = verdictPool_.playDecision;
+        verdictPool_.hasPlayDecision = false;
+        verdictPool_.playOrder = 0;
+        verdictPool_.playDecision = VarVerdict{};
+    } else if (bestCardSlot >= 0) {
+        outVerdict = verdictPool_.cardEntries[static_cast<size_t>(bestCardSlot)].verdict;
+        verdictPool_.cardEntries[static_cast<size_t>(bestCardSlot)] = CardPoolEntry{};
+    } else {
+        hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+        return false;
+    }
+
+    hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+    return true;
+}
+
+bool VarState::ConsumeVerdictPool(VerdictPool& outPool) {
+    if (!hasArmedVerdict_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!verdictPool_.HasExecutableItems()) {
+        hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+        return false;
+    }
+
+    outPool = verdictPool_;
+    if (outPool.hasPlayDecision && outPool.playDecision.action == VarAction::None) {
+        outPool.hasPlayDecision = false;
+        outPool.playOrder = 0;
+        outPool.playDecision = VarVerdict{};
+    }
+    verdictPool_ = VerdictPool{};
     hasArmedVerdict_.store(false, std::memory_order_release);
     return true;
 }
