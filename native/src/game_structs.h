@@ -178,6 +178,11 @@ namespace Offsets {
     constexpr size_t    MatchInfo_FoulSnapshotStride      = 0x3E4;
     constexpr size_t    MatchInfo_FoulSnapshotEntryStride = 0x2C;
     constexpr uintptr_t MatchInfo_FoulSnapshotIds         = 0x2358; // 0x17AC + 3 * 0x3E4
+    // Pool-relative (0x140A81E70 ctor, 0x140A82070 AddSnapshot): ids uint32[3] +0xBAC, next id +0xBB8, ring index +0xBBC
+    constexpr uintptr_t SnapshotPool_Ids       = 0xBAC;
+    constexpr uintptr_t SnapshotPool_NextId    = 0xBB8;
+    constexpr uintptr_t SnapshotPool_RingIndex = 0xBBC;
+    constexpr size_t    SnapshotPool_Span      = 0xBC0;
     // MatchInfo RCU double-buffer stride (verified via 0x140412870, 0x1404237C0, 0x14041BEC0):
     // Read Buffer [0] is at matchInfo (+0x0000); Write Buffer [1] is adjacent at matchInfo + 0x2378.
     constexpr size_t    MatchInfo_StructSize              = 0x2378;
@@ -241,6 +246,11 @@ namespace Offsets {
     constexpr uintptr_t MatchFSM_KickerCache       = 0x4954; // uint64_t (0x000000FF000000FF clears)
     constexpr uintptr_t MatchFSM_JudgeResult       = 0x49C0; // RawSetPlayInfo (+0x00) + RawFoulInfo (+0x30)
     constexpr uintptr_t MatchFSM_JudgeFoulInfo     = 0x49F0; // RawFoulInfo
+    // Judge snapshot pool = JudgeResult + 0x148 (AddSnapshot 0x140A82070 at 0x14050E887, ctor 0x1404437BE).
+    // FSM working state (+0x2790) is copied to MatchControl + 0x6E0 (0x14044402D) and CommitToRegistry copies
+    // MatchControl + 0x2A58 over MatchInfo + 0x17AC (0x140423196 -> 0x140A3D3B0). So a foul snapshot id is only
+    // durable if it lives in THIS pool.
+    constexpr uintptr_t MatchFSM_JudgeSnapshotPool = 0x4B08;
     constexpr uintptr_t MatchFSM_DelayedCardFlag   = 0x57F8; // uint8_t
 
     // Judge

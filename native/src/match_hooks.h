@@ -70,7 +70,21 @@ namespace Aobs {
     // PES 2021 PadUpdate (0x1403F86E0): dispatches DirectInput Joystick (0x1403F8710) or XInput (0x1403F8CE0).
     constexpr const char* PesPad_Update =
         "48 83 79 18 00 48 8B D1 74 14 B8 5E 04 00 00 66 39 41 10";
+
+    // FoulSnapshotPool::Find(pool, id) at 0x140A82120: linear search of ids[3] at pool + 0xBAC,
+    // returns pool + idx * 0x3E4 or NULL. Clean 6-byte prologue (mov r8d, edx / mov r9, rcx).
+    constexpr const char* FoulSnapshotPool_Find =
+        "44 8B C2 4C 8B C9 85 D2 74 1F 33 D2 49 8D 81 AC 0B 00 00 8B CA 44 39 00 74 12";
 } // namespace Aobs
+
+// Call sites of FoulSnapshotPool::Find whose callers dereference the result WITHOUT a NULL check
+// (foul event consumer 0x1404B4870 and its helpers 0x1404B4B40 / 0x1404B4D90). Verified in Steam 1.7.2.0:
+// each RVA holds `E8 rel32` targeting FoulSnapshotPool_Find. A missing snapshot id there is the
+// PES2021.exe+0x4B4C25 crash. Every other caller (0x140510EE6, 0x140A1FCAA, 0x140A347F7, 0x140A3D71C,
+// 0x14145FDCA, 0x141477EF7) already tests for NULL and keeps the native result.
+namespace FoulSnapshotUncheckedCallSites {
+    constexpr uintptr_t Rvas[] = { 0x04B49BD, 0x04B4BC7, 0x04B4EA0 };
+} // namespace FoulSnapshotUncheckedCallSites
 
 // Fast O(1) Steam 1.7.2.0 RVA hints (validated against pattern; falls back to full .text scan on mismatch)
 namespace AobHints {
@@ -91,6 +105,7 @@ namespace AobHints {
     constexpr uintptr_t DInputJoystick_Poll        = 0x1B63900;
     constexpr uintptr_t DInputMouse_Poll           = 0x1B63950;
     constexpr uintptr_t PesPad_Update              = 0x03F86E0;
+    constexpr uintptr_t FoulSnapshotPool_Find      = 0x0A82120;
 } // namespace AobHints
 
 class MatchHooks {

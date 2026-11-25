@@ -11,6 +11,7 @@ I18N("Recolher painel", "Collapse panel")
 I18N("Abrir painel", "Open panel")
 
 // ---- Generic fallback when the game roster cannot be read
+I18N("Cartão do lance incorporado à decisão", "Event card merged into the decision")
 I18N("CASA", "HOME")
 I18N("FORA", "AWAY")
 I18N("CAS", "HOM")
@@ -237,6 +238,7 @@ I18N("Falta pelo VAR", "Free kick via VAR")
 
 // ---- Banners (match_hooks) translated at display time. "  ·  " splits title and detail.
 I18N("DECISÃO DO VAR APLICADA", "VAR DECISION APPLIED")
+I18N("DECISÃO NÃO APLICADA  ·  O lance já mudou", "DECISION NOT APPLIED  ·  The play has moved on")
 I18N("PÊNALTI MARCADO  ·  Revisão disponível no replay", "PENALTY GIVEN  ·  Review available in the replay")
 I18N("CARTÃO VERMELHO  ·  Revisão disponível no replay", "RED CARD  ·  Review available in the replay")
 I18N("FALTA PERTO DA ÁREA  ·  Revisão disponível no replay", "FOUL NEAR THE BOX  ·  Review available in the replay")

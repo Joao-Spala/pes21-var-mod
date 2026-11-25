@@ -122,6 +122,7 @@ public:
     const char* ControlsMessage() const; // translated, nullptr when expired
     bool ControlsMessageIsError() const { return controlsMsgError_; }
     const char* PoolNoticeMessage() const; // translated, nullptr when expired
+    void ClearPoolNotice() { poolNoticeMsg_ = nullptr; poolNoticeUntilMs_ = 0; }
     static const char* BindActionLabel(int action); // translated
 
     bool IsInManualReplay() const { return inManualReplay_; }
@@ -164,6 +165,7 @@ public:
     int32_t   DraftOrigOffenderSlot() const { return draftOrigOffenderSlot_; }
     int32_t   DraftOffenderSlot() const { return draftOffenderSlot_; }
     int32_t   DraftVictimSlot() const { return draftVictimSlot_; }
+    uint32_t  DraftSourceEventId() const { return draftSourceEventId_; }
     int32_t   DraftBenefitedTeam() const { return draftBenefitedTeam_; }
     Vec3      DraftSpotPos() const { return draftSpotPos_; }
     int       DraftSpotPreset() const { return draftSpotPreset_; }

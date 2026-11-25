@@ -1,5 +1,6 @@
 #include "dx11_hook.h"
 #include "i18n.h"
+#include "inline_hook.h"
 #include "input_manager.h"
 #include "logger.h"
 #include "match_hooks.h"
@@ -86,6 +87,14 @@ extern "C" {
 __declspec(dllexport) int __cdecl var_init(const char* logDirUtf8) {
     if (g_initialized.exchange(true, std::memory_order_acq_rel)) {
         return 1;
+    }
+
+    // Pin the DLL: detours stay patched into the game for the whole process, so the module must never be
+    // unmapped by a stray FreeLibrary (threads would return into freed code).
+    {
+        HMODULE pinned = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                           reinterpret_cast<LPCWSTR>(&var_init), &pinned);
     }
 
     const std::wstring baseDir = ResolveBaseDir(logDirUtf8);
@@ -198,11 +207,15 @@ __declspec(dllexport) int __cdecl var_get_status_text(char* outBuf, int bufSize)
 } // extern "C"
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved) {
+    (void)lpReserved;
     if (fdwReason == DLL_PROCESS_ATTACH) {
         g_selfModule = hinstDLL;
         DisableThreadLibraryCalls(hinstDLL);
-    } else if (fdwReason == DLL_PROCESS_DETACH && lpReserved == nullptr) {
-        var_shutdown();
+    } else if (fdwReason == DLL_PROCESS_DETACH) {
+        // Never join threads or unpatch game code under the loader lock: another thread may be inside a
+        // detour. var_init pins the module, so this only runs at process exit. Just persist the log.
+        var_mod::SetHooksProcessTerminating();
+        var_mod::Logger::Flush();
     }
     return TRUE;
 }

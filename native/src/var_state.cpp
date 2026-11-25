@@ -316,6 +316,8 @@ void VarState::SetInManualReplay(bool inManual) {
         panelFocused_.store(false, std::memory_order_release);
         mouseOverPanel_.store(false, std::memory_order_relaxed);
         inputBlockGraceUntilMs_.store(0, std::memory_order_release);
+        // A seek / pause / focus queued in this replay must never fire in the next one
+        hasPendingReplayCmd_.store(false, std::memory_order_release);
     }
 }
 
@@ -325,6 +327,7 @@ void VarState::ClearReplayFocusAndGrace() {
     liveManualReplaySignal_.store(false, std::memory_order_release);
     mouseOverPanel_.store(false, std::memory_order_relaxed);
     inputBlockGraceUntilMs_.store(0, std::memory_order_release);
+    hasPendingReplayCmd_.store(false, std::memory_order_release);
 }
 
 bool VarState::ShouldBlockGameInputNow(uint64_t nowMs) const {
@@ -1091,8 +1094,9 @@ void VarState::CaptureHudRenderSnapshot(HudRenderSnapshot& io) const {
         if (verdictPool_.hasPlayDecision) {
             io.pending = verdictPool_.playDecision;
         } else {
+            uint32_t bestOrder = 0xFFFFFFFFU;
             for (const auto& e : verdictPool_.cardEntries) {
-                if (e.active) { io.pending = e.verdict; break; }
+                if (e.active && e.order < bestOrder) { bestOrder = e.order; io.pending = e.verdict; }
             }
         }
         io.pending.armed = true;
@@ -1205,17 +1209,35 @@ void VarState::ArmVerdict(const VarVerdict& verdict) {
 void VarState::AddToVerdictPool(const VarVerdict& verdict, bool* outReplacedPlay) {
     if (outReplacedPlay) *outReplacedPlay = false;
 
+    // A "None" decision has nothing to execute and would keep the pool armed forever
+    if (verdict.action == VarAction::None) return;
+    if (verdict.action == VarAction::EditCard && !IsValidSlot(verdict.offenderSlot)) return;
+
     std::lock_guard<std::mutex> lock(mutex_);
     VarVerdict stored = verdict;
     stored.armed = true;
     stored.sequence = verdictSeq_++;
     verdictPool_.sequence = stored.sequence;
 
-    if (stored.action == VarAction::EditCard && IsValidSlot(stored.offenderSlot)) {
-        auto& entry = verdictPool_.cardEntries[static_cast<size_t>(stored.offenderSlot)];
-        entry.active = true;
-        entry.order = stored.sequence;
-        entry.verdict = stored;
+    if (stored.action == VarAction::EditCard) {
+        // Replace the entry with the same key (same player for direct edits, same official event for
+        // event edits), so one event edited twice with different players never applies both.
+        for (auto& e : verdictPool_.cardEntries) {
+            if (e.active && SameCardPoolKey(e.verdict, stored)) e = CardPoolEntry{};
+        }
+        CardPoolEntry* slotFor = nullptr;
+        for (auto& e : verdictPool_.cardEntries) {
+            if (!e.active) { slotFor = &e; break; }
+        }
+        if (!slotFor) {
+            // Pool full (32 card edits): drop the oldest card entry
+            for (auto& e : verdictPool_.cardEntries) {
+                if (!slotFor || e.order < slotFor->order) slotFor = &e;
+            }
+        }
+        slotFor->active = true;
+        slotFor->order = stored.sequence;
+        slotFor->verdict = stored;
     } else {
         if (outReplacedPlay &&
             verdictPool_.hasPlayDecision &&
@@ -1252,7 +1274,17 @@ void VarState::RemovePlayFromPool() {
 void VarState::RemoveCardFromPool(int32_t slot) {
     if (!IsValidSlot(slot)) return;
     std::lock_guard<std::mutex> lock(mutex_);
-    verdictPool_.cardEntries[static_cast<size_t>(slot)] = CardPoolEntry{};
+    for (auto& e : verdictPool_.cardEntries) {
+        if (e.active && e.verdict.offenderSlot == slot) e = CardPoolEntry{};
+    }
+    hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+}
+
+void VarState::RemoveCardPoolEntry(uint32_t sequence) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& e : verdictPool_.cardEntries) {
+        if (e.active && e.verdict.sequence == sequence) e = CardPoolEntry{};
+    }
     hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
 }
 
@@ -1319,7 +1351,7 @@ bool VarState::ConsumeVerdict(VarVerdict& outVerdict) {
                      verdictPool_.playDecision.action != VarAction::None);
     int bestCardSlot = -1;
     uint32_t bestCardOrder = 0xFFFFFFFFU;
-    for (int s = 0; s < 22; ++s) {
+    for (int s = 0; s < static_cast<int>(kMaxCardPoolEntries); ++s) {
         const auto& e = verdictPool_.cardEntries[static_cast<size_t>(s)];
         if (e.active && e.verdict.armed && e.verdict.action != VarAction::None && e.order < bestCardOrder) {
             bestCardOrder = e.order;

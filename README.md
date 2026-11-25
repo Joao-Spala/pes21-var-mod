@@ -1,6 +1,6 @@
-# PES 2021 - VAR Mod v4.0 (PT-BR & EN)
+# PES 2021 - VAR Mod v4.2 (PT-BR & EN)
 
-![Version](https://img.shields.io/badge/Version-v4.0-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.2-38BDF8?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Idiomas](https://img.shields.io/badge/Idiomas-PT--BR_%7C_English-2EA043?style=for-the-badge)
 ![Sider Compatible](https://img.shields.io/badge/Sider_7.3_%2F_BMPES_16.3-100%25_Compatible-F59E0B?style=for-the-badge)

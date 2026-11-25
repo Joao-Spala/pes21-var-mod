@@ -137,6 +137,7 @@ void TestRealPes2021BinaryAobs() {
         { "DInputJoystick_Poll",        Aobs::DInputJoystick_Poll,        AobHints::DInputJoystick_Poll,        0x141B63900ULL },
         { "DInputMouse_Poll",           Aobs::DInputMouse_Poll,           AobHints::DInputMouse_Poll,           0x141B63950ULL },
         { "PesPad_Update",              Aobs::PesPad_Update,              AobHints::PesPad_Update,              0x1403F86E0ULL },
+        { "FoulSnapshotPool_Find",      Aobs::FoulSnapshotPool_Find,      AobHints::FoulSnapshotPool_Find,      0x140A82120ULL },
         { "ReplayCtrl_SyncToManager",   Aobs::ReplayCtrl_SyncToManager,   AobHints::ReplayCtrl_SyncToManager,   0x1420C16A0ULL },
         { "ReplayPlayer_SetFrame",      Aobs::ReplayPlayer_SetFrame,      AobHints::ReplayPlayer_SetFrame,      0x14217E800ULL },
         { "ReplayPlayer_GetFocusPos",   Aobs::ReplayPlayer_GetFocusPos,   AobHints::ReplayPlayer_GetFocusPos,   0x14217EC70ULL },
@@ -198,6 +199,16 @@ void TestRealPes2021BinaryAobs() {
     const int64_t rosterDisp = *reinterpret_cast<const int32_t*>(rosterGetterBufAddr + 3);
     const uint64_t rosterVa = (0x1414BC550ULL + 7) + rosterDisp;
     EXPECT_EQ(rosterVa, 0x143714240ULL, "MatchRoster RIP-relative resolution mismatch");
+
+    // FoulSnapshotPool::Find guard: 6-byte prologue and every unchecked call site must be `E8 rel32` to it
+    for (uintptr_t rva : FoulSnapshotUncheckedCallSites::Rvas) {
+        const uint64_t siteVa = imageBase + rva;
+        const uintptr_t siteBuf = bufBase + static_cast<uintptr_t>(siteVa - textVaBase);
+        const auto* sp = reinterpret_cast<const uint8_t*>(siteBuf);
+        const int64_t rel = *reinterpret_cast<const int32_t*>(siteBuf + 1);
+        EXPECT_TRUE(sp[0] == 0xE8 && static_cast<uint64_t>(siteVa + 5 + rel) == 0x140A82120ULL,
+                    "FoulSnapshotPool unchecked call site must call FoulSnapshotPool::Find");
+    }
 
     const int64_t replaySingDisp = *reinterpret_cast<const int32_t*>(replaySyncBufAddr + 0x32 + 3);
     const uint64_t replaySingVa = (0x1420C16A0ULL + 0x32 + 7) + replaySingDisp;
@@ -1465,7 +1476,7 @@ void TestPerfOverhaulEquivalence() {
     VarVerdict none{};
     st.ArmVerdict(none);
     EXPECT_TRUE(!st.ConsumeVerdict(out), "Armed None verdict must not execute");
-    EXPECT_TRUE(st.HasArmedVerdict() && st.PeekVerdict().armed, "Armed None verdict stays visible like v4.0");
+    EXPECT_TRUE(!st.HasArmedVerdict() && !st.PeekVerdict().armed, "A None verdict is rejected and never arms the pool");
     st.ResetMatch();
     EXPECT_TRUE(!st.HasArmedVerdict() && !st.PeekVerdict().armed, "ResetMatch must clear flag");
 
@@ -2035,7 +2046,7 @@ void TestCompositeVerdictPoolAndRcuOffsets() {
 
     VerdictPool pool = st.PeekVerdictPool();
     EXPECT_EQ(pool.Count(), static_cast<size_t>(1), "Pool must have 1 decision");
-    EXPECT_TRUE(!pool.hasPlayDecision && pool.cardEntries[10].active, "Slot 10 card removal must be active in pool");
+    EXPECT_TRUE(!pool.hasPlayDecision && pool.FindCardForSlot(10) != nullptr, "Slot 10 card removal must be active in pool");
     EXPECT_TRUE(ctrl.PoolNoticeMessage() == nullptr, "No play replacement notice yet");
 
     // 2. Switch to REVISAO and award Free Kick + Red Card against #15 ZARACHO (slot 15) -> BOTH coexist in Pool!
@@ -2059,9 +2070,9 @@ void TestCompositeVerdictPoolAndRcuOffsets() {
     pool = st.PeekVerdictPool();
     EXPECT_EQ(pool.Count(), static_cast<size_t>(2), "Pool must hold card removal + free kick together");
     EXPECT_TRUE(pool.hasPlayDecision && pool.playDecision.action == VarAction::RetroactiveFreeKick, "Free kick must be in pool");
-    EXPECT_TRUE(pool.cardEntries[10].active && pool.cardEntries[10].verdict.directYellows == 0,
+    EXPECT_TRUE(pool.FindCardForSlot(10) && pool.FindCardForSlot(10)->verdict.directYellows == 0,
                 "PEDRO card removal must NOT be overwritten by the foul decision");
-    EXPECT_TRUE(pool.cardEntries[10].order < pool.playOrder, "Chronological order must be preserved");
+    EXPECT_TRUE(pool.FindCardForSlot(10)->order < pool.playOrder, "Chronological order must be preserved");
     EXPECT_TRUE(ctrl.PoolNoticeMessage() == nullptr, "First play decision must not trigger replacement notice");
 
     // 3. Domain guardrail: adding a SECOND play decision (Marcar penalti) replaces the previous play decision
@@ -2074,7 +2085,7 @@ void TestCompositeVerdictPoolAndRcuOffsets() {
     pool = st.PeekVerdictPool();
     EXPECT_EQ(pool.Count(), static_cast<size_t>(2), "Second play must replace first play, keeping count == 2");
     EXPECT_EQ(pool.playDecision.action, VarAction::RetroactivePenalty, "Play decision must update to Penalty");
-    EXPECT_TRUE(pool.cardEntries[10].active, "Independent card decision must remain intact on play replacement");
+    EXPECT_TRUE(pool.FindCardForSlot(10) != nullptr, "Independent card decision must remain intact on play replacement");
     EXPECT_TRUE(ctrl.PoolNoticeMessage() != nullptr, "Replacing an existing play must surface pool notice");
 
     // 4. Individual item removal & per-slot deduplication
@@ -2090,16 +2101,16 @@ void TestCompositeVerdictPoolAndRcuOffsets() {
     st.AddToVerdictPool(c2); // same slot 3 -> deduplicated in-place!
     pool = st.PeekVerdictPool();
     EXPECT_EQ(pool.CardCount(), static_cast<size_t>(2), "Same-slot card edit must deduplicate");
-    EXPECT_EQ(pool.cardEntries[3].verdict.directReds, static_cast<uint8_t>(1), "Slot 3 card must update to Red");
+    EXPECT_EQ(pool.FindCardForSlot(3)->verdict.directReds, static_cast<uint8_t>(1), "Slot 3 card must update to Red");
 
     st.RemoveCardFromPool(3);
     pool = st.PeekVerdictPool();
-    EXPECT_TRUE(!pool.cardEntries[3].active && pool.cardEntries[10].active && pool.hasPlayDecision,
+    EXPECT_TRUE(pool.FindCardForSlot(3) == nullptr && pool.FindCardForSlot(10) != nullptr && pool.hasPlayDecision,
                 "RemoveCardFromPool(3) must only remove slot 3");
 
     st.RemovePlayFromPool();
     pool = st.PeekVerdictPool();
-    EXPECT_TRUE(!pool.hasPlayDecision && pool.cardEntries[10].active && st.HasArmedVerdict(),
+    EXPECT_TRUE(!pool.hasPlayDecision && pool.FindCardForSlot(10) != nullptr && st.HasArmedVerdict(),
                 "RemovePlayFromPool must keep remaining card entries armed");
 
     // 5. Official event card-tweak + play conversion deduplication (prevents double origCard subtraction)
@@ -2127,11 +2138,64 @@ void TestCompositeVerdictPoolAndRcuOffsets() {
     EXPECT_TRUE(!st.HasArmedVerdict(), "ConsumeVerdictPool must disarm pool atomically");
     EXPECT_TRUE(consumed.hasPlayDecision && consumed.playDecision.action == VarAction::ConvertToPenalty,
                 "Consumed pool must carry ConvertToPenalty");
-    EXPECT_TRUE(!consumed.cardEntries[15].active,
+    EXPECT_TRUE(consumed.FindCardForSlot(15) == nullptr,
                 "Non-direct card tweak on same sourceEventId 88 must be superseded by ConvertToPenalty");
-    EXPECT_TRUE(consumed.cardEntries[10].active,
+    EXPECT_TRUE(consumed.FindCardForSlot(10) != nullptr,
                 "Direct card removal on slot 10 must be preserved in atomic consumption");
     EXPECT_TRUE(!st.ConsumeVerdictPool(consumed), "Second ConsumeVerdictPool must return false");
+
+    // 6. Same official event edited twice with different players: only the latest edit survives
+    {
+        VarVerdict e1{};
+        e1.action = VarAction::EditCard;
+        e1.sourceEventId = 42;
+        e1.origOffenderSlot = 4;
+        e1.offenderSlot = 5;
+        e1.origCard = CardKind::Yellow;
+        e1.targetCard = CardKind::Yellow;
+        st.AddToVerdictPool(e1);
+        VarVerdict e2 = e1;
+        e2.offenderSlot = 6;
+        st.AddToVerdictPool(e2);
+        const VerdictPool p6 = st.PeekVerdictPool();
+        EXPECT_EQ(p6.CardCount(), static_cast<size_t>(1), "One event edited twice must keep a single card entry");
+        EXPECT_TRUE(p6.FindCardForSlot(6) != nullptr && p6.FindCardForSlot(5) == nullptr,
+                    "The latest player chosen for the event must replace the previous one");
+        st.CancelVerdict();
+    }
+
+    // 7. Two different events of the same player: both edits are kept (no silent overwrite)
+    {
+        VarVerdict a{};
+        a.action = VarAction::EditCard;
+        a.sourceEventId = 10;
+        a.offenderSlot = 7;
+        a.origCard = CardKind::Simple;
+        a.targetCard = CardKind::Yellow;
+        st.AddToVerdictPool(a);
+        VarVerdict b = a;
+        b.sourceEventId = 11;
+        st.AddToVerdictPool(b);
+        const VerdictPool p7 = st.PeekVerdictPool();
+        EXPECT_EQ(p7.CardCount(), static_cast<size_t>(2), "Edits of two different events must both stay in the pool");
+        // remove one by its unique sequence
+        const CardPoolEntry* latest = p7.FindCardForSlot(7);
+        EXPECT_TRUE(latest != nullptr, "Latest entry for slot 7 must exist");
+        st.RemoveCardPoolEntry(latest->verdict.sequence);
+        EXPECT_EQ(st.PeekVerdictPool().CardCount(), static_cast<size_t>(1), "RemoveCardPoolEntry must remove exactly one entry");
+        st.CancelVerdict();
+    }
+
+    // 8. UTF-8 safe truncation never leaves half a multi-byte character
+    {
+        char buf[7];
+        std::snprintf(buf, sizeof(buf), "%s", "abcde\xC3\xA7z"); // 6 bytes fit: "abcde" + lead byte of "ç"
+        Utf8TrimIncompleteTail(buf);
+        EXPECT_TRUE(std::strcmp(buf, "abcde") == 0, "Truncated lead byte must be removed");
+        char ok[8] = "ab\xC3\xA7";
+        Utf8TrimIncompleteTail(ok);
+        EXPECT_TRUE(std::strcmp(ok, "ab\xC3\xA7") == 0, "Complete sequences must be kept");
+    }
 
     MarkPass("TestCompositeVerdictPoolAndRcuOffsets");
 }

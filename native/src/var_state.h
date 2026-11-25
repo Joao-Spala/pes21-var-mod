@@ -3,10 +3,12 @@
 #include "game_structs.h"
 #include "i18n.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -267,15 +269,59 @@ struct CardPoolEntry {
     VarVerdict verdict{};
 };
 
+// Truncates a UTF-8 string in place so it never ends inside a multi-byte sequence.
+inline void Utf8TrimIncompleteTail(char* s) {
+    if (!s) return;
+    size_t len = std::strlen(s);
+    if (len == 0) return;
+    size_t i = len;
+    size_t cont = 0;
+    while (i > 0 && (static_cast<unsigned char>(s[i - 1]) & 0xC0) == 0x80 && cont < 3) { --i; ++cont; }
+    if (i == 0) { s[0] = '\0'; return; }
+    const unsigned char lead = static_cast<unsigned char>(s[i - 1]);
+    const size_t need = (lead >= 0xF0) ? 3 : (lead >= 0xE0) ? 2 : (lead >= 0xC0) ? 1 : 0;
+    if (lead >= 0xC0 && cont < need) s[i - 1] = '\0';
+}
+
 // Composite VAR Decision Pool:
-// Holds at most ONE play/restart decision (two simultaneous fouls/restarts are invalid)
-// plus 0..22 independent per-player card decisions, all executed atomically when leaving Manual Replay.
+// Holds at most ONE play/restart decision (two simultaneous fouls/restarts are invalid) plus independent
+// card decisions, all executed atomically and in chronological order when leaving Manual Replay.
+// Card entries are keyed so edits never silently replace each other:
+//  - direct edit (exact Y/R for a player): one entry per player slot
+//  - edit of an official event's card: one entry per source event (re-editing the same event updates it)
+//  - edit without a source event: one entry per player slot
+constexpr size_t kMaxCardPoolEntries = 32;
+
+inline bool SameCardPoolKey(const VarVerdict& a, const VarVerdict& b) {
+    if (a.directCardEdit != b.directCardEdit) return false;
+    if (a.directCardEdit) return a.offenderSlot == b.offenderSlot;
+    if (a.sourceEventId != 0 || b.sourceEventId != 0) return a.sourceEventId == b.sourceEventId;
+    return a.offenderSlot == b.offenderSlot;
+}
+
 struct VerdictPool {
     uint32_t                       sequence        = 0;
     bool                           hasPlayDecision = false;
     uint32_t                       playOrder       = 0;
     VarVerdict                     playDecision{};
-    std::array<CardPoolEntry, 22>  cardEntries{};
+    std::array<CardPoolEntry, kMaxCardPoolEntries> cardEntries{};
+
+    // Latest active card entry that targets this player (nullptr if none)
+    const CardPoolEntry* FindCardForSlot(int32_t slot) const {
+        const CardPoolEntry* best = nullptr;
+        for (const auto& e : cardEntries) {
+            if (e.active && e.verdict.offenderSlot == slot && (!best || e.order > best->order)) best = &e;
+        }
+        return best;
+    }
+
+    // Active card entry with the same key as `v` (nullptr if none)
+    const CardPoolEntry* FindSameKey(const VarVerdict& v) const {
+        for (const auto& e : cardEntries) {
+            if (e.active && SameCardPoolKey(e.verdict, v)) return &e;
+        }
+        return nullptr;
+    }
 
     size_t CardCount() const {
         size_t n = 0;
@@ -317,7 +363,7 @@ struct VerdictPool {
             first = playDecision.summary;
         }
         // Collect active card summaries sorted by insertion order
-        std::array<const CardPoolEntry*, 22> sorted{};
+        std::array<const CardPoolEntry*, kMaxCardPoolEntries> sorted{};
         size_t sc = 0;
         for (const auto& e : cardEntries) {
             if (e.active) sorted[sc++] = &e;
@@ -333,7 +379,7 @@ struct VerdictPool {
         }
 
         if (!first) {
-            std::snprintf(outBuf, outSize, "%s", "DECISÃO PRONTA");
+            std::snprintf(outBuf, outSize, "%s", "DECISÃO PRONTA"); // translated at display time
             return;
         }
         if (total == 1 || !second) {
@@ -343,6 +389,7 @@ struct VerdictPool {
         } else {
             std::snprintf(outBuf, outSize, "%s  (+%zu)", first, total - 1);
         }
+        Utf8TrimIncompleteTail(outBuf);
     }
 };
 
@@ -573,7 +620,8 @@ public:
     void ArmVerdict(const VarVerdict& verdict);
     void AddToVerdictPool(const VarVerdict& verdict, bool* outReplacedPlay = nullptr);
     void RemovePlayFromPool();
-    void RemoveCardFromPool(int32_t slot);
+    void RemoveCardFromPool(int32_t slot);          // every card entry targeting this player
+    void RemoveCardPoolEntry(uint32_t sequence);    // one entry, by its unique sequence
     void CancelVerdict();
     VarVerdict PeekVerdict() const;
     VerdictPool PeekVerdictPool() const;

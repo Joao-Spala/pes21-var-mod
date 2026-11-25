@@ -850,6 +850,21 @@ void VarHudController::PreFillDirectCardForSlot(int32_t slot) {
     draftSpotPreset_ = 0;
     draftCustomSpot_ = false;
     SyncDirectPresetFromPlayer(draftOffenderSlot_);
+    // A pending direct edit for this player wins over the live cards, so reopening the player shows
+    // (and re-confirms) what will actually be applied.
+    {
+        const VerdictPool pool = VarState::Instance().PeekVerdictPool();
+        VarVerdict probe{};
+        probe.action = VarAction::EditCard;
+        probe.directCardEdit = true;
+        probe.offenderSlot = draftOffenderSlot_;
+        if (const CardPoolEntry* pend = pool.FindSameKey(probe)) {
+            const uint8_t y = pend->verdict.directYellows;
+            const uint8_t r = pend->verdict.directReds;
+            draftDirectCardPreset_ = (r > 0 && y >= 2) ? 2 : (r > 0) ? 3 : (y > 0) ? 1 : 0;
+            draftCard_ = (r > 0) ? CardKind::Red : (y > 0) ? CardKind::Yellow : CardKind::None;
+        }
+    }
     ApplySpotPreset(0);
     RebuildConfigFields();
 }
@@ -1141,7 +1156,14 @@ void VarHudController::SelectMainOption(int index, VarState& state) {
     selectedIndex_ = index;
     const auto& opt = mainOptions_[index];
     if (opt.keepDecision) {
-        state.CancelVerdict();
+        // Keep the referee's call on THIS event: drop only a pending play decision about this event.
+        // Card edits and decisions about other events stay in the pool.
+        if (hasActiveEvent_) {
+            const VerdictPool pool = state.PeekVerdictPool();
+            if (pool.hasPlayDecision && pool.playDecision.sourceEventId == activeEvent_.id) {
+                state.RemovePlayFromPool();
+            }
+        }
         CollapseToReplay();
         return;
     }
@@ -1184,6 +1206,10 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     if (draftDirectCardMode_) {
         v.directYellows = (draftDirectCardPreset_ == 1) ? 1 : (draftDirectCardPreset_ == 2) ? 2 : 0;
         v.directReds    = (draftDirectCardPreset_ >= 2) ? 1 : 0;
+        // Straight red keeps a yellow the player already had (yellow + straight red is legal)
+        if (draftDirectCardPreset_ == 3 && IsValidSlot(draftOffenderSlot_)) {
+            v.directYellows = std::min<uint8_t>(players_[draftOffenderSlot_].yellows, 1);
+        }
     }
     v.spotPos = draftSpotPos_;
     v.customSpot = draftCustomSpot_;
@@ -1192,9 +1218,15 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     std::snprintf(v.summary, sizeof(v.summary), "%s", sum.c_str());
 
     bool replacedPlay = false;
+    const VerdictPool before = state.PeekVerdictPool();
     state.AddToVerdictPool(v, &replacedPlay);
+    const VerdictPool after = state.PeekVerdictPool();
+    const bool droppedEventCard = (v.action != VarAction::EditCard) && (after.CardCount() < before.CardCount());
     if (replacedPlay) {
         poolNoticeMsg_ = "Lance substituído no pool (máx. 1 falta ou reinício)";
+        poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
+    } else if (droppedEventCard) {
+        poolNoticeMsg_ = "Cartão do lance incorporado à decisão";
         poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
     } else {
         poolNoticeMsg_ = nullptr;

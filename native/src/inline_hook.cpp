@@ -10,6 +10,13 @@
 namespace var_mod {
 
 namespace {
+std::atomic<bool> g_processTerminating{ false };
+} // namespace
+
+void SetHooksProcessTerminating() { g_processTerminating.store(true, std::memory_order_release); }
+bool HooksProcessTerminating() { return g_processTerminating.load(std::memory_order_acquire); }
+
+namespace {
 
 bool EqualsIgnoreCase(const char* a, const char* b) {
     if (!a || !b) return false;
@@ -189,6 +196,7 @@ size_t InlineHook::MeasureSafeStolenLen(uintptr_t& inOutAddr) {
 }
 
 InlineHook::~InlineHook() {
+    if (HooksProcessTerminating()) return;
     Uninstall();
 }
 
@@ -387,6 +395,7 @@ bool InlineHook::Uninstall() {
 // ---------------- VtableHook ----------------
 
 VtableHook::~VtableHook() {
+    if (HooksProcessTerminating()) return;
     Uninstall();
 }
 
@@ -432,6 +441,7 @@ bool VtableHook::Uninstall() {
 // ---------------- IatHook ----------------
 
 IatHook::~IatHook() {
+    if (HooksProcessTerminating()) return;
     Uninstall();
 }
 

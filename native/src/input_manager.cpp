@@ -144,7 +144,7 @@ void RefreshBindings();
 
 bool IsGameForeground() {
     HWND h = g_hwnd.load(std::memory_order_acquire);
-    if (!h) return true;
+    if (!h) return false; // window unknown yet: never react to keys typed in another app
     HWND fg = GetForegroundWindow();
     return (fg == h);
 }
@@ -357,7 +357,17 @@ bool InputManager::InstallNativeInputBlockHooks(bool quietOnMiss) {
         }
     }
 
-    return anyOk;
+    // Done only when every blocker the panel relies on is in place; otherwise the worker retries
+    // (bounded) instead of stopping after the first partial success and leaking keys to the replay.
+    (void)anyOk;
+    const bool essentialOk = g_hookDInputKb.IsInstalled() && g_hookDInputMouse.IsInstalled() &&
+                             g_getKbStateIatHook.IsInstalled();
+    if (!essentialOk && !quietOnMiss) {
+        VAR_LOG_WRN("Input blockers incomplete: keyboard=%d mouse=%d GetKeyboardState=%d",
+                    g_hookDInputKb.IsInstalled() ? 1 : 0, g_hookDInputMouse.IsInstalled() ? 1 : 0,
+                    g_getKbStateIatHook.IsInstalled() ? 1 : 0);
+    }
+    return essentialOk;
 }
 
 void InputManager::UninstallNativeInputBlockHooks() {

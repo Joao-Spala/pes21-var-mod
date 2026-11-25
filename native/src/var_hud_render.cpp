@@ -678,7 +678,7 @@ void RenderCollapsedPill(float vw, float vh, const VarVerdict& pending, const Ve
     const float badgeW = Measure(Txt::Strong, "VAR") + U(14);
     float contentW = 0.0f;
     if (armed) {
-        contentW = std::max(TrackedW(poolHdr), std::min(Measure(Txt::Strong, pending.summary), U(340)));
+        contentW = std::max(TrackedW(poolHdr), std::min(Measure(Txt::Strong, Tr(pending.summary)), U(340)));
     } else {
         contentW = Measure(Txt::Small, Tr("Abrir painel")) + U(8) +
                    ActionGlyph(nullptr, ImVec2(0, 0), gh, cfg.bindings, BindAction::ToggleFocus, pad, false);
@@ -700,7 +700,7 @@ void RenderCollapsedPill(float vw, float vh, const VarVerdict& pending, const Ve
     const float x = p.x + U(12) + badgeW + U(12);
     if (armed) {
         Tracked(dl, ImVec2(x, p.y + U(9)), C::Green, poolHdr);
-        TextFit(dl, Txt::Strong, ImVec2(x, p.y + U(9) + LineH(Txt::Caption) + U(3)), U(340), C::Text, pending.summary);
+        TextFit(dl, Txt::Strong, ImVec2(x, p.y + U(9) + LineH(Txt::Caption) + U(3)), U(340), C::Text, Tr(pending.summary));
     } else {
         const char* lbl = Tr("Abrir painel");
         Text(dl, Txt::Small, ImVec2(x, p.y + (h - LineH(Txt::Small)) * 0.5f), C::Text2, lbl);
@@ -1242,7 +1242,7 @@ void RenderSquadPage(ImDrawList* dl, float contentW, float maxPanelH, const Verd
                 Text(cdl, Txt::Small, ImVec2(right - tw - U(2), rp.y + (rowH - LineH(Txt::Small)) * 0.5f), C::Red, tag);
                 right -= tw + U(10);
             }
-            if (pool.cardEntries[static_cast<size_t>(slot)].active) {
+            if (pool.FindCardForSlot(slot)) {
                 const char* pTag = Tr("POOL");
                 const float ptw = TrackedW(pTag);
                 const float pw = ptw + U(10);
@@ -1530,11 +1530,17 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
         }
     }
 
-    const bool updatingExistingInPool =
-        (g_controller.DraftAction() == VarAction::EditCard)
-            ? (IsValidSlot(g_controller.DraftOffenderSlot()) &&
-               pool.cardEntries[static_cast<size_t>(g_controller.DraftOffenderSlot())].active)
-            : (pool.hasPlayDecision && pool.playDecision.action != VarAction::None);
+    bool updatingExistingInPool = false;
+    if (g_controller.DraftAction() == VarAction::EditCard) {
+        VarVerdict probe{};
+        probe.action = VarAction::EditCard;
+        probe.directCardEdit = g_controller.DraftDirectCardMode();
+        probe.offenderSlot = g_controller.DraftOffenderSlot();
+        probe.sourceEventId = g_controller.DraftSourceEventId();
+        updatingExistingInPool = (pool.FindSameKey(probe) != nullptr);
+    } else {
+        updatingExistingInPool = pool.hasPlayDecision && pool.playDecision.action != VarAction::None;
+    }
 
     const int sel = g_controller.SelectedIndex();
     const float rowH = U(40);
@@ -1656,13 +1662,13 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
 
     struct PoolRow {
         bool        isPlay = false;
-        int         slot   = -1;
+        uint32_t    key    = 0; // card entry sequence (unique)
         uint32_t    order  = 0;
         ImU32       tagCol = C::Accent;
         const char* tag    = "";
         const char* text   = "";
     };
-    std::array<PoolRow, 23> rows{};
+    std::array<PoolRow, kMaxCardPoolEntries + 1> rows{};
     size_t rowCount = 0;
 
     if (pool.hasPlayDecision) {
@@ -1672,18 +1678,17 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
                                  pv.action == VarAction::RestartGoalKick ||
                                  pv.action == VarAction::RestartThrowIn);
         const ImU32 col = (pv.targetCard == CardKind::Red) ? C::Red : isOverturn ? C::Yellow : C::Accent;
-        rows[rowCount++] = PoolRow{ true, -1, pool.playOrder, col, Tr("LANCE"), pv.summary[0] ? pv.summary : Tr("DECISÃO PRONTA") };
+        rows[rowCount++] = PoolRow{ true, 0U, pool.playOrder, col, Tr("LANCE"), pv.summary[0] ? pv.summary : Tr("DECISÃO PRONTA") };
     }
 
     const size_t cardStart = rowCount;
-    for (int s = 0; s < 22; ++s) {
-        const auto& ce = pool.cardEntries[static_cast<size_t>(s)];
+    for (const auto& ce : pool.cardEntries) {
         if (!ce.active) continue;
         const auto& cv = ce.verdict;
         const bool hasRed = (cv.targetCard == CardKind::Red) || (cv.directCardEdit && cv.directReds > 0);
         const bool hasYel = (cv.targetCard == CardKind::Yellow) || (cv.directCardEdit && cv.directYellows > 0 && cv.directReds == 0);
         const ImU32 col = hasRed ? C::Red : hasYel ? C::Yellow : C::Neutral;
-        rows[rowCount++] = PoolRow{ false, s, ce.order, col, Tr("CARTÃO"), cv.summary };
+        rows[rowCount++] = PoolRow{ false, cv.sequence, ce.order, col, Tr("CARTÃO"), cv.summary };
     }
     if (rowCount > cardStart + 1) {
         std::sort(rows.begin() + cardStart, rows.begin() + rowCount, [](const PoolRow& a, const PoolRow& b) {
@@ -1716,7 +1721,7 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
     const float cbh = U(26);
     const ImVec2 cb(bp.x + contentW - padX - cbw, bp.y + padY);
     bool clearHov = false;
-    if (HitArea("##pool_clear", cb, ImVec2(cbw, cbh), &clearHov)) state.CancelVerdict();
+    if (HitArea("##pool_clear", cb, ImVec2(cbw, cbh), &clearHov)) { g_controller.ClearPoolNotice(); state.CancelVerdict(); }
     dl->AddRectFilled(cb, ImVec2(cb.x + cbw, cb.y + cbh), clearHov ? IM_COL32(255, 255, 255, 32) : IM_COL32(255, 255, 255, 14), U(kRadCtl));
     Text(dl, Txt::Small, ImVec2(cb.x + U(10), cb.y + (cbh - LineH(Txt::Small)) * 0.5f), C::Text, clearLbl);
     if (gw > 0.0f) {
@@ -1758,10 +1763,12 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
         const float xb = U(22);
         const ImVec2 xp(rp.x + rw - U(4) - xb, rcy - xb * 0.5f);
         char xid[24];
-        std::snprintf(xid, sizeof(xid), "##pool_rm_%d", idx);
+        (void)idx;
+        std::snprintf(xid, sizeof(xid), "##pool_rm_%s%u", r.isPlay ? "p" : "c", static_cast<unsigned>(r.isPlay ? 0U : r.key));
         if (IconButton(rdl, xid, xp, xb, CloseIconAdapter, Tr("Remover do pool"), false)) {
+            g_controller.ClearPoolNotice();
             if (r.isPlay) state.RemovePlayFromPool();
-            else state.RemoveCardFromPool(r.slot);
+            else state.RemoveCardPoolEntry(r.key);
         }
 
         // Summary

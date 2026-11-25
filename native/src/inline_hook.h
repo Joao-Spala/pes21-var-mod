@@ -7,6 +7,11 @@
 
 namespace var_mod {
 
+// Set from DllMain(DLL_PROCESS_DETACH) before the CRT runs static destructors: hook destructors then
+// leave the game code alone (other threads are gone, the process is exiting).
+void SetHooksProcessTerminating();
+bool HooksProcessTerminating();
+
 // Self-contained x64 inline hook with near-allocated relay + EFLAGS-preserving trampoline.
 // Only supports stolen prologues with no RIP-relative displacements (verified per hook site).
 class InlineHook {
