@@ -37,6 +37,15 @@ InlineHook g_hookUpdateFoulCounters;
 InlineHook g_hookReplayCtrlSync;
 InlineHook g_hookFoulSnapshotFind;
 
+// Native vanishing spray reset (see Aobs::VanishingSpray_NativeReset)
+using FnSprayRefGetWrite = uint8_t*(__fastcall*)(void* ref);
+using FnSprayReset       = void(__fastcall*)(void* spray);
+using FnSprayRefCommit   = void(__fastcall*)(void* ref);
+FnSprayRefGetWrite g_fnSprayRefGetWrite = nullptr;
+FnSprayReset       g_fnSprayReset       = nullptr;
+FnSprayRefCommit   g_fnSprayRefCommit   = nullptr;
+uintptr_t          g_sprayRefVtable     = 0;
+
 // Foul snapshot guard (see Detour_FoulSnapshotFind)
 using FnFoulSnapshotFind = uint8_t*(__fastcall*)(uint8_t* pool, uint32_t id);
 constexpr size_t kUncheckedFindSites = sizeof(FoulSnapshotUncheckedCallSites::Rvas) / sizeof(uintptr_t);
@@ -1084,7 +1093,23 @@ void WriteSetPlayToMatchInfoBuffers(uint8_t* matchInfo, const PendingSetPlayInje
     }
 }
 
+// Clears the referee's vanishing spray exactly like the engine does before every new set piece
+// (0x140452EB0 without its +0x904 flag). Without it, re-placing a free kick while the old spray is still on
+// the pitch draws a straight spray stroke from the old spot to the new one.
+void ResetVanishingSpray(uint8_t* fsm) {
+    if (!g_fnSprayRefGetWrite || !g_fnSprayReset || !g_fnSprayRefCommit || !IsValidPtr(fsm)) return;
+    uint8_t* ref = fsm + Offsets::MatchFSM_VanishingSprayRef;
+    if (!IsMemoryRangeReadable(ref, 0x28)) return;
+    if (*reinterpret_cast<const uintptr_t*>(ref) != g_sprayRefVtable) return; // not the spray reference
+    uint8_t* spray = g_fnSprayRefGetWrite(ref);
+    if (spray) {
+        g_fnSprayReset(spray);
+    }
+    g_fnSprayRefCommit(ref);
+}
+
 void InjectSetPlayIntoFsmJudgeResult(uint8_t* fsm, uint8_t* matchInfo, const PendingSetPlayInjection& req) {
+    ResetVanishingSpray(fsm);
     WriteSetPlayToMatchInfoBuffers(matchInfo, req);
     WriteSetPlayAndFoulToStruct(
         fsm + Offsets::MatchFSM_JudgeResult,
@@ -2021,6 +2046,20 @@ bool MatchHooks::Install(bool quietOnMiss) {
                                                        Aobs::ReplayPlayer_GetFocusPos, AobHints::ReplayPlayer_GetFocusPos);
     const uintptr_t addrFoulSnapFind   = resolveUnique("FoulSnapshotPool::Find",
                                                        Aobs::FoulSnapshotPool_Find, AobHints::FoulSnapshotPool_Find);
+    const uintptr_t addrSprayReset     = resolveUnique("VanishingSpray native reset",
+                                                       Aobs::VanishingSpray_NativeReset, AobHints::VanishingSpray_NativeReset);
+    if (addrSprayReset) {
+        g_fnSprayRefGetWrite = reinterpret_cast<FnSprayRefGetWrite>(AobScanner::ResolveRipRelative(addrSprayReset + 0x14, 1, 5));
+        g_fnSprayReset       = reinterpret_cast<FnSprayReset>(AobScanner::ResolveRipRelative(addrSprayReset + 0x21, 1, 5));
+        g_fnSprayRefCommit   = reinterpret_cast<FnSprayRefCommit>(AobScanner::ResolveRipRelative(addrSprayReset + 0x2D, 1, 5));
+        g_sprayRefVtable     = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) + Offsets::VanishingSprayRefVtableRva;
+        VAR_LOG_INF("Vanishing spray reset resolved: getWrite=0x%llX reset=0x%llX commit=0x%llX",
+                    static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_fnSprayRefGetWrite)),
+                    static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_fnSprayReset)),
+                    static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_fnSprayRefCommit)));
+    } else {
+        VAR_LOG_WRN("Vanishing spray reset AOB not found: re-placed free kicks may show a spray stroke");
+    }
 
     // FoulSnapshotPool::Find is critical: without its guard an applied foul can crash the game.
     if (!addrMainTick || !addrJudgeFinalize || !addrUpdateFoul ||

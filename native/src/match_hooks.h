@@ -75,6 +75,13 @@ namespace Aobs {
     // returns pool + idx * 0x3E4 or NULL. Clean 6-byte prologue (mov r8d, edx / mov r9, rcx).
     constexpr const char* FoulSnapshotPool_Find =
         "44 8B C2 4C 8B C9 85 D2 74 1F 33 D2 49 8D 81 AC 0B 00 00 8B CA 44 39 00 74 12";
+
+    // Native vanishing spray reset (0x140452EB0, reached from the MatchControl message handler 0x140423B80):
+    //   SprayRef_GetWrite(fsm + 0x17CA8) -> VanishingSpray_Reset(spray) -> SprayRef_Commit(fsm + 0x17CA8).
+    // The three call targets are resolved from this single site (+0x14, +0x21, +0x2D).
+    constexpr const char* VanishingSpray_NativeReset =
+        "48 89 5C 24 08 57 48 83 EC 20 48 8B D9 48 81 C1 A8 7C 01 00 E8 ?? ?? ?? ?? 48 85 C0 74 08 48 8B C8 "
+        "E8 ?? ?? ?? ?? 48 8D 8B A8 7C 01 00 E8 ?? ?? ?? ?? C6 83 04 09 00 00 01";
 } // namespace Aobs
 
 // Call sites of FoulSnapshotPool::Find whose callers dereference the result WITHOUT a NULL check
@@ -106,6 +113,7 @@ namespace AobHints {
     constexpr uintptr_t DInputMouse_Poll           = 0x1B63950;
     constexpr uintptr_t PesPad_Update              = 0x03F86E0;
     constexpr uintptr_t FoulSnapshotPool_Find      = 0x0A82120;
+    constexpr uintptr_t VanishingSpray_NativeReset = 0x0452EB0;
 } // namespace AobHints
 
 class MatchHooks {

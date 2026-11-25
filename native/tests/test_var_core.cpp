@@ -138,6 +138,7 @@ void TestRealPes2021BinaryAobs() {
         { "DInputMouse_Poll",           Aobs::DInputMouse_Poll,           AobHints::DInputMouse_Poll,           0x141B63950ULL },
         { "PesPad_Update",              Aobs::PesPad_Update,              AobHints::PesPad_Update,              0x1403F86E0ULL },
         { "FoulSnapshotPool_Find",      Aobs::FoulSnapshotPool_Find,      AobHints::FoulSnapshotPool_Find,      0x140A82120ULL },
+        { "VanishingSpray_NativeReset", Aobs::VanishingSpray_NativeReset, AobHints::VanishingSpray_NativeReset, 0x140452EB0ULL },
         { "ReplayCtrl_SyncToManager",   Aobs::ReplayCtrl_SyncToManager,   AobHints::ReplayCtrl_SyncToManager,   0x1420C16A0ULL },
         { "ReplayPlayer_SetFrame",      Aobs::ReplayPlayer_SetFrame,      AobHints::ReplayPlayer_SetFrame,      0x14217E800ULL },
         { "ReplayPlayer_GetFocusPos",   Aobs::ReplayPlayer_GetFocusPos,   AobHints::ReplayPlayer_GetFocusPos,   0x14217EC70ULL },
@@ -148,6 +149,7 @@ void TestRealPes2021BinaryAobs() {
     uintptr_t rosterGetterBufAddr = 0;
     uintptr_t grPresentBufAddr = 0;
     uintptr_t replaySyncBufAddr = 0;
+    uintptr_t sprayResetBufAddr = 0;
 
     for (const auto& c : checks) {
         const auto res = AobScanner::ScanBuffer(textBytes.data(), textBytes.size(), c.pattern, 2);
@@ -176,6 +178,7 @@ void TestRealPes2021BinaryAobs() {
         if (std::strcmp(c.name, "MatchRosterGetter") == 0) rosterGetterBufAddr = res.address;
         if (std::strcmp(c.name, "GrSwapChain_Present0") == 0) grPresentBufAddr = res.address;
         if (std::strcmp(c.name, "ReplayCtrl_SyncToManager") == 0) replaySyncBufAddr = res.address;
+        if (std::strcmp(c.name, "VanishingSpray_NativeReset") == 0) sprayResetBufAddr = res.address;
     }
 
     // Verify MeasureSafeStolenLen on real prologues
@@ -208,6 +211,22 @@ void TestRealPes2021BinaryAobs() {
         const int64_t rel = *reinterpret_cast<const int32_t*>(siteBuf + 1);
         EXPECT_TRUE(sp[0] == 0xE8 && static_cast<uint64_t>(siteVa + 5 + rel) == 0x140A82120ULL,
                     "FoulSnapshotPool unchecked call site must call FoulSnapshotPool::Find");
+    }
+
+    // Vanishing spray reset: the three calls must land on the accessor, the reset and the commit
+    {
+        auto callTarget = [&](uintptr_t bufSite, uint64_t siteVa) -> uint64_t {
+            return siteVa + 5 + static_cast<int64_t>(*reinterpret_cast<const int32_t*>(bufSite + 1));
+        };
+        EXPECT_EQ(callTarget(sprayResetBufAddr + 0x14, 0x140452EB0ULL + 0x14), 0x140423830ULL, "Spray getWrite target mismatch");
+        EXPECT_EQ(callTarget(sprayResetBufAddr + 0x21, 0x140452EB0ULL + 0x21), 0x140A5CCE0ULL, "Spray reset target mismatch");
+        EXPECT_EQ(callTarget(sprayResetBufAddr + 0x2D, 0x140452EB0ULL + 0x2D), 0x140422220ULL, "Spray commit target mismatch");
+        // The FSM ctor stores the live vtable at +0x17CA8: lea rcx, [rip + disp] at 0x14044201E
+        const uintptr_t leaBuf = bufBase + static_cast<uintptr_t>(0x14044201EULL - textVaBase);
+        const auto* lp = reinterpret_cast<const uint8_t*>(leaBuf);
+        const uint64_t leaTarget = 0x14044201EULL + 7 + static_cast<int64_t>(*reinterpret_cast<const int32_t*>(leaBuf + 3));
+        EXPECT_TRUE(lp[0] == 0x48 && lp[1] == 0x8D && lp[2] == 0x0D, "FSM ctor must load the spray ref vtable with lea rcx");
+        EXPECT_EQ(leaTarget, imageBase + Offsets::VanishingSprayRefVtableRva, "Live spray ref vtable RVA mismatch");
     }
 
     const int64_t replaySingDisp = *reinterpret_cast<const int32_t*>(replaySyncBufAddr + 0x32 + 3);

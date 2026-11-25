@@ -251,6 +251,17 @@ namespace Offsets {
     // MatchControl + 0x2A58 over MatchInfo + 0x17AC (0x140423196 -> 0x140A3D3B0). So a foul snapshot id is only
     // durable if it lives in THIS pool.
     constexpr uintptr_t MatchFSM_JudgeSnapshotPool = 0x4B08;
+    // VanishingSprayInfoRef owned by the FSM: the ctor stores vtable 0x1425A1570 at +0x17CA8 (0x14044201E).
+    // 0x1425A1550 is only the ReferenceCopy base the dtor restores, never seen on a live object.
+    // VanishingSprayInfo (0x70 bytes, write buffer = holder + 0x78 in 0x140423830):
+    //   +0x00 Vec3 circle centre (current ball position), +0x0C angle, +0x10 circle alpha,
+    //   +0x14..+0x24 last published circle (pos, angle, alpha), +0x28 dirty flag,
+    //   +0x2C / +0x38 Vec3 wall line ends, +0x44 line alpha, +0x48.. last published line, +0x60 line alpha published.
+    // 0x140A5CB10 / 0x140A5CBC0 publish a change only when current != last published. Moving an active spray
+    // without a reset is drawn as a stroke from the old spot to the new one, so the engine always resets it
+    // (0x140A5CCE0: alphas = 0) before a new set piece.
+    constexpr uintptr_t MatchFSM_VanishingSprayRef   = 0x17CA8;
+    constexpr uintptr_t VanishingSprayRefVtableRva   = 0x25A1570;
     constexpr uintptr_t MatchFSM_DelayedCardFlag   = 0x57F8; // uint8_t
 
     // Judge

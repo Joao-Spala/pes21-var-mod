@@ -1,5 +1,9 @@
 # Changelog
 
+## v4.2.3
+
+- **Linha de spray corrigida**: marcar uma falta pelo VAR com o jogo já parado em outra falta não desenha mais uma linha de spray do local antigo até o novo. O spray do árbitro (`VanishingSprayInfo`) é limpo pela mesma rotina da engine (`0x140A5CCE0`) antes da nova cobrança, como acontece em toda falta normal.
+
 ## v4.2.2
 
 - **Jogador fantasma corrigido**: editar os cartões de um jogador que já estava fora de campo (substituído ou lesionado) não o recoloca mais em campo. O mod só tira um jogador de campo por vermelho ou segundo amarelo e só devolve quem tinha saído por expulsão. Antes, isso podia deixar um time com 12 jogadores na engine.
