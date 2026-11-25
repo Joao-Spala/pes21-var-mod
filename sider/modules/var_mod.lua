@@ -1,16 +1,17 @@
--- PES 2021 VAR Mod v4.0 (Sider 7.x Controller - Standalone & Zero-Boot-Overhead)
+-- PES 2021 VAR Mod (Sider 7.x Controller - Standalone & Zero-Boot-Overhead)
 -- Requer: PES2021.exe (Steam 1.7.2.0) + Sider 7.x (luajit.ext.enabled = 1) + modules\var_mod\var_core.dll
 -- Escopo: exclusivamente partidas offline (Exibicao, Master Liga, BAL, Copas, Ligas).
 -- Performance: carregamento nativo sob demanda (lazy load em set_teams / overlay_on) -> 0.00 ms no boot do jogo!
 
-local m = { version = "4.0.0" }
+local m = { version = "4.2.1" }
 
 local ffi = ffi
 local cdef_registered = false
 local var_dll = nil
 local dll_loaded = false
 local dll_load_failed = false
-local dll_error = nil
+local dll_error = nil      -- chave de TXT (traduzida na exibicao)
+local dll_error_arg = ""  -- detalhe opcional (caminho do arquivo)
 local var_enabled = true
 local ini_language = "pt"
 local saved_sider_dir = nil
@@ -71,7 +72,7 @@ local function save_config()
     end
     if not found then
         if #lines == 0 then
-            lines[#lines + 1] = "# PES 2021 VAR Mod v4.0 - Configuracao"
+            lines[#lines + 1] = "# PES 2021 VAR Mod v" .. m.version .. " - Configuracao"
         end
         lines[#lines + 1] = string.format("enabled = %d", var_enabled and 1 or 0)
     end
@@ -87,8 +88,8 @@ local function ensure_native_loaded()
 
     if type(ffi) ~= "table" then
         dll_load_failed = true
-        dll_error = "FFI indisponivel: ative luajit.ext.enabled = 1 no sider.ini"
-        log("[var_mod] ERRO: " .. dll_error)
+        dll_error = "noffi"
+        log("[var_mod] ERRO: FFI indisponivel, ative luajit.ext.enabled = 1 no sider.ini")
         return false
     end
 
@@ -114,8 +115,9 @@ local function ensure_native_loaded()
     local fcheck = io.open(dll_path, "rb")
     if not fcheck then
         dll_load_failed = true
-        dll_error = "Arquivo nao encontrado: " .. dll_path
-        log("[var_mod] ERRO: " .. dll_error)
+        dll_error = "nofile"
+        dll_error_arg = dll_path
+        log("[var_mod] ERRO: arquivo nao encontrado: " .. dll_path)
         return false
     end
     fcheck:close()
@@ -124,23 +126,23 @@ local function ensure_native_loaded()
     -- var_init lancarem erro, as proximas chamadas (overlay_on roda a cada frame) retornam false na hora
     -- em vez de repetir o erro.
     dll_load_failed = true
-    dll_error = "Falha ao carregar var_core.dll (veja sider.log)"
+    dll_error = "loadfail"
     local lib = ffi.load(dll_path)
     if not lib then
-        log("[var_mod] ERRO: " .. dll_error)
+        log("[var_mod] ERRO: falha ao carregar var_core.dll")
         return false
     end
 
     var_dll = lib
     status_buf = ffi.new("char[?]", STATUS_BUF_SIZE)
 
-    dll_error = "var_init falhou (verifique modules\\var_mod\\var_core.log)"
+    dll_error = "initfail"
     local init_ok = var_dll.var_init(base_dir)
     dll_load_failed = false
     if init_ok == 0 then
         dll_load_failed = true
-        dll_error = "var_init retornou falha (verifique modules\\var_mod\\var_core.log)"
-        log("[var_mod] ERRO: " .. dll_error)
+        dll_error = "initfail"
+        log("[var_mod] ERRO: var_init retornou falha (veja modules\\var_mod\\var_core.log)")
         return false
     end
 
@@ -148,7 +150,7 @@ local function ensure_native_loaded()
     var_dll.var_set_offline_mode(1)
     dll_loaded = true
     dll_error = nil
-    log("[var_mod] var_core.dll v4.0 carregada sob demanda (" .. dll_path .. ")")
+    log("[var_mod] var_core.dll v" .. m.version .. " carregada sob demanda (" .. dll_path .. ")")
     return true
 end
 
@@ -168,6 +170,10 @@ local TXT = {
         on     = "ATIVADO",
         off    = "DESATIVADO",
         keys   = "[7] Ativar/Desativar VAR (atual: %s)  |  [8] Telemetria ao vivo",
+        noffi    = "FFI indisponivel: ative luajit.ext.enabled = 1 no sider.ini",
+        nofile   = "Arquivo nao encontrado: %s",
+        loadfail = "Falha ao carregar var_core.dll (veja sider.log)",
+        initfail = "Falha ao iniciar var_core.dll (veja modules\\var_mod\\var_core.log)",
     },
     en = {
         err    = "PES 2021 VAR Mod v%s\nStatus: ERROR (%s)\nMake sure modules\\var_mod\\var_core.dll is installed and luajit.ext.enabled = 1.",
@@ -176,6 +182,10 @@ local TXT = {
         on     = "ENABLED",
         off    = "DISABLED",
         keys   = "[7] Enable/Disable VAR (current: %s)  |  [8] Live telemetry",
+        noffi    = "FFI unavailable: set luajit.ext.enabled = 1 in sider.ini",
+        nofile   = "File not found: %s",
+        loadfail = "Could not load var_core.dll (see sider.log)",
+        initfail = "var_core.dll failed to start (see modules\\var_mod\\var_core.log)",
     },
 }
 
@@ -208,7 +218,11 @@ function m.overlay_on(ctx)
 
     local T = txt()
     if not dll_loaded then
-        return string.format(T.err, m.version, tostring(dll_error or T.noload))
+        local reason = T.noload
+        if dll_error and T[dll_error] then
+            reason = string.format(T[dll_error], dll_error_arg)
+        end
+        return string.format(T.err, m.version, reason)
     end
 
     -- Linha 1: status nativo. Linha 2: atalho real do painel (respeita o remap) e onde mudar idioma/atalhos.
@@ -244,7 +258,7 @@ function m.init(ctx)
     ctx.register("context_reset", m.context_reset)
     ctx.register("overlay_on", m.overlay_on)
     ctx.register("key_down", m.key_down)
-    log("[var_mod] v4.0 registrado (modo lazy-load: zero impacto na abertura do jogo)")
+    log("[var_mod] v" .. m.version .. " registrado (modo lazy-load: zero impacto na abertura do jogo)")
 end
 
 return m

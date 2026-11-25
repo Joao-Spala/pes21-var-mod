@@ -1,5 +1,6 @@
 #include "var_state.h"
 #include "i18n.h"
+#include "version.h"
 
 #include <windows.h>
 #include <algorithm>
@@ -509,7 +510,7 @@ void VarState::SaveHudConfig() const {
 
     FILE* out = _wfopen(path.c_str(), L"wb");
     if (!out) return;
-    std::fprintf(out, "# PES 2021 VAR Mod v4.0 - Configuracao\n");
+    std::fprintf(out, "# PES 2021 VAR Mod v" VAR_MOD_VERSION " - Configuracao\n");
     std::fprintf(out, "enabled = %d\n", enabledVal ? 1 : 0);
     std::fprintf(out, "hud_side = %s\n", cfg.dockLeft ? "left" : "right");
     std::fprintf(out, "hud_scale = %d\n", std::clamp(cfg.scalePreset, 0, 2));

@@ -2094,7 +2094,7 @@ bool MatchHooks::Install(bool quietOnMiss) {
     VarState::Instance().SetReplaySeekReady(seekReady);
     g_installed.store(true, std::memory_order_release);
     VarState::Instance().SetHooksInstalled(true);
-    VAR_LOG_INF("All MatchHooks v4.0 installed cleanly (replaySeekReady=%d)", seekReady ? 1 : 0);
+    VAR_LOG_INF("All MatchHooks installed cleanly (replaySeekReady=%d)", seekReady ? 1 : 0);
     return true;
 }
 

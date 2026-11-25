@@ -145,7 +145,7 @@ bool InitImGuiLocked(IDXGISwapChain* swapChain) {
 
     g_imguiInitialized = true;
     InputManager::AttachWindow(g_hwnd);
-    VAR_LOG_INF("ImGui DX11 v4.0 initialized (lazy, precompiled DXBC) on SwapChain=0x%p HWND=0x%p",
+    VAR_LOG_INF("ImGui DX11 initialized (lazy, precompiled DXBC) on SwapChain=0x%p HWND=0x%p",
                 static_cast<void*>(swapChain), static_cast<void*>(g_hwnd));
     return true;
 }

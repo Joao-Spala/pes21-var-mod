@@ -1231,7 +1231,7 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     } else {
         poolNoticeMsg_ = nullptr;
     }
-    VAR_LOG_INF("HUD v4.0 added verdict to pool (replacedPlay=%d): %s", replacedPlay ? 1 : 0, v.summary);
+    VAR_LOG_INF("HUD added verdict to pool (replacedPlay=%d): %s", replacedPlay ? 1 : 0, v.summary);
 
     if (returnPage_ == HudPage::Squad && IsValidSlot(draftOffenderSlot_)) {
         page_ = HudPage::Squad;

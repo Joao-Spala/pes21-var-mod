@@ -6,6 +6,7 @@
 #include "match_hooks.h"
 #include "var_hud.h"
 #include "var_state.h"
+#include "version.h"
 
 #include <windows.h>
 #include <atomic>
@@ -99,7 +100,7 @@ __declspec(dllexport) int __cdecl var_init(const char* logDirUtf8) {
 
     const std::wstring baseDir = ResolveBaseDir(logDirUtf8);
     var_mod::Logger::Init(baseDir.empty() ? L"var_core.log" : (baseDir + L"var_core.log"));
-    VAR_LOG_INF("var_core.dll initializing (PES 2021 VAR Mod v4.0)");
+    VAR_LOG_INF("var_core.dll initializing (PES 2021 VAR Mod v" VAR_MOD_VERSION ")");
 
     var_mod::VarState::Instance().SetIniPath(baseDir.empty() ? L"var_mod.ini" : (baseDir + L"var_mod.ini"));
     var_mod::VarState::Instance().LoadHudConfig();
@@ -108,7 +109,7 @@ __declspec(dllexport) int __cdecl var_init(const char* logDirUtf8) {
     // to the async background worker so Sider / BMPES startup never stalls the main thread.
     var_mod::InputManager::InstallXInputHook();
     var_mod::Dx11Hook::StartAsync();
-    VAR_LOG_INF("var_core.dll v4.0 initialization started (async)");
+    VAR_LOG_INF("var_core.dll v" VAR_MOD_VERSION " initialization started (async)");
     return 1;
 }
 
@@ -188,7 +189,7 @@ __declspec(dllexport) int __cdecl var_get_status_text(char* outBuf, int bufSize)
 
     char line1[320];
     std::snprintf(line1, sizeof(line1),
-        Tr("VAR v4.0: %s | DX11: %s | Seek: %s | Lances: %zu | Revisoes: %u | Veredito: %s"),
+        Tr("VAR: %s | DX11: %s | Seek: %s | Lances: %zu | Revisoes: %u | Veredito: %s"),
         stateStr,
         var_mod::Dx11Hook::IsHooked() ? "OK" : Tr("AGUARDANDO"),
         tel.replaySeekReady ? Tr("NATIVO") : Tr("PASSIVO"),

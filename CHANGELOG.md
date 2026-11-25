@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.2.1
+
+- **Módulo do Sider em português e inglês**: o texto do módulo no menu do Sider, incluindo as mensagens de erro, segue o idioma escolhido no painel. A escolha fica salva no `var_mod.ini` e vale na próxima vez que o jogo for aberto.
+- **Versão única**: o número da versão vem de um só lugar (`native/src/version.h`) e aparece igual no Sider, no log e no `var_mod.ini`.
+- **README com guia completo**: requisitos, instalação pela página de Releases, uso passo a passo, tabela de atalhos e solução de problemas.
+
 ## v4.2
 
 - **Correção do crash ao aplicar falta** (`PES2021.exe+0x4B4C25`): o snapshot da falta passa a ser registrado no pool do árbitro (`MatchFSM + 0x4B08`), que a engine copia para a `MatchInfo` em todo commit. Antes ele era apagado no commit seguinte e o consumidor de eventos lia um ponteiro nulo. Proteção adicional no `FoulSnapshotPool::Find` (`0x140A82120`) para os 3 pontos da engine que não checam nulo.
