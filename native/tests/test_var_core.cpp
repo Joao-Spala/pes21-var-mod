@@ -1977,6 +1977,12 @@ void DumpDrawDataBmp(const char* name, const unsigned char* fontPx, int fontW, i
 // Runs the real VarHudRenderer::RenderFrame under ImGui with asserts enabled: any Begin/End,
 // PushClipRect/PopClipRect, BeginChild/EndChild, font or ID stack imbalance aborts the suite.
 // ---------------------------------------------------------------------------
+float DistSq2DForTest(const Vec3& a, const Vec3& b) {
+    const float dx = a.x - b.x;
+    const float dz = a.z - b.z;
+    return dx * dx + dz * dz;
+}
+
 void TestHudRenderSmoke() {
     auto& st = VarState::Instance();
     st.ResetMatch();
@@ -1992,26 +1998,111 @@ void TestHudRenderSmoke() {
     int tw = 0, th = 0;
     char shotName[64];
 
-    // A few snapshots + an event so timeline, incident card and radar have content
-    for (int i = 0; i < 40; ++i) {
+    // A real-looking replay window: 1st half, 23:05 to 23:25, FLA (home) builds up from midfield and CFC (away)
+    // defends its box. Three plays on the bar: a foul the referee gave in midfield (23:10), a
+    // standing tackle with nobody going down (23:13) and a slide that floors the striker inside the box with
+    // no call (23:16), the suspect. The cursor sits on that slide, so the pitch shows the contact in the box.
+    constexpr float kWinStart = 83100.0f; // 23:05
+    constexpr float kWinEnd   = 84300.0f; // 23:25
+    constexpr float kOfficial = 83400.0f; // 23:10
+    constexpr float kChallenge = 83580.0f; // 23:13
+    constexpr float kSuspect  = 83760.0f; // 23:16
+    PitchDims dims{};
+    const float attackDir[2] = { -1.0f, 1.0f }; // per-team box side used by the engine geometry (CFC: +x)
+    auto lerp = [](float a, float b, float k) { return a + (b - a) * std::clamp(k, 0.0f, 1.0f); };
+    auto sceneAt = [&](float time, PlaySnapshot& sn) {
+        // Two key formations (FLA attacks +x, CFC defends the +x box): build-up around midfield at 23:05 and the
+        // attack settled around the box at the slide. Players glide between them, then drift slightly.
+        static const float kStart[22][2] = {
+            { -46.0f, 0.0f }, { -18.0f, 22.0f }, { -24.0f, -7.0f }, { -23.0f, 8.0f }, { -17.0f, -22.0f },
+            { -4.0f, -9.0f }, { -6.0f, 7.0f }, { 5.0f, -2.0f }, { 12.0f, -20.0f }, { 13.0f, 19.0f }, { 16.0f, 2.0f },
+            { 49.0f, 0.0f }, { 29.0f, -19.0f }, { 30.0f, -6.0f }, { 30.0f, 7.0f }, { 28.0f, 20.0f },
+            { 4.0f, -9.0f }, { 6.0f, 4.0f }, { 8.0f, 17.0f }, { 14.0f, -12.0f }, { -8.0f, 6.0f }, { -10.0f, -12.0f },
+        };
+        static const float kBox[22][2] = {
+            { -40.0f, 0.0f }, { 22.0f, 24.0f }, { 6.0f, -8.0f }, { 8.0f, 9.0f }, { 27.0f, -25.0f },
+            { 20.0f, -6.0f }, { 25.0f, 10.0f }, { 32.0f, -2.0f }, { 39.0f, -16.0f }, { 38.0f, 16.5f }, { 43.6f, 3.6f },
+            { 50.0f, 1.0f }, { 42.0f, -11.0f }, { 41.0f, -2.5f }, { 44.3f, 2.7f }, { 40.5f, 12.0f },
+            { 33.0f, -9.0f }, { 30.5f, 4.5f }, { 34.0f, 17.0f }, { 24.0f, -3.0f }, { 14.0f, 7.0f }, { 16.0f, -15.0f },
+        };
+        const float s = (time - kWinStart) / (kSuspect - kWinStart);
+        const float k = std::clamp(s, 0.0f, 1.0f);
+        const float ease = k * k * (3.0f - 2.0f * k);
+        const float after = std::max(0.0f, time - kSuspect) / 60.0f; // seconds after the slide
+        for (int p = 0; p < 22; ++p) {
+            const float wob = 0.6f * std::sin(time * 0.003f + static_cast<float>(p) * 1.7f);
+            const float drift = (p == 10 || p == 14) ? 0.0f : std::min(after, 3.0f) * ((p < 11) ? 0.5f : -0.3f);
+            sn.playerOnPitch[p] = 1;
+            sn.playerPos[p] = Vec3{ lerp(kStart[p][0], kBox[p][0], ease) + drift, 0.0f, lerp(kStart[p][1], kBox[p][1], ease) + wob };
+        }
+        // The plays: Pulgar (5) on Josue (16) in midfield, Vini Paulista (17) into Arrascaeta (7)
+        auto meet = [&](int a, int b, const Vec3& at, float when, float width) {
+            const float w = 1.0f - std::clamp(std::fabs(time - when) / width, 0.0f, 1.0f);
+            sn.playerPos[a] = Vec3{ lerp(sn.playerPos[a].x, at.x - 0.5f, w), 0.0f, lerp(sn.playerPos[a].z, at.z - 0.3f, w) };
+            sn.playerPos[b] = Vec3{ lerp(sn.playerPos[b].x, at.x + 0.5f, w), 0.0f, lerp(sn.playerPos[b].z, at.z + 0.3f, w) };
+        };
+        meet(5, 16, Vec3{ 3.0f, 0.0f, -8.0f }, kOfficial, 70.0f);
+        meet(17, 7, Vec3{ 21.0f, 0.0f, 0.5f }, kChallenge, 60.0f);
+        // The slide: Bruno Melo goes through and ends past Pedro, who stays down where he was hit
+        if (time > kSuspect) {
+            const float slide = std::min(after / 0.6f, 1.0f);
+            sn.playerPos[14] = Vec3{ lerp(44.3f, 46.6f, slide), 0.0f, lerp(2.7f, 0.6f, slide) };
+        }
+        // Ball: with the man on it, then loose after the slide
+        Vec3 ball{};
+        if (time < kOfficial) ball = sn.playerPos[16];
+        else if (time < kChallenge) ball = sn.playerPos[7];
+        else if (time < kSuspect) ball = sn.playerPos[10];
+        else ball = Vec3{ lerp(44.6f, 40.0f, after / 4.0f), 0.0f, lerp(4.4f, 11.0f, after / 4.0f) };
+        sn.ballPos = Vec3{ ball.x + 0.6f, 0.11f, ball.z + 0.4f };
+        sn.ballOwnerSlot = (time < kSuspect) ? ((time < kOfficial) ? 16 : (time < kChallenge) ? 7 : 10) : -1;
+    };
+    for (int i = 0; i < static_cast<int>(kWinEnd - kWinStart); ++i) {
         PlaySnapshot sn{};
         sn.matchPhase = 0;
-        sn.time60Hz = 900.0f + static_cast<float>(i) * 30.0f;
-        sn.matchTick = static_cast<uint32_t>(5000 + i);
-        for (int p = 0; p < 22; ++p) {
-            sn.playerOnPitch[p] = 1;
-            sn.playerPos[p] = Vec3{ -40.0f + static_cast<float>(p) * 3.5f, 0.0f, static_cast<float>((p * 7) % 50) - 25.0f };
-        }
+        sn.time60Hz = kWinStart + static_cast<float>(i);
+        sn.matchTick = static_cast<uint32_t>(50000 + i);
+        sceneAt(sn.time60Hz, sn);
+        VarState::ComputeClosestContact(sn);
         st.PushSnapshot(sn);
     }
+    auto incident = [&](IncidentKind kind, int32_t prio, int off, int vic, float when, bool nearFoul) {
+        PlaySnapshot sn{};
+        sceneAt(when, sn);
+        DetectedIncident inc{};
+        inc.matchPhase = 0;
+        inc.time60Hz = when;
+        inc.lastSeenTime60Hz = when + 12.0f;
+        inc.matchTick = static_cast<uint32_t>(50000 + static_cast<int>(when - kWinStart));
+        inc.kind = kind;
+        inc.priority = prio;
+        inc.offenderSlot = off;
+        inc.victimSlot = vic;
+        inc.pos = Vec3{ 0.35f * sn.playerPos[off].x + 0.65f * sn.playerPos[vic].x, 0.0f,
+                        0.35f * sn.playerPos[off].z + 0.65f * sn.playerPos[vic].z };
+        inc.contactDistM = std::sqrt(DistSq2DForTest(sn.playerPos[off], sn.playerPos[vic]));
+        inc.boxDistM = PitchGeometry::SignedDistanceToDefendingBox(dims, inc.pos, attackDir[SlotToTeam(off)]);
+        inc.boxDistValid = true;
+        inc.insideBox = inc.boxDistM < 0.0f;
+        inc.nearFoul = nearFoul;
+        st.PushDetectedIncident(inc);
+    };
+    incident(IncidentKind::BodyCharge, 66, 5, 16, kOfficial - 20.0f, true);   // folded into the official foul
+    incident(IncidentKind::StandTackle, 70, 17, 7, kChallenge, false);       // challenge, nobody down
+    incident(IncidentKind::SlideTackle, 88, 14, 10, kSuspect, true);         // the missed penalty
     VarEvent ev{};
     ev.type = VarEventType::Foul;
     ev.matchPhase = 0;
-    ev.time60Hz = 1000.0f;
-    ev.matchTick = 5003;
-    ev.offenderSlot = 4;
-    ev.victimSlot = 15;
+    ev.time60Hz = kOfficial;
+    ev.matchTick = 50300;
+    ev.offenderSlot = 5;
+    ev.victimSlot = 16;
     ev.benefitedTeam = 1;
+    {
+        PlaySnapshot sn{};
+        sceneAt(kOfficial, sn);
+        ev.pos = sn.playerPos[16];
+    }
     st.PushEvent(ev);
 
     // Real data read from the running game (Flamengo x Coritiba, patched game): names, numbers, short names
@@ -2074,7 +2165,7 @@ void TestHudRenderSmoke() {
             HudConfig c{};
             c.language = lang;
             st.SetHudConfig(c, false);
-            PatchReplayTelemetryForTest(true, 0, 1000.0f, 900.0f, 2100.0f);
+            PatchReplayTelemetryForTest(true, 0, kSuspect, kWinStart, kWinEnd);
             VarHudRenderer::RequestReset();
             io.DisplaySize = ImVec2(sz[0], sz[1]);
             VarHudRenderer::EnsureFonts(sz[0], sz[1]);
@@ -2179,16 +2270,26 @@ void TestHudRenderSmoke() {
             // Multi-item Decision Pool (1 play + 4 cards -> exercises >3 scrollable pool + CARTOES badges + collapsed pill)
             VarVerdict armedV{};
             armedV.action = VarAction::RetroactivePenalty;
-            armedV.offenderSlot = 4;
-            std::snprintf(armedV.summary, sizeof(armedV.summary), "%s", lang ? "Penalty \xC2\xB7 AWY \xC2\xB7 Yellow" : "P\xC3\xAAnalti \xC2\xB7 FOR \xC2\xB7 Amarelo");
+            armedV.offenderSlot = 14;
+            armedV.victimSlot = 10;
+            std::snprintf(armedV.summary, sizeof(armedV.summary), "%s",
+                          lang ? "Penalty \xC2\xB7 FLA \xC2\xB7 Yellow #6 Bruno Melo"
+                               : "P\xC3\xAAnalti \xC2\xB7 FLA \xC2\xB7 Amarelo #6 Bruno Melo");
             st.ArmVerdict(armedV);
-            for (int cs : { 2, 5, 10, 15 }) {
+            struct CardEdit { int slot; int yellows; const char* pt; const char* en; };
+            const CardEdit edits[] = {
+                { 5,  0, "Cart\xC3\xA3o \xC2\xB7 #5 Erick Pulgar \xC2\xB7 sem cart\xC3\xA3o", "Card \xC2\xB7 #5 Erick Pulgar \xC2\xB7 no card" },
+                { 17, 1, "Cart\xC3\xA3o \xC2\xB7 #8 Vini Paulista \xC2\xB7 1 amarelo", "Card \xC2\xB7 #8 Vini Paulista \xC2\xB7 1 yellow" },
+                { 16, 1, "Cart\xC3\xA3o \xC2\xB7 #10 Josu\xC3\xA9 \xC2\xB7 1 amarelo", "Card \xC2\xB7 #10 Josu\xC3\xA9 \xC2\xB7 1 yellow" },
+                { 6,  1, "Cart\xC3\xA3o \xC2\xB7 #21 Jorginho \xC2\xB7 1 amarelo", "Card \xC2\xB7 #21 Jorginho \xC2\xB7 1 yellow" },
+            };
+            for (const auto& ce : edits) {
                 VarVerdict cv{};
                 cv.action = VarAction::EditCard;
-                cv.offenderSlot = cs;
+                cv.offenderSlot = ce.slot;
                 cv.directCardEdit = true;
-                cv.directYellows = (cs == 10) ? 0 : 1;
-                std::snprintf(cv.summary, sizeof(cv.summary), "Cart\xC3\xA3o \xC2\xB7 #%d \xC2\xB7 1 amarelo", cs + 1);
+                cv.directYellows = ce.yellows;
+                std::snprintf(cv.summary, sizeof(cv.summary), "%s", lang ? ce.en : ce.pt);
                 st.ArmVerdict(cv);
             }
             st.SetPostApplyBanner("DECISÃO DO VAR APLICADA", 4000);
