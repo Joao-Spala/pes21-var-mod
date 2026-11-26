@@ -69,11 +69,46 @@ std::atomic<bool> g_installed{false};
 std::atomic<uint64_t> g_repaired{0};
 std::atomic<uint64_t> g_refused{0};
 
-int ReleaseSegmentAtomicImpl(void* ptr, size_t size) {
+// Refused ranges and per-period counters. SRWLOCK: no allocation, safe inside the allocator's own path.
+SRWLOCK g_cacheLock = SRWLOCK_INIT;
+HeapGuard::RefusedRangeCache g_refusedCache;
+std::atomic<uint64_t> g_statCalls{0};
+std::atomic<uint64_t> g_statReleased{0};
+std::atomic<uint64_t> g_statRefused{0};
+std::atomic<uint64_t> g_statCacheHits{0};
+std::atomic<uint64_t> g_statTicks{0};
+
+uint64_t QpcNow() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return static_cast<uint64_t>(t.QuadPart);
+}
+
+uint64_t QpcFrequency() {
+    static const uint64_t freq = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return static_cast<uint64_t>(f.QuadPart > 0 ? f.QuadPart : 1);
+    }();
+    return freq;
+}
+
+int ReleaseSegmentAtomicCore(void* ptr, size_t size) {
     if (size == 0) return 0; // native: nothing to do, success
     const uintptr_t base = reinterpret_cast<uintptr_t>(ptr);
+    AcquireSRWLockShared(&g_cacheLock);
+    const bool known = g_refusedCache.Contains(base, size);
+    ReleaseSRWLockShared(&g_cacheLock);
+    if (known) {
+        g_statCacheHits.fetch_add(1, std::memory_order_relaxed);
+        return -1;
+    }
     const HeapSegmentPlan plan = PlanHeapSegmentRelease(base, size, &QueryLive, nullptr);
     if (!plan.ok) {
+        AcquireSRWLockExclusive(&g_cacheLock);
+        g_refusedCache.Add(base, size);
+        ReleaseSRWLockExclusive(&g_cacheLock);
+        g_statRefused.fetch_add(1, std::memory_order_relaxed);
         const uint64_t n = g_refused.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= kMaxLoggedEvents) {
             VAR_LOG_WRN("HeapGuard: segment 0x%llX size 0x%llX is not releasable as a whole, kept mapped",
@@ -100,6 +135,7 @@ int ReleaseSegmentAtomicImpl(void* ptr, size_t size) {
         remaining -= extent;
     }
 
+    g_statReleased.fetch_add(1, std::memory_order_relaxed);
     if (plan.splitAllocations > 0) {
         const uint64_t n = g_repaired.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= kMaxLoggedEvents) {
@@ -110,6 +146,14 @@ int ReleaseSegmentAtomicImpl(void* ptr, size_t size) {
         }
     }
     return 0;
+}
+
+int ReleaseSegmentAtomicImpl(void* ptr, size_t size) {
+    const uint64_t t0 = QpcNow();
+    const int r = ReleaseSegmentAtomicCore(ptr, size);
+    g_statTicks.fetch_add(QpcNow() - t0, std::memory_order_relaxed);
+    g_statCalls.fetch_add(1, std::memory_order_relaxed);
+    return r;
 }
 
 int __fastcall Detour_Win32Munmap(void* ptr, size_t size) {
@@ -158,6 +202,42 @@ bool Install() {
 }
 
 int ReleaseSegmentAtomic(void* ptr, size_t size) { return ReleaseSegmentAtomicImpl(ptr, size); }
+
+bool RefusedRangeCache::Contains(uintptr_t base, size_t size) const {
+    for (size_t i = 0; i < count_; ++i) {
+        if (base_[i] == base && size_[i] == size) return true;
+    }
+    return false;
+}
+
+void RefusedRangeCache::Add(uintptr_t base, size_t size) {
+    if (Contains(base, size)) return;
+    base_[next_] = base;
+    size_[next_] = size;
+    next_ = (next_ + 1) % kCapacity;
+    if (count_ < kCapacity) ++count_;
+}
+
+void RefusedRangeCache::Clear() {
+    count_ = 0;
+    next_ = 0;
+}
+
+Stats TakeStats() {
+    Stats s{};
+    s.calls = g_statCalls.exchange(0, std::memory_order_relaxed);
+    s.released = g_statReleased.exchange(0, std::memory_order_relaxed);
+    s.refused = g_statRefused.exchange(0, std::memory_order_relaxed);
+    s.cacheHits = g_statCacheHits.exchange(0, std::memory_order_relaxed);
+    s.microseconds = g_statTicks.exchange(0, std::memory_order_relaxed) * 1000000ULL / QpcFrequency();
+    return s;
+}
+
+void ClearRefusedCache() {
+    AcquireSRWLockExclusive(&g_cacheLock);
+    g_refusedCache.Clear();
+    ReleaseSRWLockExclusive(&g_cacheLock);
+}
 bool IsInstalled() { return g_installed.load(std::memory_order_acquire); }
 uint64_t RepairedReleases() { return g_repaired.load(std::memory_order_relaxed); }
 uint64_t RefusedReleases() { return g_refused.load(std::memory_order_relaxed); }

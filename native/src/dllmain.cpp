@@ -142,6 +142,19 @@ __declspec(dllexport) void __cdecl var_set_sider_overlay_open(int isOpen) {
     var_mod::VarState::Instance().SetSiderOverlayOpen(isOpen != 0);
 }
 
+// One line per period with what the mod cost the game: heap release replacement and present hook.
+// Lets a slow loading be attributed (or not) to the mod from the user's log alone.
+static void LogPerfPeriod(const char* period) {
+    const var_mod::HeapGuard::Stats hs = var_mod::HeapGuard::TakeStats();
+    const var_mod::Dx11Hook::PresentStats ps = var_mod::Dx11Hook::TakePresentStats();
+    VAR_LOG_INF("Perf %s: heap release %llu call(s) (%llu released, %llu refused, %llu refused from cache) in %llu us, "
+                "present hook %llu frame(s) in %llu us (max %llu us)",
+                period, static_cast<unsigned long long>(hs.calls), static_cast<unsigned long long>(hs.released),
+                static_cast<unsigned long long>(hs.refused), static_cast<unsigned long long>(hs.cacheHits),
+                static_cast<unsigned long long>(hs.microseconds), static_cast<unsigned long long>(ps.frames),
+                static_cast<unsigned long long>(ps.microseconds), static_cast<unsigned long long>(ps.maxMicroseconds));
+}
+
 __declspec(dllexport) void __cdecl var_on_match_start() {
     if (!g_initialized.load(std::memory_order_acquire)) return;
     if (var_mod::Dx11Hook::IsInitFinished() && !var_mod::MatchHooks::IsInstalled()) {
@@ -150,6 +163,8 @@ __declspec(dllexport) void __cdecl var_on_match_start() {
     var_mod::MatchHooks::OnMatchReset();
     var_mod::VarState::Instance().ResetMatch();
     var_mod::VarHudRenderer::RequestReset();
+    LogPerfPeriod("since the previous match (menus and loading)");
+    var_mod::HeapGuard::ClearRefusedCache();
     VAR_LOG_INF("Match session started (ring buffers reset)");
 }
 
@@ -159,6 +174,7 @@ __declspec(dllexport) void __cdecl var_on_match_end() {
     var_mod::VarState::Instance().CancelVerdict();
     var_mod::VarState::Instance().ClearReplayFocusAndGrace();
     var_mod::VarHudRenderer::RequestReset();
+    LogPerfPeriod("during the match");
     VAR_LOG_INF("Match session ended");
     var_mod::Logger::Flush();
 }

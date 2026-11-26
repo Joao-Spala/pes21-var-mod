@@ -1998,7 +1998,7 @@ void TestHudRenderSmoke() {
     int tw = 0, th = 0;
     char shotName[64];
 
-    // A real-looking replay window: 1st half, 23:05 to 23:25, FLA (home) builds up from midfield and CFC (away)
+    // A real-looking replay window: 1st half, 23:05 to 23:25, FLA (home) builds up from midfield and PAL (away)
     // defends its box. Three plays on the bar: a foul the referee gave in midfield (23:10), a
     // standing tackle with nobody going down (23:13) and a slide that floors the striker inside the box with
     // no call (23:16), the suspect. The cursor sits on that slide, so the pitch shows the contact in the box.
@@ -2008,10 +2008,10 @@ void TestHudRenderSmoke() {
     constexpr float kChallenge = 83580.0f; // 23:13
     constexpr float kSuspect  = 83760.0f; // 23:16
     PitchDims dims{};
-    const float attackDir[2] = { -1.0f, 1.0f }; // per-team box side used by the engine geometry (CFC: +x)
+    const float attackDir[2] = { -1.0f, 1.0f }; // per-team box side used by the engine geometry (PAL: +x)
     auto lerp = [](float a, float b, float k) { return a + (b - a) * std::clamp(k, 0.0f, 1.0f); };
     auto sceneAt = [&](float time, PlaySnapshot& sn) {
-        // Two key formations (FLA attacks +x, CFC defends the +x box): build-up around midfield at 23:05 and the
+        // Two key formations (FLA attacks +x, PAL defends the +x box): build-up around midfield at 23:05 and the
         // attack settled around the box at the slide. Players glide between them, then drift slightly.
         static const float kStart[22][2] = {
             { -46.0f, 0.0f }, { -18.0f, 22.0f }, { -24.0f, -7.0f }, { -23.0f, 8.0f }, { -17.0f, -22.0f },
@@ -2035,7 +2035,7 @@ void TestHudRenderSmoke() {
             sn.playerOnPitch[p] = 1;
             sn.playerPos[p] = Vec3{ lerp(kStart[p][0], kBox[p][0], ease) + drift, 0.0f, lerp(kStart[p][1], kBox[p][1], ease) + wob };
         }
-        // The plays: Pulgar (5) on Josue (16) in midfield, Vini Paulista (17) into Arrascaeta (7)
+        // The plays: Pulgar (5) on Anibal Moreno (16) in midfield, Richard Rios (17) into Arrascaeta (7)
         auto meet = [&](int a, int b, const Vec3& at, float when, float width) {
             const float w = 1.0f - std::clamp(std::fabs(time - when) / width, 0.0f, 1.0f);
             sn.playerPos[a] = Vec3{ lerp(sn.playerPos[a].x, at.x - 0.5f, w), 0.0f, lerp(sn.playerPos[a].z, at.z - 0.3f, w) };
@@ -2043,7 +2043,7 @@ void TestHudRenderSmoke() {
         };
         meet(5, 16, Vec3{ 3.0f, 0.0f, -8.0f }, kOfficial, 70.0f);
         meet(17, 7, Vec3{ 21.0f, 0.0f, 0.5f }, kChallenge, 60.0f);
-        // The slide: Bruno Melo goes through and ends past Pedro, who stays down where he was hit
+        // The slide: Murilo goes through and ends past Pedro, who stays down where he was hit
         if (time > kSuspect) {
             const float slide = std::min(after / 0.6f, 1.0f);
             sn.playerPos[14] = Vec3{ lerp(44.3f, 46.6f, slide), 0.0f, lerp(2.7f, 0.6f, slide) };
@@ -2105,7 +2105,7 @@ void TestHudRenderSmoke() {
     }
     st.PushEvent(ev);
 
-    // Real data read from the running game (Flamengo x Coritiba, patched game): names, numbers, short names
+    // Flamengo (home) x Palmeiras with real squad names and numbers
     {
         std::array<TeamDisplayInfo, 2> tm{};
         std::snprintf(tm[0].fullName, sizeof(tm[0].fullName), "%s", "FLAMENGO");
@@ -2113,17 +2113,17 @@ void TestHudRenderSmoke() {
         tm[0].primaryColor = RgbColor{ 200, 16, 46 };
         tm[0].secondaryColor = RgbColor{ 20, 20, 20 };
         tm[0].hasRealData = true;
-        std::snprintf(tm[1].fullName, sizeof(tm[1].fullName), "%s", "CORITIBA");
-        std::snprintf(tm[1].shortName, sizeof(tm[1].shortName), "%s", "CFC");
-        tm[1].primaryColor = RgbColor{ 255, 255, 255 };
-        tm[1].secondaryColor = RgbColor{ 0, 104, 56 };
+        std::snprintf(tm[1].fullName, sizeof(tm[1].fullName), "%s", "PALMEIRAS");
+        std::snprintf(tm[1].shortName, sizeof(tm[1].shortName), "%s", "PAL");
+        tm[1].primaryColor = RgbColor{ 0, 110, 64 };
+        tm[1].secondaryColor = RgbColor{ 255, 255, 255 };
         tm[1].hasRealData = true;
         st.UpdateTeams(tm);
         static const struct { const char* n; uint8_t num; } kXI[22] = {
             { "AGUSTÍN ROSSI", 1 }, { "GUILLERMO VARELA", 2 }, { "LÉO ORTIZ", 3 }, { "LÉO PEREIRA", 4 }, { "ALEX SANDRO", 26 },
             { "ERICK PULGAR", 5 }, { "JORGINHO", 21 }, { "DE ARRASCAETA", 10 }, { "SAMUEL LINO", 16 }, { "LUIZ ARAUJO", 7 }, { "PEDRO", 9 },
-            { "PEDRO RANGEL", 1 }, { "MAICON", 3 }, { "TIAGO COSER", 4 }, { "BRUNO MELO", 6 }, { "SEBASTIÁN GÓMEZ", 5 },
-            { "JOSUÉ", 10 }, { "VINI PAULISTA", 8 }, { "BRENO LOPES", 11 }, { "PEDRO ROCHA", 9 }, { "KENO", 7 }, { "RODRIGO RODRIGUES", 19 },
+            { "WEVERTON", 21 }, { "MARCOS ROCHA", 2 }, { "GUSTAVO GÓMEZ", 15 }, { "MURILO", 26 }, { "PIQUEREZ", 22 },
+            { "ANÍBAL MORENO", 5 }, { "RICHARD RÍOS", 27 }, { "RAPHAEL VEIGA", 23 }, { "FACUNDO TORRES", 17 }, { "VITOR ROQUE", 9 }, { "FLACO LÓPEZ", 42 },
         };
         std::array<PlayerSlotInfo, 22> pl{};
         for (int i = 0; i < 22; ++i) {
@@ -2273,14 +2273,14 @@ void TestHudRenderSmoke() {
             armedV.offenderSlot = 14;
             armedV.victimSlot = 10;
             std::snprintf(armedV.summary, sizeof(armedV.summary), "%s",
-                          lang ? "Penalty \xC2\xB7 FLA \xC2\xB7 Yellow #6 Bruno Melo"
-                               : "P\xC3\xAAnalti \xC2\xB7 FLA \xC2\xB7 Amarelo #6 Bruno Melo");
+                          lang ? "Penalty \xC2\xB7 FLA \xC2\xB7 Yellow #26 Murilo"
+                               : "P\xC3\xAAnalti \xC2\xB7 FLA \xC2\xB7 Amarelo #26 Murilo");
             st.ArmVerdict(armedV);
             struct CardEdit { int slot; int yellows; const char* pt; const char* en; };
             const CardEdit edits[] = {
                 { 5,  0, "Cart\xC3\xA3o \xC2\xB7 #5 Erick Pulgar \xC2\xB7 sem cart\xC3\xA3o", "Card \xC2\xB7 #5 Erick Pulgar \xC2\xB7 no card" },
-                { 17, 1, "Cart\xC3\xA3o \xC2\xB7 #8 Vini Paulista \xC2\xB7 1 amarelo", "Card \xC2\xB7 #8 Vini Paulista \xC2\xB7 1 yellow" },
-                { 16, 1, "Cart\xC3\xA3o \xC2\xB7 #10 Josu\xC3\xA9 \xC2\xB7 1 amarelo", "Card \xC2\xB7 #10 Josu\xC3\xA9 \xC2\xB7 1 yellow" },
+                { 17, 1, "Cart\xC3\xA3o \xC2\xB7 #27 Richard R\xC3\xADos \xC2\xB7 1 amarelo", "Card \xC2\xB7 #27 Richard R\xC3\xADos \xC2\xB7 1 yellow" },
+                { 16, 1, "Cart\xC3\xA3o \xC2\xB7 #5 An\xC3\xAD" "bal Moreno \xC2\xB7 1 amarelo", "Card \xC2\xB7 #5 An\xC3\xAD" "bal Moreno \xC2\xB7 1 yellow" },
                 { 6,  1, "Cart\xC3\xA3o \xC2\xB7 #21 Jorginho \xC2\xB7 1 amarelo", "Card \xC2\xB7 #21 Jorginho \xC2\xB7 1 yellow" },
             };
             for (const auto& ce : edits) {
@@ -2708,6 +2708,37 @@ void TestHeapGuardAtomicSegmentRelease() {
     VirtualFree(mem, 0, MEM_RELEASE);
 
     EXPECT_EQ(HeapGuard::ReleaseSegmentAtomic(nullptr, 0), 0, "Zero size is a native no-op success");
+    // Refused ranges are remembered: dlmalloc retries the same segment on every trim pass
+    {
+        HeapGuard::RefusedRangeCache cache;
+        EXPECT_TRUE(!cache.Contains(0x1711D0000ULL, 0x60000), "Empty cache must not contain anything");
+        cache.Add(0x1711D0000ULL, 0x60000);
+        cache.Add(0x1711D0000ULL, 0x60000);
+        EXPECT_EQ(cache.Count(), static_cast<size_t>(1), "Duplicate ranges are stored once");
+        EXPECT_TRUE(cache.Contains(0x1711D0000ULL, 0x60000), "Refused range must be found");
+        EXPECT_TRUE(!cache.Contains(0x1711D0000ULL, 0x70000), "Same base with another size is another range");
+        for (size_t i = 0; i < HeapGuard::RefusedRangeCache::kCapacity; ++i) cache.Add(0x200000000ULL + i * 0x10000, 0x10000);
+        EXPECT_EQ(cache.Count(), HeapGuard::RefusedRangeCache::kCapacity, "Cache is bounded");
+        EXPECT_TRUE(!cache.Contains(0x1711D0000ULL, 0x60000), "Oldest entry is replaced when full");
+        cache.Clear();
+        EXPECT_EQ(cache.Count(), static_cast<size_t>(0), "Clear forgets every range");
+    }
+    // A real refused range: second call comes from the cache, both refuse, counters move
+    {
+        (void)HeapGuard::TakeStats();
+        HeapGuard::ClearRefusedCache();
+        void* blk = VirtualAlloc(nullptr, 0x20000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        EXPECT_TRUE(blk != nullptr, "VirtualAlloc for the cache test");
+        if (blk) {
+            // Asking for half of an allocation can never be released as a whole
+            EXPECT_EQ(HeapGuard::ReleaseSegmentAtomic(blk, 0x10000), -1, "Partial allocation must be refused");
+            EXPECT_EQ(HeapGuard::ReleaseSegmentAtomic(blk, 0x10000), -1, "Cached refusal must still refuse");
+            const HeapGuard::Stats st = HeapGuard::TakeStats();
+            EXPECT_TRUE(st.calls == 2 && st.refused == 1 && st.cacheHits == 1, "Second refusal must come from the cache");
+            HeapGuard::ClearRefusedCache();
+            EXPECT_EQ(HeapGuard::ReleaseSegmentAtomic(blk, 0x20000), 0, "Whole allocation must still be released");
+        }
+    }
     MarkPass("TestHeapGuardAtomicSegmentRelease");
 }
 

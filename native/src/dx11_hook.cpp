@@ -35,6 +35,26 @@ using FnGrSwapChainPresent = HRESULT(__fastcall*)(void* grSwapChain, UINT syncIn
 InlineHook g_hookGrPresent;
 thread_local int g_presentDepth = 0;
 
+// Mod time per presented frame (QPC ticks), game Present excluded
+std::atomic<uint64_t> g_presentFrames{ 0 };
+std::atomic<uint64_t> g_presentTicks{ 0 };
+std::atomic<uint64_t> g_presentMaxTicks{ 0 };
+
+uint64_t PresentQpc() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return static_cast<uint64_t>(t.QuadPart);
+}
+
+void AccountPresentWork(uint64_t t0) {
+    const uint64_t dt = PresentQpc() - t0;
+    g_presentFrames.fetch_add(1, std::memory_order_relaxed);
+    g_presentTicks.fetch_add(dt, std::memory_order_relaxed);
+    uint64_t prev = g_presentMaxTicks.load(std::memory_order_relaxed);
+    while (dt > prev && !g_presentMaxTicks.compare_exchange_weak(prev, dt, std::memory_order_relaxed)) {
+    }
+}
+
 std::mutex g_renderMutex;
 std::atomic<bool> g_stopRequested{ false };
 std::atomic<bool> g_hooked{ false };
@@ -303,6 +323,7 @@ HRESULT __fastcall Detour_GrSwapChainPresent(void* grSwapChain, UINT syncInterva
         return orig ? orig(grSwapChain, syncInterval) : S_OK;
     }
     ++g_presentDepth;
+    const uint64_t workStart = PresentQpc();
 
     if (IsValidPtr(grSwapChain) && !g_stopRequested.load(std::memory_order_acquire)) {
         IDXGISwapChain* swapChain = *reinterpret_cast<IDXGISwapChain* const*>(
@@ -315,6 +336,7 @@ HRESULT __fastcall Detour_GrSwapChainPresent(void* grSwapChain, UINT syncInterva
                 polledThisFrame = true;
                 if (!VarState::Instance().ShouldRenderAnyHud(GetTickCount64())) {
                     VarHudRenderer::TickIdle();
+                    AccountPresentWork(workStart);
                     const HRESULT hr = orig ? orig(grSwapChain, syncInterval) : S_OK;
                     --g_presentDepth;
                     return hr;
@@ -333,6 +355,7 @@ HRESULT __fastcall Detour_GrSwapChainPresent(void* grSwapChain, UINT syncInterva
         }
     }
 
+    AccountPresentWork(workStart);
     const HRESULT hr = orig ? orig(grSwapChain, syncInterval) : S_OK;
     --g_presentDepth;
     return hr;
@@ -436,6 +459,17 @@ bool Dx11Hook::IsHooked() {
 
 bool Dx11Hook::IsInitFinished() {
     return g_initFinished.load(std::memory_order_acquire);
+}
+
+Dx11Hook::PresentStats Dx11Hook::TakePresentStats() {
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    const uint64_t freq = (f.QuadPart > 0) ? static_cast<uint64_t>(f.QuadPart) : 1;
+    PresentStats s{};
+    s.frames = g_presentFrames.exchange(0, std::memory_order_relaxed);
+    s.microseconds = g_presentTicks.exchange(0, std::memory_order_relaxed) * 1000000ULL / freq;
+    s.maxMicroseconds = g_presentMaxTicks.exchange(0, std::memory_order_relaxed) * 1000000ULL / freq;
+    return s;
 }
 
 } // namespace var_mod

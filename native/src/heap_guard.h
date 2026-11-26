@@ -42,6 +42,32 @@ bool Install();
 bool IsInstalled();
 uint64_t RepairedReleases(); // releases the native code would have left half done (crash at 0x1403FE31D)
 uint64_t RefusedReleases();  // inconsistent ranges kept mapped instead of partially released
+// dlmalloc retries a segment it could not release on every trim pass (release_unused_segments 0x1403FE2C3
+// puts the chunk back and tries again next time). A refused range is remembered and refused again in O(1)
+// instead of walking its pages with VirtualQuery each time. Refusing is always safe (dlmalloc keeps the chunk).
+struct Stats {
+    uint64_t calls = 0;        // win32munmap calls handled
+    uint64_t released = 0;     // ranges released
+    uint64_t refused = 0;      // ranges refused after a page walk
+    uint64_t cacheHits = 0;    // ranges refused again from the cache (no page walk)
+    uint64_t microseconds = 0; // total time spent inside the replacement
+};
+Stats TakeStats();           // returns the counters since the previous call and resets them
+void ClearRefusedCache();    // forget refused ranges (new match: allocations may have changed)
+// Pure cache used by the replacement, exposed for tests
+class RefusedRangeCache {
+public:
+    static constexpr size_t kCapacity = 64;
+    bool Contains(uintptr_t base, size_t size) const;
+    void Add(uintptr_t base, size_t size); // oldest entry is replaced when full
+    void Clear();
+    size_t Count() const { return count_; }
+private:
+    uintptr_t base_[kCapacity] = {};
+    size_t size_[kCapacity] = {};
+    size_t count_ = 0;
+    size_t next_ = 0;
+};
 } // namespace HeapGuard
 
 } // namespace var_mod
