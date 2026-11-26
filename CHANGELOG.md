@@ -1,5 +1,22 @@
 # Changelog
 
+## v4.4.3
+
+Verificação tripla em rodadas sucessivas: quatro auditorias por novos ângulos (fluxo de decisão de ponta a ponta, contrato com a memória do jogo conferido no binário, concorrência e ciclo de vida, interface e idiomas), depois reauditorias independentes e revisões do diff até não sobrar defeito confirmado.
+
+- **Cartões agora persistem de verdade**: o jogo guarda os dados dos times em dois buffers e copia o de escrita por cima do de leitura em todo frame. O mod escrevia só no de leitura, então revogar ou ajustar um cartão podia ser desfeito no frame seguinte. Agora toda escrita de cartão vai para os dois buffers, validados antes, e toda leitura de cartão usa o buffer de escrita. Sem buffer validado o mod não aplica nada pela metade.
+- **Posição vazia nunca recebe cartão**: o jogo devolve o registro do primeiro jogador do elenco para uma posição sem ninguém. O mod agora recusa essa posição.
+- **Anular a falta atual e marcar uma falta anterior no mesmo pacote**: o recurso anunciado na v4.4.0 agora funciona nas duas ordens. A falta anterior substitui a cobrança e a anulação retira o cartão e marca o lance como anulado.
+- **Infrator nunca é inventado**: sem jogador identificado, a decisão pede a escolha do jogador em vez de assumir o goleiro.
+- **Identidade do jogador em todo lugar**: lances do replay, edições diretas e decisões armadas antes de uma substituição guardam quem estava na posição naquele momento.
+- **Cartão da falta nunca em dobro nem perdido**: o mod só completa o cartão à mão quando a engine comprovadamente não o aplicou (contagem igual à de antes da injeção).
+- **Histórico fiel ao jogo**: contagens de cartão lidas do próprio jogo para o lance atual, registro mesmo quando só o cartão de uma decisão foi aplicado, e anulação vencida (de outra parada) só retira o cartão.
+- **Decisão não se perde**: se a engine gerou o próprio resultado no instante da aplicação, o pacote volta a esperar a próxima bola parada.
+- **Segurança de execução**: pacote de outra partida descartado, nada é armado com o VAR desligado, leitura do render suspensa entre o fim da partida e o próximo jogo, ponteiros da partida revalidados a cada frame, texto UTF-8 cortado nunca lido além do fim, falta de memória no HUD nunca encerra o jogo, ganchos nunca liberam código em uso.
+- **Interface**: nomes com letras do Latin Extended (Modrić, Çalhanoğlu), nomes de times e títulos longos com reticências, seletor de idioma e página de controles sem corte, campinho menor quando falta espaço, botão "Substituir no pool" quando a decisão troca outra, pool atualizado no mesmo frame da ação, resumo recalculado quando uma edição é incorporada.
+- **Confirmar decisão**: o botão da tela de decisão agora diz o que o usuário faz ("Confirmar decisão", ou "Atualizar decisão" e "Substituir decisão" quando for o caso), e não mais "Adicionar ao pool". Ao confirmar, um aviso curto na parte de baixo da tela diz o que aconteceu: decisão enviada, atualizada ou substituída no pool de decisões, ou cartão incorporado à decisão do lance.
+- **Configuração**: `var_mod.ini` gravado de forma atômica.
+
 ## v4.4.2
 
 Revisão profunda final com quatro auditorias independentes (motor de execução, estado e painel, render e infraestrutura, módulo Lua e instalador). Cada achado foi conferido no código e no binário antes da correção.

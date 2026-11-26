@@ -200,6 +200,7 @@ struct PlaySnapshot {
     uint8_t  playerOnPitch[22]{};
     int8_t   playerActionId[22]{};    // PlayerAction + 0x01 (PlayerActionId: 11/12 slide, 13 tackle, 16/17 contact reaction)
     uint32_t playerActionFlags[22]{}; // PlayerAction + 0x08
+    int8_t   playerRosterIdx[22]{};   // TeamInfo + 0x04[slot % 11] at this moment (-1 = empty)
     int8_t   playerCauser[22]{};      // PlayerAction + 0x3D: who caused this player's contact reaction (-1 / 0xFF none)
     int32_t  closestA            = -1;
     int32_t  closestB            = -1;
@@ -230,6 +231,7 @@ struct PlayerSlotInfo {
     uint8_t  yellows       = 0;
     uint8_t  reds          = 0;
     uint8_t  onPitch       = 1;
+    int8_t   rosterIdx     = -1; // TeamInfo + 0x04[slot % 11]: who holds the slot now (0..39)
     char     name[64]      = {};
     char     shirtName[32] = {};
 
@@ -274,6 +276,10 @@ struct VarVerdict {
     bool     customSpot       = false; // True when user manually adjusted spot on radar/presets
     bool     targetsLiveSetPlay = false; // overturn of the foul the match is stopped for (restart allowed)
     bool     fromLiveFoul       = false; // any decision made on the foul the match is stopped for
+    int8_t   liveSetPlayKind    = -1;    // SetPlayInfo kind of that stoppage when armed (identifies it later)
+    // Real card counts of the offender after execution (read back from the game), -1 = unknown
+    int8_t   ledgerYellows      = -1;
+    int8_t   ledgerReds         = -1;
     char     summary[128]     = {};
 };
 
@@ -308,7 +314,7 @@ constexpr size_t kMaxCardPoolEntries = 32;
 
 inline bool SameCardPoolKey(const VarVerdict& a, const VarVerdict& b) {
     if (a.directCardEdit != b.directCardEdit) return false;
-    if (a.directCardEdit) return a.offenderSlot == b.offenderSlot;
+    if (a.directCardEdit) return a.offenderSlot == b.offenderSlot && a.offenderRosterIdx == b.offenderRosterIdx;
     if (a.sourceEventId != 0 || b.sourceEventId != 0) return a.sourceEventId == b.sourceEventId;
     return a.offenderSlot == b.offenderSlot;
 }
@@ -639,6 +645,8 @@ public:
     void ArmVerdict(const VarVerdict& verdict);
     void AddToVerdictPool(const VarVerdict& verdict, bool* outReplacedPlay = nullptr);
     void RemovePlayFromPool();
+    // Replaces the summary of the pending play decision (after a card edit was merged into it)
+    void SetPlayDecisionSummary(const char* summary);
     void RemoveCardFromPool(int32_t slot);          // every card entry targeting this player
     void RemoveCardPoolEntry(uint32_t sequence);    // one entry, by its unique sequence
     // Same as AddToVerdictPool, also reports when a full pool evicted its oldest card edit
@@ -651,6 +659,9 @@ public:
     // Consumes only if gate(pool, user) returns true; the gate runs under the same lock as the consume, so no
     // edit can slip in between the check and the take.
     bool ConsumeVerdictPoolIf(bool (*gate)(const VerdictPool&, void*), void* user, VerdictPool& outPool);
+    // Puts back a consumed pool that wrote nothing, only into the same match and only if the user has not
+    // armed anything since (a newer pool always wins). Returns true when restored.
+    bool RequeueVerdictPool(const VerdictPool& pool, uint32_t matchGeneration);
     void UpdateEventAfterVerdict(const VarVerdict& applied);
     void IncrementInterventions();
     void SetPostApplyBanner(const char* text, uint64_t durationMs = 4500, BannerStyle style = BannerStyle::Applied);

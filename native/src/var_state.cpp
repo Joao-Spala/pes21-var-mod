@@ -508,7 +508,10 @@ void VarState::SaveHudConfig() const {
         std::fclose(in);
     }
 
-    FILE* out = _wfopen(path.c_str(), L"wb");
+    // Written to a temporary file and moved over the old one: a reader (the Lua module saves the same file)
+    // never sees a truncated file
+    const std::wstring tmpPath = path + L".tmp";
+    FILE* out = _wfopen(tmpPath.c_str(), L"wb");
     if (!out) return;
     std::fprintf(out, "# PES 2021 VAR Mod v" VAR_MOD_VERSION " - Configuracao\n");
     std::fprintf(out, "enabled = %d\n", enabledVal ? 1 : 0);
@@ -528,7 +531,11 @@ void VarState::SaveHudConfig() const {
             std::fprintf(out, "pad_%s = 0x%04X\n", kBindIniNames[a], cfg.bindings.pad[static_cast<size_t>(a)]);
         }
     }
+    const bool ok = (std::fflush(out) == 0) && !std::ferror(out);
     std::fclose(out);
+    if (!ok || !MoveFileExW(tmpPath.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(tmpPath.c_str());
+    }
 }
 
 HudConfig VarState::GetHudConfig() const {
@@ -1167,6 +1174,7 @@ void VarState::CaptureHudRenderSnapshot(HudRenderSnapshot& io) const {
 
 void VarState::RequestReplaySeekToTime(int32_t phase, float time60Hz, float fallbackNorm, bool pauseAfterSeek) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!hasPendingReplayCmd_.load(std::memory_order_acquire)) pendingReplayCmd_ = ReplayControlCommand{};
     pendingReplayCmd_.hasSeek        = true;
     pendingReplayCmd_.seekByTime     = true;
     pendingReplayCmd_.targetPhase    = phase;
@@ -1178,6 +1186,7 @@ void VarState::RequestReplaySeekToTime(int32_t phase, float time60Hz, float fall
 
 void VarState::RequestReplaySeekToNorm(float norm, bool pauseAfterSeek) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!hasPendingReplayCmd_.load(std::memory_order_acquire)) pendingReplayCmd_ = ReplayControlCommand{};
     pendingReplayCmd_.hasSeek        = true;
     pendingReplayCmd_.seekByTime     = false;
     pendingReplayCmd_.targetNorm     = std::clamp(norm, 0.0f, 1.0f);
@@ -1187,6 +1196,7 @@ void VarState::RequestReplaySeekToNorm(float norm, bool pauseAfterSeek) {
 
 void VarState::RequestReplaySetPlaying(bool playing) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!hasPendingReplayCmd_.load(std::memory_order_acquire)) pendingReplayCmd_ = ReplayControlCommand{};
     pendingReplayCmd_.hasPlayToggle = true;
     pendingReplayCmd_.targetPlaying = playing;
     hasPendingReplayCmd_.store(true, std::memory_order_release);
@@ -1194,6 +1204,7 @@ void VarState::RequestReplaySetPlaying(bool playing) {
 
 void VarState::RequestReplayCameraFocus(int32_t focusSlot) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!hasPendingReplayCmd_.load(std::memory_order_acquire)) pendingReplayCmd_ = ReplayControlCommand{};
     pendingReplayCmd_.hasFocusTarget = true;
     pendingReplayCmd_.focusSlot      = std::clamp(focusSlot, 0, 22);
     hasPendingReplayCmd_.store(true, std::memory_order_release);
@@ -1248,8 +1259,9 @@ void VarState::AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPl
     // A "None" decision has nothing to execute and would keep the pool armed forever
     if (verdict.action == VarAction::None) return;
     if (verdict.action == VarAction::EditCard && !IsValidSlot(verdict.offenderSlot)) return;
-
     std::lock_guard<std::mutex> lock(mutex_);
+    // Under the lock: SetEnabled(false) stores the flag and then cancels the pool under this same lock
+    if (!enabled_.load(std::memory_order_acquire) || !offlineAllowed_.load(std::memory_order_acquire)) return;
     VarVerdict stored = verdict;
     stored.armed = true;
     stored.sequence = verdictSeq_++;
@@ -1292,6 +1304,54 @@ void VarState::AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPl
         slotFor->order = stored.sequence;
         slotFor->verdict = stored;
     } else {
+        auto isLiveCancel = [](const VarVerdict& v) {
+            return v.action == VarAction::OverturnCancel && v.targetsLiveSetPlay;
+        };
+        auto carriesFoul = [](const VarVerdict& v) {
+            return v.action == VarAction::ConvertToPenalty || v.action == VarAction::ConvertToFreeKick ||
+                   v.action == VarAction::RetroactivePenalty || v.action == VarAction::RetroactiveFreeKick;
+        };
+        // "Mark the earlier foul and cancel the current call": both are play decisions, but the new foul's
+        // set play already replaces the current one. The cancel keeps only its card / ledger part.
+        if (verdictPool_.hasPlayDecision &&
+            ((isLiveCancel(verdictPool_.playDecision) && carriesFoul(stored)) ||
+             (carriesFoul(verdictPool_.playDecision) && isLiveCancel(stored)) ) &&
+            verdictPool_.playDecision.sourceEventId != stored.sourceEventId) {
+            const bool cancelIsNew = isLiveCancel(stored);
+            VarVerdict cancel = cancelIsNew ? stored : verdictPool_.playDecision;
+            cancel.targetsLiveSetPlay = false;
+            if (!cancelIsNew) {
+                verdictPool_.playDecision = stored;
+                verdictPool_.playOrder = stored.sequence;
+                // Same rule as any play decision: earlier card-only edits of its event are folded into it,
+                // so the event's original card is never reverted twice
+                if (stored.sourceEventId != 0) {
+                    for (auto& e : verdictPool_.cardEntries) {
+                        if (e.active && !e.verdict.directCardEdit && e.verdict.sourceEventId == stored.sourceEventId) {
+                            e = CardPoolEntry{};
+                        }
+                    }
+                }
+            }
+            for (auto& e : verdictPool_.cardEntries) {
+                if (e.active && SameCardPoolKey(e.verdict, cancel)) e = CardPoolEntry{};
+            }
+            CardPoolEntry* slotFor = nullptr;
+            for (auto& e : verdictPool_.cardEntries) {
+                if (!e.active) { slotFor = &e; break; }
+            }
+            if (!slotFor) {
+                for (auto& e : verdictPool_.cardEntries) {
+                    if (!slotFor || e.order < slotFor->order) slotFor = &e;
+                }
+                if (outEvictedCard) *outEvictedCard = true;
+            }
+            slotFor->active = true;
+            slotFor->order = cancel.sequence;
+            slotFor->verdict = cancel;
+            hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+            return;
+        }
         if (outReplacedPlay &&
             verdictPool_.hasPlayDecision &&
             verdictPool_.playDecision.action != VarAction::None &&
@@ -1314,6 +1374,14 @@ void VarState::AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPl
     }
 
     hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+}
+
+void VarState::SetPlayDecisionSummary(const char* summary) {
+    if (!summary) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!verdictPool_.hasPlayDecision) return;
+    std::snprintf(verdictPool_.playDecision.summary, sizeof(verdictPool_.playDecision.summary), "%s", summary);
+    Utf8TrimIncompleteTail(verdictPool_.playDecision.summary);
 }
 
 void VarState::RemovePlayFromPool() {
@@ -1426,6 +1494,15 @@ bool VarState::ConsumeVerdict(VarVerdict& outVerdict) {
     }
 
     hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+    return true;
+}
+
+bool VarState::RequeueVerdictPool(const VerdictPool& pool, uint32_t matchGeneration) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (matchGeneration != matchGeneration_ || !verdictPool_.Empty() || pool.Empty()) return false;
+    if (!enabled_.load(std::memory_order_acquire) || !offlineAllowed_.load(std::memory_order_acquire)) return false;
+    verdictPool_ = pool;
+    hasArmedVerdict_.store(true, std::memory_order_release);
     return true;
 }
 
@@ -1550,7 +1627,10 @@ void VarState::UpdateEventAfterVerdict(const VarVerdict& applied) {
             }
             // Keep the "after" card counts in line with the new card, otherwise the timeline keeps showing
             // CARTÃO VERMELHO for a red the VAR removed.
-            if (ev.cardKind != cardBefore || ev.offenderSlot != offenderBefore) {
+            if (applied.ledgerYellows >= 0 && applied.ledgerReds >= 0) {
+                ev.offenderYellowsAfter = static_cast<uint8_t>(applied.ledgerYellows);
+                ev.offenderRedsAfter = static_cast<uint8_t>(applied.ledgerReds);
+            } else if (ev.cardKind != cardBefore || ev.offenderSlot != offenderBefore) {
                 int yellows = ev.offenderYellowsAfter;
                 if (ev.offenderSlot != offenderBefore) {
                     yellows = (ev.cardKind == CardKind::Yellow) ? 1 : 0; // other player: history unknown here

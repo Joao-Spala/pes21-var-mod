@@ -252,6 +252,7 @@ bool VarHudController::IsSameStoppage(const VarEvent& a, const VarEvent& b) {
 void VarHudController::ApplySelectedMarkerToContext(const ReplayMarker& m) {
     hasDetectedContact_   = IsValidSlot(m.offenderSlot);
     detectedOffenderSlot_ = m.offenderSlot;
+    detectedOffenderUnknown_ = false;
     detectedVictimSlot_   = m.victimSlot;
     if (IsNonZeroVec(m.pos)) {
         detectedSpotPos_ = m.pos;
@@ -419,6 +420,7 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
         if (hasActiveEvent_ && IsValidSlot(activeEvent_.offenderSlot)) {
             hasDetectedContact_ = true;
             detectedOffenderSlot_ = activeEvent_.offenderSlot;
+            detectedOffenderUnknown_ = false;
             detectedVictimSlot_ = IsValidSlot(activeEvent_.victimSlot) ? activeEvent_.victimSlot : -1;
             detectedSpotPos_ = IsNonZeroVec(activeEvent_.pos) ? activeEvent_.pos
                              : (sync.hasSnapshot ? sync.snapshot.ballPos : tel.liveBallPos);
@@ -438,6 +440,7 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
             }
             hasDetectedContact_ = (sync.snapshot.closestDistSq <= 6.25f);
             detectedOffenderSlot_ = off;
+            detectedOffenderUnknown_ = false;
             detectedVictimSlot_ = vic;
             detectedSpotPos_ = Vec3{
                 0.5f * (sync.snapshot.playerPos[off].x + sync.snapshot.playerPos[vic].x),
@@ -450,6 +453,7 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
         } else if (tel.replayFocusSlot >= 1 && tel.replayFocusSlot <= 22) {
             hasDetectedContact_ = false;
             detectedOffenderSlot_ = tel.replayFocusSlot - 1;
+            detectedOffenderUnknown_ = false;
             detectedVictimSlot_ = -1;
             detectedSpotPos_ = tel.liveBallPos;
             detectedKind_ = IncidentKind::None;
@@ -457,6 +461,7 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
         } else {
             hasDetectedContact_ = false;
             detectedOffenderSlot_ = -1;
+            detectedOffenderUnknown_ = false;
             detectedVictimSlot_ = -1;
             detectedSpotPos_ = tel.liveBallPos;
             detectedKind_ = IncidentKind::None;
@@ -617,18 +622,31 @@ std::string VarHudController::FormatNextCameraFocusLabel() const {
 
 void VarHudController::InvertDetectedRoles() {
     if (!IsValidSlot(detectedOffenderSlot_) && !IsValidSlot(detectedVictimSlot_)) return;
+    // (an unknown opponent after a first invert has only the victim set)
     if (IsValidSlot(detectedOffenderSlot_) && IsValidSlot(detectedVictimSlot_)) {
         std::swap(detectedOffenderSlot_, detectedVictimSlot_);
     } else if (IsValidSlot(detectedOffenderSlot_)) {
         detectedVictimSlot_ = detectedOffenderSlot_;
-        detectedOffenderSlot_ = (detectedVictimSlot_ < 11) ? 11 : 0;
+        detectedOffenderSlot_ = -1;
+        detectedOffenderUnknown_ = true; // the opponent is unknown: the decision page asks for him
+    } else if (IsValidSlot(detectedVictimSlot_)) {
+        // Second invert of an unknown opponent: back to the original roles
+        detectedOffenderSlot_ = detectedVictimSlot_;
+        detectedVictimSlot_ = -1;
+        detectedOffenderUnknown_ = false;
     }
     manualMarkerLock_ = true;
     seekLockUntilMs_ = GetTickCount64() + 500ULL;
     if (page_ == HudPage::Configure) {
-        std::swap(draftOffenderSlot_, draftVictimSlot_);
+        if (IsValidSlot(draftVictimSlot_)) {
+            std::swap(draftOffenderSlot_, draftVictimSlot_);
+        } else if (IsValidSlot(draftOffenderSlot_)) {
+            draftVictimSlot_ = draftOffenderSlot_;
+            draftOffenderSlot_ = -1; // the user picks the offender
+        }
         if (draftAction_ != VarAction::OverturnCancel && !IsManualRestartAction(draftAction_)) {
-            draftBenefitedTeam_ = 1 - SlotToTeam(draftOffenderSlot_);
+            draftBenefitedTeam_ = IsValidSlot(draftOffenderSlot_) ? 1 - SlotToTeam(draftOffenderSlot_)
+                                : IsValidSlot(draftVictimSlot_) ? SlotToTeam(draftVictimSlot_) : draftBenefitedTeam_;
         }
     }
     RebuildMainOptions();
@@ -798,6 +816,8 @@ float VarHudController::ActiveSignedBoxDistance() const {
         offTeam = IsValidSlot(draftOffenderSlot_) ? SlotToTeam(draftOffenderSlot_) : (1 - draftBenefitedTeam_);
     } else if (IsValidSlot(detectedOffenderSlot_)) {
         offTeam = SlotToTeam(detectedOffenderSlot_);
+    } else if (detectedOffenderUnknown_ && IsValidSlot(detectedVictimSlot_)) {
+        offTeam = 1 - SlotToTeam(detectedVictimSlot_); // roles inverted: the offender is the victim's opponent
     } else if (hasActiveEvent_) {
         offTeam = 1 - activeEvent_.benefitedTeam;
     } else {
@@ -856,7 +876,10 @@ void VarHudController::PreFillDraft(VarAction action, CardKind presetCard, bool 
     int32_t offSlot = -1;
     int32_t vicSlot = -1;
 
-    if (IsValidSlot(detectedOffenderSlot_)) {
+    if (detectedOffenderUnknown_ && IsValidSlot(detectedVictimSlot_)) {
+        offSlot = -1;
+        vicSlot = detectedVictimSlot_;
+    } else if (IsValidSlot(detectedOffenderSlot_)) {
         offSlot = detectedOffenderSlot_;
         vicSlot = IsValidSlot(detectedVictimSlot_) ? detectedVictimSlot_ : -1;
     } else if (hasActiveEvent_ && IsValidSlot(activeEvent_.offenderSlot)) {
@@ -879,11 +902,17 @@ void VarHudController::PreFillDraft(VarAction action, CardKind presetCard, bool 
         }
     }
 
-    if (!IsValidSlot(offSlot)) offSlot = 0;
-    if (!IsValidSlot(vicSlot)) vicSlot = (offSlot < 11) ? 11 : 0;
+    // No placeholder offender (a goalkeeper would be carded): when nobody was identified the decision page
+    // shows "Jogador" and the user must pick him before confirming. No placeholder victim either: a filler slot would be written to FoulInfo and the history as the fouled player
+    if (!IsValidSlot(vicSlot)) vicSlot = -1;
 
     if (invertRoles) {
-        std::swap(offSlot, vicSlot);
+        if (IsValidSlot(vicSlot)) {
+            std::swap(offSlot, vicSlot);
+        } else if (IsValidSlot(offSlot)) {
+            vicSlot = offSlot;
+            offSlot = -1; // unknown player of the other team: the user picks him
+        }
         draftCard_ = CardKind::None;
     }
 
@@ -898,13 +927,15 @@ void VarHudController::PreFillDraft(VarAction action, CardKind presetCard, bool 
         if (hasActiveEvent_) {
             draftBenefitedTeam_ = 1 - activeEvent_.benefitedTeam;
         } else {
-            draftBenefitedTeam_ = SlotToTeam(offSlot);
+            draftBenefitedTeam_ = IsValidSlot(offSlot) ? SlotToTeam(offSlot) : 0;
         }
         draftCard_ = CardKind::None;
     } else {
         // The side that gets the kick is always the opponent of the FINAL offender. Deriving it from the
         // recorded event broke after Tab (roles swapped) or "invert": offender and beneficiary on one side.
-        draftBenefitedTeam_ = 1 - SlotToTeam(offSlot);
+        draftBenefitedTeam_ = IsValidSlot(offSlot) ? 1 - SlotToTeam(offSlot)
+                            : IsValidSlot(vicSlot) ? SlotToTeam(vicSlot)
+                            : hasActiveEvent_ ? activeEvent_.benefitedTeam : 0;
     }
 
     ApplySpotPreset(0);
@@ -934,6 +965,7 @@ void VarHudController::PreFillDirectCardForSlot(int32_t slot) {
         probe.action = VarAction::EditCard;
         probe.directCardEdit = true;
         probe.offenderSlot = draftOffenderSlot_;
+        probe.offenderRosterIdx = players_[static_cast<size_t>(draftOffenderSlot_)].rosterIdx;
         if (const CardPoolEntry* pend = pool.FindSameKey(probe)) {
             const uint8_t y = pend->verdict.directYellows;
             const uint8_t r = pend->verdict.directReds;
@@ -1023,21 +1055,32 @@ void VarHudController::AdjustField(ConfigField field, int delta, VarState& state
                 draftAction_ == VarAction::ConvertToFreeKick ||
                 draftAction_ == VarAction::ConvertToPenalty) {
                 const int32_t desiredOffTeam = 1 - draftBenefitedTeam_;
-                if (SlotToTeam(draftOffenderSlot_) != desiredOffTeam) {
+                if (IsValidSlot(draftOffenderSlot_) && SlotToTeam(draftOffenderSlot_) != desiredOffTeam) {
                     draftOffenderSlot_ = (desiredOffTeam == 0) ? (draftOffenderSlot_ % 11) : (11 + (draftOffenderSlot_ % 11));
-                    draftVictimSlot_ = (desiredOffTeam == 0) ? 11 : 0;
+                    if (IsValidSlot(draftVictimSlot_) && SlotToTeam(draftVictimSlot_) == desiredOffTeam) {
+                        draftVictimSlot_ = -1; // the victim cannot be on the offender's team
+                    }
                 }
             }
             break;
         }
         case ConfigField::Offender: {
-            draftOffenderSlot_ = (draftOffenderSlot_ + delta + 22) % 22;
+            if (!IsValidSlot(draftOffenderSlot_)) {
+                const int32_t offTeam = IsValidSlot(draftVictimSlot_) ? 1 - SlotToTeam(draftVictimSlot_)
+                                                                      : 1 - draftBenefitedTeam_;
+                const int32_t base = (offTeam == 1) ? 11 : 0;
+                draftOffenderSlot_ = (delta >= 0) ? base : base + 10;
+            } else {
+                draftOffenderSlot_ = (draftOffenderSlot_ + delta + 22) % 22;
+            }
             if (draftDirectCardMode_) {
                 SyncDirectPresetFromPlayer(draftOffenderSlot_);
             }
             if (draftAction_ != VarAction::OverturnCancel && !IsManualRestartAction(draftAction_)) {
                 draftBenefitedTeam_ = 1 - SlotToTeam(draftOffenderSlot_);
-                draftVictimSlot_ = (draftOffenderSlot_ < 11) ? 11 : 0;
+                if (IsValidSlot(draftVictimSlot_) && SlotToTeam(draftVictimSlot_) == SlotToTeam(draftOffenderSlot_)) {
+                    draftVictimSlot_ = -1;
+                }
             }
             if (draftSpotPreset_ == 0) {
                 ApplySpotPreset(0);
@@ -1128,6 +1171,13 @@ const char* VarHudController::ControlsMessage() const {
 const char* VarHudController::PoolNoticeMessage() const {
     if (!poolNoticeMsg_ || GetTickCount64() >= poolNoticeUntilMs_) return nullptr;
     return Tr(poolNoticeMsg_);
+}
+
+const char* VarHudController::ConfirmToast(uint64_t nowMs, uint64_t& outAgeMs) const {
+    outAgeMs = 0;
+    if (!toastMsg_ || nowMs < toastStartMs_ || nowMs - toastStartMs_ >= kConfirmToastMs) return nullptr;
+    outAgeMs = nowMs - toastStartMs_;
+    return Tr(toastMsg_);
 }
 
 void VarHudController::OpenControlsPage() {
@@ -1262,12 +1312,31 @@ void VarHudController::SelectMainOption(int index, VarState& state) {
         activeEvent_ = liveFoulEvent_;
         hasDetectedContact_ = IsValidSlot(liveFoulEvent_.offenderSlot);
         detectedOffenderSlot_ = liveFoulEvent_.offenderSlot;
+        detectedOffenderUnknown_ = false;
         detectedVictimSlot_ = IsValidSlot(liveFoulEvent_.victimSlot) ? liveFoulEvent_.victimSlot : -1;
         detectedSpotPos_ = liveFoulEvent_.pos;
         restoreMarkerAfterLive_ = true;
     }
     const bool targetsLive = (opt.action == VarAction::OverturnCancel) && (opt.useLiveFoul || IsActiveEventTheLiveFoul());
     PreFillDraft(opt.action, opt.presetCard, opt.invertRoles);
+    if (!opt.invertRoles && draftSourceEventId_ != 0 &&
+        (opt.action == VarAction::ConvertToPenalty || opt.action == VarAction::ConvertToFreeKick ||
+         opt.action == VarAction::RetroactivePenalty || opt.action == VarAction::RetroactiveFreeKick)) {
+        VarVerdict probe{};
+        probe.action = VarAction::EditCard;
+        probe.sourceEventId = draftSourceEventId_;
+        const VerdictPool pool = state.PeekVerdictPool();
+        const CardPoolEntry* pend = pool.FindSameKey(probe);
+        if (pend && pend->verdict.action == VarAction::EditCard) {
+            draftCard_ = pend->verdict.targetCard;
+            if (IsValidSlot(pend->verdict.offenderSlot)) {
+                draftOffenderSlot_ = pend->verdict.offenderSlot;
+                draftBenefitedTeam_ = 1 - SlotToTeam(draftOffenderSlot_);
+                if (draftSpotPreset_ == 0) ApplySpotPreset(0);
+            }
+            RebuildConfigFields();
+        }
+    }
     draftTargetsLive_ = targetsLive;
     draftFromLiveFoul_ = (opt.useLiveFoul && hasLiveFoul_) || IsActiveEventTheLiveFoul();
     returnPage_ = HudPage::Main;
@@ -1289,6 +1358,14 @@ void VarHudController::SelectSquadPlayer(int slot) {
 }
 
 void VarHudController::ArmCurrentDraft(VarState& state) {
+    const bool needsOffender = draftAction_ == VarAction::ConvertToPenalty || draftAction_ == VarAction::ConvertToFreeKick ||
+                               draftAction_ == VarAction::RetroactivePenalty || draftAction_ == VarAction::RetroactiveFreeKick ||
+                               draftAction_ == VarAction::EditCard;
+    if (needsOffender && !IsValidSlot(draftOffenderSlot_)) {
+        poolNoticeMsg_ = "Escolha o jogador antes de confirmar";
+        poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
+        return;
+    }
     VarVerdict v{};
     v.action = draftAction_;
     v.sourceEventId = draftSourceEventId_;
@@ -1310,6 +1387,7 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
             probe.action = VarAction::EditCard;
             probe.directCardEdit = true;
             probe.offenderSlot = draftOffenderSlot_;
+            probe.offenderRosterIdx = players_[static_cast<size_t>(draftOffenderSlot_)].rosterIdx;
             if (const CardPoolEntry* pend = state.PeekVerdictPool().FindSameKey(probe)) {
                 baseYellows = pend->verdict.directYellows;
             }
@@ -1320,18 +1398,30 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     v.customSpot = draftCustomSpot_;
     v.targetsLiveSetPlay = (draftAction_ == VarAction::OverturnCancel) && draftTargetsLive_;
     v.fromLiveFoul = draftFromLiveFoul_ && !draftDirectCardMode_;
+    v.liveSetPlayKind = v.targetsLiveSetPlay ? static_cast<int8_t>(tel_.activeSetPlayKind) : static_cast<int8_t>(-1);
     // A slot of the source event means the player who held it then. A slot the user picked means whoever
     // holds it now (the squad lists show the current players).
+    auto currentRoster = [&](int32_t slot) -> int8_t {
+        return IsValidSlot(slot) ? players_[static_cast<size_t>(slot)].rosterIdx : static_cast<int8_t>(-1);
+    };
     if (!draftDirectCardMode_) {
         auto rosterOf = [&](int32_t slot) -> int8_t {
             if (!IsValidSlot(slot)) return -1;
-            if (slot == draftEventOffSlot_) return draftEventOffRoster_;
-            if (slot == draftEventVicSlot_) return draftEventVicRoster_;
-            return -1;
+            if (slot == draftEventOffSlot_ && draftEventOffRoster_ >= 0) return draftEventOffRoster_;
+            if (slot == draftEventVicSlot_ && draftEventVicRoster_ >= 0) return draftEventVicRoster_;
+            // A play under the replay cursor: the player who held the slot in that moment (a substitution
+            // since then must not move the card to the substitute)
+            if (sync_.hasSnapshot && sync_.snapshot.playerRosterIdx[slot] >= 0 &&
+                draftAction_ != VarAction::EditCard) {
+                return sync_.snapshot.playerRosterIdx[slot];
+            }
+            return currentRoster(slot);
         };
         v.origOffenderRosterIdx = rosterOf(v.origOffenderSlot);
         v.offenderRosterIdx = rosterOf(v.offenderSlot);
         v.victimRosterIdx = rosterOf(v.victimSlot);
+    } else {
+        v.offenderRosterIdx = currentRoster(v.offenderSlot);
     }
 
     const std::string sum = FormatVerdictSummary();
@@ -1339,10 +1429,21 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
 
     bool replacedPlay = false;
     const VerdictPool before = state.PeekVerdictPool();
+    // Re-confirming the decision of the same play updates it (the button says "Atualizar decisão")
+    const bool samePlayAgain = before.hasPlayDecision && v.action != VarAction::EditCard && v.sourceEventId != 0 &&
+                               before.playDecision.sourceEventId == v.sourceEventId;
     bool evictedCard = false;
     state.AddToVerdictPoolEx(v, &replacedPlay, &evictedCard);
+    if (samePlayAgain) replacedPlay = false;
     const VerdictPool after = state.PeekVerdictPool();
     const bool droppedEventCard = (v.action != VarAction::EditCard) && (after.CardCount() < before.CardCount());
+    const bool mergedIntoPlay = (v.action == VarAction::EditCard) && !v.directCardEdit && v.sourceEventId != 0 &&
+                                after.hasPlayDecision && after.playDecision.sourceEventId == v.sourceEventId &&
+                                after.FindSameKey(v) == nullptr;
+    if (mergedIntoPlay) {
+        const std::string merged = FormatSummaryOf(after.playDecision);
+        state.SetPlayDecisionSummary(merged.c_str());
+    }
     if (replacedPlay) {
         poolNoticeMsg_ = "Lance substituído no pool (máx. 1 falta ou reinício)";
         poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
@@ -1354,6 +1455,15 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
         poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
     } else {
         poolNoticeMsg_ = nullptr;
+    }
+    // Confirmation toast: what happened to the decision, in the user's words
+    if (after.Count() > 0) {
+        toastMsg_ = mergedIntoPlay ? "Cartão incorporado à decisão do lance"
+                  : replacedPlay   ? "Decisão substituída no pool de decisões"
+                  : (samePlayAgain || (after.Count() == before.Count() && !droppedEventCard && !evictedCard))
+                        ? "Decisão atualizada no pool de decisões"
+                  : "Decisão enviada ao pool de decisões";
+        toastStartMs_ = GetTickCount64();
     }
     VAR_LOG_INF("HUD added verdict to pool (replacedPlay=%d): %s", replacedPlay ? 1 : 0, v.summary);
 

@@ -32,6 +32,7 @@ std::atomic<bool> g_resetPending{ false };
 // VarState data revision captured this frame (render thread only). Keys per-frame caches so a new
 // snapshot, incident, verdict or match reset always invalidates them.
 uint32_t g_frameDataRevision = 0;
+uint64_t g_frameNamesRevision = 0; // roster + teams revisions of this frame (names in summaries)
 bool g_scrollToSelection = false;
 int g_lastScalePreset = 1;
 
@@ -135,6 +136,15 @@ int Utf8Len(unsigned char c) {
     return 1;
 }
 
+// Length of the character at q, never stepping over the terminator of a truncated sequence
+int Utf8LenAt(const char* q) {
+    const int n = Utf8Len(static_cast<unsigned char>(*q));
+    for (int i = 1; i < n; ++i) {
+        if (q[i] == '\0') return i;
+    }
+    return n;
+}
+
 float Measure(Txt t, const char* s, const char* e = nullptr) {
     const Face fc = FaceOf(t);
     return fc.font->CalcTextSizeA(fc.size, FLT_MAX, 0.0f, s, e).x;
@@ -158,7 +168,7 @@ float TextFit(ImDrawList* dl, Txt t, ImVec2 p, float maxW, ImU32 col, const char
     const char* end = s;
     float w = 0.0f;
     for (const char* q = s; *q;) {
-        const int n = Utf8Len(static_cast<unsigned char>(*q));
+        const int n = Utf8LenAt(q);
         const float cw = fc.font->CalcTextSizeA(fc.size, FLT_MAX, 0.0f, q, q + n).x;
         if (w + cw + ellW > maxW) break;
         w += cw;
@@ -179,7 +189,7 @@ float Tracked(ImDrawList* dl, ImVec2 p, ImU32 col, const char* s, bool draw = tr
     float x = p.x;
     bool any = false;
     for (const char* q = s; *q;) {
-        const int n = Utf8Len(static_cast<unsigned char>(*q));
+        const int n = Utf8LenAt(q);
         if (draw) dl->AddText(fc.font, fc.size, Snap(ImVec2(x, p.y)), col, q, q + n);
         x += fc.font->CalcTextSizeA(fc.size, FLT_MAX, 0.0f, q, q + n).x + track;
         q += n;
@@ -189,6 +199,26 @@ float Tracked(ImDrawList* dl, ImVec2 p, ImU32 col, const char* s, bool draw = tr
 }
 
 float TrackedW(const char* s) { return Tracked(nullptr, ImVec2(0, 0), 0, s, false); }
+
+// Tracked caption limited to maxW with a trailing ellipsis. Returns the drawn width.
+float TrackedFit(ImDrawList* dl, ImVec2 p, ImU32 col, const char* s, float maxW, Txt t = Txt::Caption) {
+    if (Tracked(nullptr, p, col, s, false, t) <= maxW) return Tracked(dl, p, col, s, true, t);
+    const Face fc = FaceOf(t);
+    const float track = Uf(0.9f);
+    static const char* kEll = "\xE2\x80\xA6";
+    const float ellW = fc.font->CalcTextSizeA(fc.size, FLT_MAX, 0.0f, kEll).x;
+    float x = p.x;
+    for (const char* q = s; *q;) {
+        const int n = Utf8LenAt(q);
+        const float cw = fc.font->CalcTextSizeA(fc.size, FLT_MAX, 0.0f, q, q + n).x;
+        if (x - p.x + cw + track + ellW > maxW) break;
+        dl->AddText(fc.font, fc.size, Snap(ImVec2(x, p.y)), col, q, q + n);
+        x += cw + track;
+        q += n;
+    }
+    dl->AddText(fc.font, fc.size, Snap(ImVec2(x, p.y)), col, kEll);
+    return x - p.x + ellW;
+}
 
 // PT-BR uses decimal comma
 void FormatMeters(char* out, size_t n, float v) {
@@ -664,8 +694,19 @@ void RenderCollapsedPill(float vw, float vh, const VarVerdict& pending, const Ve
     (void)vh;
     const float margin = U(20);
     const size_t poolCount = pool.Count();
-    const std::string pillSummaryStr = poolCount > 0 ? g_controller.FormatPoolSummary(pool) : std::string(Tr(pending.summary));
-    const char* pillSummary = pillSummaryStr.c_str();
+    // Rebuilt only when the pool or the language changes (no per-frame string building while collapsed)
+    static std::string s_pillCache;
+    static uint64_t s_pillKey = ~0ULL;
+    const uint64_t pillKey = (static_cast<uint64_t>(pool.sequence) << 24) ^ (static_cast<uint64_t>(poolCount) << 16) ^
+                             (static_cast<uint64_t>(pool.CardCount()) << 8) ^
+                             (static_cast<uint64_t>(i18n::GetLanguage() == Language::English ? 1 : 0) << 7) ^
+                             (static_cast<uint64_t>(pending.sequence) << 40) ^ (pool.hasPlayDecision ? 0x40ULL : 0ULL) ^
+                             (g_frameNamesRevision * 0x9E3779B97F4A7C15ULL);
+    if (pillKey != s_pillKey) {
+        s_pillKey = pillKey;
+        s_pillCache = poolCount > 0 ? g_controller.FormatPoolSummary(pool) : std::string(Tr(pending.summary));
+    }
+    const char* pillSummary = s_pillCache.c_str();
     const bool armed = pending.armed || poolCount > 0;
     const bool pad = InputManager::PreferPadGlyphs();
     const float h = U(44);
@@ -895,9 +936,7 @@ void RenderIncidentCard(ImDrawList* dl, float contentW, VarState& state) {
     dl->AddCircleFilled(ImVec2(p.x + pad + U(4), y1 + row1H * 0.5f), U(4), sev, 12);
     const float titleMaxW = std::max(U(40), contentW - pad * 2 - zoneW - U(26));
     // Title uses tracked caption in primary colour (clipped)
-    dl->PushClipRect(ImVec2(p.x + pad + U(14), y1 - U(2)), ImVec2(p.x + pad + U(14) + titleMaxW, y1 + row1H + U(2)), true);
-    Tracked(dl, ImVec2(p.x + pad + U(14), y1), C::Text, title);
-    dl->PopClipRect();
+    TrackedFit(dl, ImVec2(p.x + pad + U(14), y1), C::Text, title, titleMaxW);
 
     // Row 2: offender -> victim  [camera] [swap]
     const float btn = U(34);
@@ -1106,13 +1145,14 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
         const int leftDef = (tel.teamAttackDir[0] < 0.0f) ? 0 : 1;
         auto chip = [&](bool left, int teamIdx) {
             const char* sn = g_controller.TeamShortName(teamIdx);
-            const float tw = TrackedW(sn);
+            const float maxTw = std::max(U(24), (end.x - pos.x) * 0.5f - U(16) - U(27));
+            const float tw = std::min(TrackedW(sn), maxTw);
             const float cw = U(8) + U(8) + tw + U(8);
             const float ch = U(20);
             const ImVec2 a(left ? pos.x + U(8) : end.x - U(8) - cw, pos.y + U(8));
             dl->AddRectFilled(a, ImVec2(a.x + cw, a.y + ch), IM_COL32(8, 12, 18, 190), U(kRadChip));
             dl->AddCircleFilled(ImVec2(a.x + U(8) + U(3), a.y + ch * 0.5f), U(4), RgbToImU32(teams[teamIdx].primaryColor), 12);
-            Tracked(dl, ImVec2(a.x + U(19), a.y + (ch - LineH(Txt::Caption)) * 0.5f), C::Text, sn);
+            TrackedFit(dl, ImVec2(a.x + U(19), a.y + (ch - LineH(Txt::Caption)) * 0.5f), C::Text, sn, maxTw);
         };
         chip(true, leftDef);
         chip(false, 1 - leftDef);
@@ -1292,7 +1332,7 @@ void RenderSquadPage(ImDrawList* dl, float contentW, float maxPanelH, const Verd
 void RenderOptionsPage(ImDrawList* dl, float contentW, const HudConfig& cfg, bool mouseMoved, VarState& state) {
     const int sel = g_controller.SelectedIndex();
     const float rowH = U(40);
-    const float valueW = U(118);
+    const float valueW = U(140);
 
     auto rowStart = [&](int idx, bool* hov) -> ImVec2 {
         const ImVec2 rp = ImGui::GetCursorScreenPos();
@@ -1367,7 +1407,7 @@ void RenderControlsPage(ImDrawList* dl, float contentW, float maxPanelH, bool mo
     const bool capturing = g_controller.IsCapturingBinding();
     const uint64_t now = GetTickCount64();
 
-    const float labelW = std::floor(contentW * 0.40f);
+    const float labelW = std::floor(contentW * 0.46f);
     const float gap = U(4);
     const float rowH = U(32);
     const float rowGap = U(2);
@@ -1534,15 +1574,32 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
     }
 
     bool updatingExistingInPool = false;
+    bool replacingPlayInPool = false;
     if (g_controller.DraftAction() == VarAction::EditCard) {
         VarVerdict probe{};
         probe.action = VarAction::EditCard;
         probe.directCardEdit = g_controller.DraftDirectCardMode();
         probe.offenderSlot = g_controller.DraftOffenderSlot();
+        probe.offenderRosterIdx = g_controller.CurrentRosterOf(g_controller.DraftOffenderSlot());
         probe.sourceEventId = g_controller.DraftSourceEventId();
         updatingExistingInPool = (pool.FindSameKey(probe) != nullptr);
     } else {
         updatingExistingInPool = pool.hasPlayDecision && pool.playDecision.action != VarAction::None;
+        const bool samePlay = g_controller.DraftSourceEventId() != 0 &&
+                              pool.playDecision.sourceEventId == g_controller.DraftSourceEventId();
+        // Cancel of the stopped-for foul and a foul on another play live together (nothing is replaced)
+        const VarAction da = g_controller.DraftAction();
+        auto carriesFoul = [](VarAction a) {
+            return a == VarAction::ConvertToPenalty || a == VarAction::ConvertToFreeKick ||
+                   a == VarAction::RetroactivePenalty || a == VarAction::RetroactiveFreeKick;
+        };
+        const bool draftLiveCancel = (da == VarAction::OverturnCancel) && g_controller.DraftTargetsLive();
+        const bool poolLiveCancel = pool.playDecision.action == VarAction::OverturnCancel && pool.playDecision.targetsLiveSetPlay;
+        const bool coexist = ((draftLiveCancel && carriesFoul(pool.playDecision.action)) ||
+                              (poolLiveCancel && carriesFoul(da))) &&
+                             pool.playDecision.sourceEventId != g_controller.DraftSourceEventId();
+        if (coexist) updatingExistingInPool = false;
+        replacingPlayInPool = updatingExistingInPool && !samePlay;
     }
 
     const int sel = g_controller.SelectedIndex();
@@ -1574,7 +1631,8 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
             dl->AddRectFilled(bp, ImVec2(bp.x + contentW, bp.y + bh), hov ? C::AccentHi : C::Accent, U(kRadCtl));
             if (isSel) dl->AddRect(ImVec2(bp.x - U(3), bp.y - U(3)), ImVec2(bp.x + contentW + U(3), bp.y + bh + U(3)),
                                    WithAlpha(C::Accent, 0.55f), U(kRadCtl) + U(3), 0, std::max(1.5f, Uf(2.0f)));
-            const char* lbl = updatingExistingInPool ? Tr("Atualizar no pool") : Tr("Adicionar ao pool");
+            const char* lbl = replacingPlayInPool ? Tr("Substituir decisão")
+                            : updatingExistingInPool ? Tr("Atualizar decisão") : Tr("Confirmar decisão");
             const float lw = Measure(Txt::Strong, lbl);
             Text(dl, Txt::Strong, ImVec2(bp.x + (contentW - lw) * 0.5f, bp.y + (bh - LineH(Txt::Strong)) * 0.5f), IM_COL32(255, 255, 255, 255), lbl);
             const float gh = U(20);
@@ -1695,7 +1753,9 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
         const bool hasYel = (cv.targetCard == CardKind::Yellow) || (cv.directCardEdit && cv.directYellows > 0 && cv.directReds == 0);
         const ImU32 col = hasRed ? C::Red : hasYel ? C::Yellow : C::Neutral;
         rowTexts[rowCount] = g_controller.FormatSummaryOf(cv);
-        rows[rowCount] = PoolRow{ false, cv.sequence, ce.order, col, Tr("CARTÃO"), rowTexts[rowCount].c_str() };
+        // A cancel kept next to a foul on another play only removes its card and marks the call as cancelled
+        const char* tag = (cv.action == VarAction::OverturnCancel) ? Tr("ANULAÇÃO") : Tr("CARTÃO");
+        rows[rowCount] = PoolRow{ false, cv.sequence, ce.order, col, tag, rowTexts[rowCount].c_str() };
         ++rowCount;
     }
     if (rowCount > cardStart + 1) {
@@ -1817,11 +1877,39 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
     ImGui::Dummy(ImVec2(contentW, cardH + U(10)));
 }
 
+void RenderConfirmToast(float vw, float vh) {
+    uint64_t age = 0;
+    const char* msg = g_controller.ConfirmToast(GetTickCount64(), age);
+    if (!msg) return;
+    const float t = static_cast<float>(age);
+    const float total = static_cast<float>(VarHudController::kConfirmToastMs);
+    const float a = std::clamp(std::min(t / 160.0f, (total - t) / 380.0f), 0.0f, 1.0f);
+    const float rise = (1.0f - std::min(t / 160.0f, 1.0f)) * U(10);
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const float textW = Measure(Txt::Strong, msg);
+    const float h = U(40);
+    const float iconW = U(22);
+    const float w = std::min(vw - U(40), U(18) + iconW + U(10) + textW + U(20));
+    const ImVec2 p(std::floor((vw - w) * 0.5f), std::floor(vh * 0.80f + rise));
+    const ImVec2 e(p.x + w, p.y + h);
+    dl->AddRectFilled(ImVec2(p.x, p.y + U(3)), ImVec2(e.x, e.y + U(3)), WithAlpha(IM_COL32(0, 0, 0, 255), 0.35f * a), U(kRadCard));
+    dl->AddRectFilled(p, e, WithAlpha(IM_COL32(16, 34, 26, 255), 0.97f * a), U(kRadCard));
+    dl->AddRect(p, e, WithAlpha(C::Green, 0.60f * a), U(kRadCard), 0, 1.0f);
+    // Check mark
+    const ImVec2 c(p.x + U(18) + iconW * 0.5f, p.y + h * 0.5f);
+    dl->AddCircleFilled(c, iconW * 0.5f, WithAlpha(C::Green, a), 20);
+    const float k = iconW * 0.22f;
+    dl->AddLine(ImVec2(c.x - k, c.y), ImVec2(c.x - k * 0.25f, c.y + k * 0.8f), WithAlpha(IM_COL32(10, 20, 14, 255), a), std::max(1.5f, Uf(2.2f)));
+    dl->AddLine(ImVec2(c.x - k * 0.25f, c.y + k * 0.8f), ImVec2(c.x + k * 1.1f, c.y - k * 0.8f), WithAlpha(IM_COL32(10, 20, 14, 255), a), std::max(1.5f, Uf(2.2f)));
+    TextFit(dl, Txt::Strong, ImVec2(p.x + U(18) + iconW + U(10), p.y + (h - LineH(Txt::Strong)) * 0.5f),
+            w - (U(18) + iconW + U(10)) - U(14), WithAlpha(C::Text, a), msg);
+}
+
 void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& pool) {
     const HudConfig cfg = g_controller.Config();
     const auto& tel = g_controller.Telemetry();
     const auto& teams = g_controller.Teams();
-    const float panelW = std::clamp(U(440), 340.0f, vw * 0.42f);
+    const float panelW = std::min(std::max(U(440), 340.0f), std::max(vw * 0.42f, 240.0f));
     const float margin = U(20);
     const float maxPanelH = std::max(340.0f, vh - 2.0f * margin);
     const float posX = cfg.dockLeft ? margin : (vw - margin - panelW);
@@ -1852,14 +1940,15 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& poo
             float x = hp.x + bw + U(14);
             const float ty = hp.y + (hh - LineH(Txt::Strong)) * 0.5f;
             const float barH = U(16);
+            const float reservedR = Measure(Txt::Small, "vs") + U(16) + U(14) + Measure(Txt::Body, "00:00") + hh + U(30) + U(18);
+            const float tagMaxW = std::max(U(40), (contentW - (x - hp.x) - reservedR) * 0.5f);
             auto teamTag = [&](int t, bool barLeft) {
                 const char* sn = g_controller.TeamShortName(t);
                 if (barLeft) {
                     dl->AddRectFilled(ImVec2(x, hp.y + (hh - barH) * 0.5f), ImVec2(x + U(3), hp.y + (hh + barH) * 0.5f), RgbToImU32(teams[t].primaryColor), U(1.5f));
                     x += U(9);
                 }
-                Text(dl, Txt::Strong, ImVec2(x, ty), C::Text, sn);
-                x += Measure(Txt::Strong, sn);
+                x += TextFit(dl, Txt::Strong, ImVec2(x, ty), tagMaxW, C::Text, sn);
                 if (!barLeft) {
                     x += U(6);
                     dl->AddRectFilled(ImVec2(x, hp.y + (hh - barH) * 0.5f), ImVec2(x + U(3), hp.y + (hh + barH) * 0.5f), RgbToImU32(teams[t].primaryColor), U(1.5f));
@@ -1933,7 +2022,7 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& poo
         const float bodyTopY = ImGui::GetCursorPosY();
         if (hasPitch && s_restH[restKey] > 0.0f) {
             const float avail = (maxPanelH - ImGui::GetStyle().WindowPadding.y - bodyTopY - s_restH[restKey]) / pitchScale;
-            radarH = std::max(U(112), std::min(radarH, avail));
+            radarH = std::max(U(72), std::min(radarH, avail));
         }
 
         // 4. Page body
@@ -2030,7 +2119,7 @@ bool VarHudRenderer::EnsureFonts(float viewportH) {
     if (n > 0 && n < MAX_PATH) WideCharToMultiByte(CP_UTF8, 0, winDirW, -1, winDir, sizeof(winDir), nullptr, nullptr);
     else std::snprintf(winDir, sizeof(winDir), "C:\\Windows");
 
-    static const ImWchar kRanges[] = { 0x0020, 0x00FF, 0x2013, 0x2014, 0x2022, 0x2022, 0x2026, 0x2026, 0 };
+    static const ImWchar kRanges[] = { 0x0020, 0x024F, 0x2013, 0x2014, 0x2022, 0x2022, 0x2026, 0x2026, 0 };
     auto load = [&](const char* file, float px) -> ImFont* {
         char path[MAX_PATH * 3];
         std::snprintf(path, sizeof(path), "%s\\Fonts\\%s", winDir, file);
@@ -2112,6 +2201,7 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
     // Single mutex lock + revision-cached players/teams/history/sync/markers (0 heap allocs on steady frames)
     state.CaptureHudRenderSnapshot(s_renderSnap);
     g_frameDataRevision = s_renderSnap.historyRev;
+    g_frameNamesRevision = (static_cast<uint64_t>(s_renderSnap.rosterRev) << 32) ^ s_renderSnap.teamsRev;
     const LiveTelemetry& tel = s_renderSnap.tel;
     const VarVerdict& pending = s_renderSnap.pending;
     const VerdictPool& pool = s_renderSnap.pool;
@@ -2150,6 +2240,9 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
         }
         g_controller.HandleAction(act, state);
     }
+    if (!actions.empty()) {
+        state.CaptureHudRenderSnapshot(s_renderSnap);
+    }
 
     state.SetInManualReplay(g_controller.IsInManualReplay());
     state.SetPanelFocused(g_controller.IsFocused());
@@ -2179,7 +2272,12 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
         state.SetMouseOverPanel(false);
     }
 
+    RenderConfirmToast(viewportW, viewportH);
+
     if (F.body) ImGui::PopFont();
+    // A navigation scroll request only applies to the frame it was made for (pages without the selected row
+    // drawn would otherwise keep it and jump later)
+    g_scrollToSelection = false;
 }
 
 } // namespace var_mod

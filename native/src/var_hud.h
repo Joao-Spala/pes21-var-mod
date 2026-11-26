@@ -123,6 +123,9 @@ public:
     const char* ControlsMessage() const; // translated, nullptr when expired
     bool ControlsMessageIsError() const { return controlsMsgError_; }
     const char* PoolNoticeMessage() const; // translated, nullptr when expired
+    // Confirmation toast after a decision is confirmed: translated text and age in ms (nullptr when none)
+    const char* ConfirmToast(uint64_t nowMs, uint64_t& outAgeMs) const;
+    static constexpr uint64_t kConfirmToastMs = 2600;
     // Summaries rebuilt in the CURRENT language from the verdict fields (stored text is only for logs)
     std::string FormatSummaryOf(const VarVerdict& v) const;
     std::string FormatPoolSummary(const VerdictPool& pool) const;
@@ -170,6 +173,10 @@ public:
     int32_t   DraftOffenderSlot() const { return draftOffenderSlot_; }
     int32_t   DraftVictimSlot() const { return draftVictimSlot_; }
     uint32_t  DraftSourceEventId() const { return draftSourceEventId_; }
+    bool      DraftTargetsLive() const { return draftTargetsLive_; }
+    int8_t    CurrentRosterOf(int32_t slot) const {
+        return (slot >= 0 && slot < 22) ? players_[static_cast<size_t>(slot)].rosterIdx : static_cast<int8_t>(-1);
+    }
     int32_t   DraftBenefitedTeam() const { return draftBenefitedTeam_; }
     Vec3      DraftSpotPos() const { return draftSpotPos_; }
     int       DraftSpotPreset() const { return draftSpotPreset_; }
@@ -236,6 +243,7 @@ private:
     int      selectedMarkerIndex_   = -1;
     bool     manualMarkerLock_      = false;
     bool     restoreMarkerAfterLive_ = false; // context was switched to the stopped-for foul
+    bool     detectedOffenderUnknown_ = false; // roles inverted with no known opponent: offender to be picked
     float    lastTrackedCursorTime_ = -1000.0f;
     uint64_t seekLockUntilMs_       = 0;
     int      radarZoomOverride_     = -1; // -1 = Auto, 0 = Full Pitch, 1 = Box Zoom
@@ -268,6 +276,8 @@ private:
     bool        controlsMsgError_   = false;
     uint64_t    controlsMsgUntilMs_ = 0;
     const char* poolNoticeMsg_      = nullptr; // PT-BR key, translated on read
+    const char* toastMsg_           = nullptr; // PT-BR key, translated on read
+    uint64_t    toastStartMs_       = 0;
     uint64_t    poolNoticeUntilMs_  = 0;
     void SetControlsMessage(const char* ptMsg, bool isError);
 

@@ -122,12 +122,12 @@ __declspec(dllexport) void __cdecl var_shutdown() {
     if (!g_initialized.exchange(false, std::memory_order_acq_rel)) {
         return;
     }
-    VAR_LOG_INF("var_core.dll shutting down");
-    var_mod::Dx11Hook::Shutdown();
-    var_mod::InputManager::UninstallNativeInputBlockHooks();
-    var_mod::InputManager::UninstallXInputHook();
-    var_mod::MatchHooks::Uninstall();
-    var_mod::Logger::Shutdown();
+    // Unhooking while the game runs is never safe (a thread may be inside a detour or trampoline, the
+    // HeapGuard runs inside the allocator). "Shutdown" therefore only turns the VAR off; the module is pinned.
+    g_initialized.store(true, std::memory_order_release);
+    var_mod::VarState::Instance().SetEnabled(false);
+    VAR_LOG_INF("var_shutdown: VAR disabled (hooks stay installed until the process exits)");
+    var_mod::Logger::Flush();
 }
 
 __declspec(dllexport) void __cdecl var_set_enabled(int enabled) {

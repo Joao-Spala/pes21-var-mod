@@ -222,6 +222,20 @@ void TestRealPes2021BinaryAobs() {
                     "Engine must read TeamTactics side sign as a signed byte (movsbl +0x254)");
     }
 
+    // TeamInfo double buffer: the publish callback copies 0x5E * 0x80 = TeamInfo_BufferSize bytes from
+    // A + 0x2F08 (write buffer = read cache + TeamInfo_BufferSize) to A + 8 (read cache)
+    {
+        const auto* tp = reinterpret_cast<const uint8_t*>(bufBase + static_cast<uintptr_t>(0x14041BE40ULL - textVaBase));
+        const uint8_t expect[] = { 0x48, 0x8D, 0x91, 0x08, 0x2F, 0x00, 0x00, 0x48, 0x8D, 0x41, 0x08, 0xB9, 0x5E, 0x00, 0x00, 0x00 };
+        EXPECT_TRUE(std::memcmp(tp, expect, sizeof(expect)) == 0, "TeamInfo publish copy must be write (A+0x2F08) -> read (A+8)");
+        EXPECT_EQ(static_cast<size_t>(0x5E * 0x80), static_cast<size_t>(Offsets::TeamInfo_BufferSize),
+                  "TeamInfo buffer size must match the publish copy");
+        EXPECT_EQ(static_cast<size_t>(0x2F08 - 0x8), static_cast<size_t>(Offsets::TeamInfo_BufferSize),
+                  "Write buffer must be read cache + TeamInfo_BufferSize");
+        EXPECT_TRUE(Offsets::TeamInfo_PlayerRecordsBase + Offsets::MatchRoster_MaxPlayers * Offsets::TeamInfo_PlayerRecordStride <=
+                    Offsets::TeamInfo_BufferSize, "40 player records must fit in one TeamInfo buffer");
+    }
+
     // Vanishing spray reset: the three calls must land on the accessor, the reset and the commit
     {
         auto callTarget = [&](uintptr_t bufSite, uint64_t siteVa) -> uint64_t {
@@ -2483,6 +2497,114 @@ void TestFinalReviewRegressions() {
     b.time60Hz = 1000.0f;
     b.matchPhase = 2;
     EXPECT_TRUE(!VarHudController::IsSameStoppage(a, b), "Other half is another foul");
+
+    // Cancel of the stopped-for foul + a foul marked on an earlier play coexist in one pool, in either order
+    for (int order = 0; order < 2; ++order) {
+        st.ResetMatch();
+        VarVerdict cancel{};
+        cancel.action = VarAction::OverturnCancel;
+        cancel.sourceEventId = 21;
+        cancel.offenderSlot = 6;
+        cancel.origOffenderSlot = 6;
+        cancel.origCard = CardKind::Yellow;
+        cancel.targetCard = CardKind::None;
+        cancel.targetsLiveSetPlay = true;
+        VarVerdict earlier{};
+        earlier.action = VarAction::RetroactiveFreeKick;
+        earlier.offenderSlot = 14;
+        earlier.benefitedTeam = 0;
+        earlier.targetCard = CardKind::Simple;
+        if (order == 0) { st.AddToVerdictPool(cancel); st.AddToVerdictPool(earlier); }
+        else            { st.AddToVerdictPool(earlier); st.AddToVerdictPool(cancel); }
+        const VerdictPool cp = st.PeekVerdictPool();
+        EXPECT_TRUE(cp.hasPlayDecision && cp.playDecision.action == VarAction::RetroactiveFreeKick,
+                    "The earlier foul is the play (its set play replaces the current one)");
+        EXPECT_EQ(cp.CardCount(), static_cast<size_t>(1), "The cancel stays as a card / ledger entry");
+        const CardPoolEntry* ce = nullptr;
+        for (const auto& e : cp.cardEntries) if (e.active) ce = &e;
+        EXPECT_TRUE(ce && ce->verdict.action == VarAction::OverturnCancel && !ce->verdict.targetsLiveSetPlay,
+                    "The kept cancel must not restart anything by itself");
+    }
+    st.ResetMatch();
+
+    // Live cancel already in the pool + an edit of event 30 + a conversion of event 30: the edit is folded
+    {
+        st.ResetMatch();
+        VarVerdict cancel{};
+        cancel.action = VarAction::OverturnCancel;
+        cancel.sourceEventId = 21;
+        cancel.offenderSlot = 6;
+        cancel.targetsLiveSetPlay = true;
+        st.AddToVerdictPool(cancel);
+        VarVerdict e30{};
+        e30.action = VarAction::EditCard;
+        e30.sourceEventId = 30;
+        e30.offenderSlot = 2;
+        e30.origCard = CardKind::Yellow;
+        e30.targetCard = CardKind::Red;
+        st.AddToVerdictPool(e30);
+        VarVerdict conv{};
+        conv.action = VarAction::ConvertToPenalty;
+        conv.sourceEventId = 30;
+        conv.offenderSlot = 2;
+        conv.origCard = CardKind::Yellow;
+        conv.targetCard = CardKind::Red;
+        st.AddToVerdictPool(conv);
+        const VerdictPool cp = st.PeekVerdictPool();
+        EXPECT_TRUE(cp.hasPlayDecision && cp.playDecision.sourceEventId == 30, "Conversion is the play");
+        int edits30 = 0, cancels = 0;
+        for (const auto& e : cp.cardEntries) {
+            if (!e.active) continue;
+            if (e.verdict.sourceEventId == 30) ++edits30;
+            if (e.verdict.action == VarAction::OverturnCancel) ++cancels;
+        }
+        EXPECT_EQ(edits30, 0, "Edit of the converted event must be folded (card reverted once)");
+        EXPECT_EQ(cancels, 1, "Cancel stays as its own entry");
+        st.ResetMatch();
+    }
+
+    // Direct edits are keyed by slot AND player: the substitute in the same slot is another entry
+    VarVerdict d1{};
+    d1.action = VarAction::EditCard;
+    d1.directCardEdit = true;
+    d1.offenderSlot = 5;
+    d1.offenderRosterIdx = 4;
+    d1.directYellows = 1;
+    VarVerdict d2 = d1;
+    d2.offenderRosterIdx = 17;
+    st.AddToVerdictPool(d1);
+    st.AddToVerdictPool(d2);
+    EXPECT_EQ(st.PeekVerdictPool().CardCount(), static_cast<size_t>(2), "Two players of one slot are two direct edits");
+    st.AddToVerdictPool(d2);
+    EXPECT_EQ(st.PeekVerdictPool().CardCount(), static_cast<size_t>(2), "Same player again replaces his own edit");
+    st.ResetMatch();
+
+    // Real counts read back from the game win over the estimate
+    VarEvent ev2{};
+    ev2.type = VarEventType::Foul;
+    ev2.offenderSlot = 8;
+    ev2.cardKind = CardKind::Simple;
+    ev2.matchTick = 500;
+    const uint32_t id2 = st.PushEvent(ev2);
+    VarVerdict moved{};
+    moved.action = VarAction::EditCard;
+    moved.sourceEventId = id2;
+    moved.offenderSlot = 9;
+    moved.targetCard = CardKind::Yellow;
+    moved.ledgerYellows = 2;
+    moved.ledgerReds = 1;
+    st.UpdateEventAfterVerdict(moved);
+    evs = st.GetRecentEvents(8);
+    EXPECT_EQ(static_cast<int>(evs.front().offenderYellowsAfter), 2, "Ledger yellows from the game");
+    EXPECT_EQ(static_cast<int>(evs.front().offenderRedsAfter), 1, "Second yellow shows as sent off");
+    st.ResetMatch();
+
+    // Arming is refused while the VAR is off
+    st.SetEnabled(false);
+    st.AddToVerdictPool(d1);
+    EXPECT_TRUE(st.PeekVerdictPool().Empty(), "No decision can be armed with the VAR off");
+    st.SetEnabled(true);
+    st.ResetMatch();
 
     MarkPass("TestFinalReviewRegressions");
 }

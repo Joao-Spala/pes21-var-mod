@@ -160,6 +160,9 @@ namespace Offsets {
     constexpr uintptr_t TeamInfo_ActiveRosterIdx    = 0x04;  // int32_t[11] (0..39, live substitutions)
     constexpr uintptr_t TeamInfo_PlayerRecordsBase  = 0xA8;
     constexpr uintptr_t TeamInfo_PlayerRecordStride = 0x128;
+    // Read cache (A + 8, what GMATCH + 0x1978 points at) and write buffer (A + 0x2F08) are 0x2F00 bytes each;
+    // 0x14041BE40 copies write -> read on every MatchControl frame (0x1404225E3)
+    constexpr uintptr_t TeamInfo_BufferSize         = 0x2F00;
 
     // PlayerAction (0x140A6EAE0, 0x140A6EBB0, 0x1405B9400, 0x140A1B120)
     constexpr uintptr_t PlayerAction_ActionId    = 0x01; // uint8_t

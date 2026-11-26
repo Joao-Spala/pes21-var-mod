@@ -3,6 +3,7 @@
 #include "aob_scanner.h"
 #include "game_structs.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_dx11.h"
 #include "inline_hook.h"
 #include "input_manager.h"
@@ -273,7 +274,16 @@ void RenderOverlayOnSwapChainLocked(IDXGISwapChain* swapChain, bool alreadyPolle
 
         ImGui::NewFrame();
 
-        VarHudRenderer::RenderFrame(vw, vh);
+        ImGuiErrorRecoveryState recoverTo;
+        ImGui::ErrorRecoveryStoreState(&recoverTo);
+        try {
+            VarHudRenderer::RenderFrame(vw, vh);
+        } catch (...) {
+            // Out of memory while building HUD text: unwind ImGui's stacks to this point and finish the frame
+            // normally, so the back buffer views below are always released
+            ImGui::ErrorRecoveryTryToRecoverState(&recoverTo);
+            VarHudRenderer::TickIdle();
+        }
 
         ImGui::Render();
         g_context->OMSetRenderTargets(1, &rtv, nullptr);
@@ -313,7 +323,12 @@ HRESULT __fastcall Detour_GrSwapChainPresent(void* grSwapChain, UINT syncInterva
             std::unique_lock<std::mutex> lock(g_renderMutex, std::try_to_lock);
             // Re-check under the lock: Shutdown may have destroyed ImGui between the first test and here
             if (lock.owns_lock() && !g_stopRequested.load(std::memory_order_acquire)) {
-                RenderOverlayOnSwapChainLocked(swapChain, polledThisFrame);
+                try {
+                    RenderOverlayOnSwapChainLocked(swapChain, polledThisFrame);
+                } catch (...) {
+                    // Out of memory while building HUD strings: skip this frame, never throw into the engine
+                    VarHudRenderer::TickIdle();
+                }
             }
         }
     }

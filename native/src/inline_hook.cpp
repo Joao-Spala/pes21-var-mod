@@ -378,12 +378,9 @@ bool InlineHook::Uninstall() {
         return false;
     }
 
-    if (stubMem_) {
-        if (!FreeSlotToPool(stubMem_)) {
-            VirtualFree(stubMem_, 0, MEM_RELEASE);
-        }
-        stubMem_ = nullptr;
-    }
+    // The stub (relay + trampoline) is never freed or reused: another thread may still be executing the
+    // trampoline it entered before the unpatch. Keeping a few dozen bytes per hook is the safe trade.
+    stubMem_ = nullptr;
     trampoline_ = nullptr;
     originalBytes_.clear();
     target_ = 0;
