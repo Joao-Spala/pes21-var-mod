@@ -87,7 +87,7 @@ constexpr ImU32 Red        = IM_COL32(236, 76, 84, 255);
 constexpr ImU32 Green      = IM_COL32(52, 199, 112, 255);
 constexpr ImU32 Orange     = IM_COL32(248, 150, 64, 255);
 constexpr ImU32 Suspect    = IM_COL32(255, 214, 102, 255);
-// Roles of the play: colours no kit and no UI state uses (red is a common kit, blue is the UI focus colour)
+// Roles of the play: away from the two colours that misled (red = a common kit, blue = the UI focus colour)
 constexpr ImU32 RoleOffender = IM_COL32(255, 138, 48, 255);
 constexpr ImU32 RoleFouled   = IM_COL32(64, 214, 232, 255);
 constexpr ImU32 Neutral    = IM_COL32(176, 186, 202, 255);
@@ -684,9 +684,12 @@ void PanelShadow(ImVec2 a, ImVec2 b, float radius) {
     // half, so the result matches the old stacked fills while the GPU blends only a band around the panel
     for (int i = 1; i <= 6; ++i) {
         const float g = Uf(1.6f) * static_cast<float>(i);
-        const float h = g * 0.5f;
-        bg->AddRect(ImVec2(a.x - h, a.y - h + Uf(2.0f)), ImVec2(b.x + h, b.y + h + Uf(3.0f)),
-                    IM_COL32(0, 0, 0, 22 - i * 3), radius + h, 0, g);
+        // Outer bounds = the old filled layer; thick enough that the inner edge always lies under the panel,
+        // also at the bottom where the layer is offset downwards
+        const float t = g + Uf(4.0f) + 1.0f;
+        const float h = t * 0.5f;
+        bg->AddRect(ImVec2(a.x - g + h, a.y - g + Uf(2.0f) + h), ImVec2(b.x + g - h, b.y + g + Uf(3.0f) - h),
+                    IM_COL32(0, 0, 0, 22 - i * 3), std::max(0.0f, radius + g - h), 0, t);
     }
 }
 
@@ -1212,18 +1215,40 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     const int32_t activeOff = configure ? g_controller.DraftOffenderSlot() : g_controller.DetectedOffenderSlot();
     const int32_t activeVic = configure ? g_controller.DraftVictimSlot() : g_controller.DetectedVictimSlot();
 
+    const char* offsideLabel = nullptr;
+    ImVec2 offsideLabelPos(0, 0);
     if (sync.hasSnapshot && std::fabs(spot.x) >= 22.0f) {
         const int defTeam = ((spot.x >= 0.0f) == (tel.teamAttackDir[0] >= 0.0f)) ? 0 : 1;
         float ox = 0.0f;
         if (VarHudController::ComputeSecondLastDefenderX(sync.snapshot, defTeam, tel.teamAttackDir[defTeam], ox)) {
             DrawDashedLine(dl, toScreen(ox, -d.halfWidth), toScreen(ox, d.halfWidth), C::Offside, lineTh, U(5), U(4));
-            // Label beside the line, just under the team chips row (the zoom chip owns the bottom corner)
+            // Label beside the line (never across it), drawn after the players where it covers the fewest of them:
+            // either side of the line, under the chips row, mid-height or above the zoom chip
             const ImVec2 lt = toScreen(ox, -d.halfWidth);
-            const char* offTxt = Tr("IMPEDIMENTO");
-            const float otw = TrackedW(offTxt);
-            const float olx = std::clamp(lt.x + U(4), pos.x + U(4), end.x - U(4) - otw);
-            const float oly = std::max(lt.y, pos.y) + U(8) + U(20) + U(6);
-            Tracked(dl, ImVec2(olx, oly), C::Offside, offTxt);
+            offsideLabel = Tr("IMPEDIMENTO");
+            const float lw = TrackedW(offsideLabel) + U(10);
+            const float lh = LineH(Txt::Caption) + U(4);
+            const float rows[3] = { std::max(lt.y, pos.y) + U(8) + U(20) + U(6), (pos.y + end.y - lh) * 0.5f,
+                                    end.y - U(8) - U(22) - U(6) - lh };
+            const float sides[2] = { lt.x + U(6), lt.x - U(6) - lw };
+            float bestCost = 1e30f;
+            for (int si = 0; si < 2; ++si) {
+                for (int ri = 0; ri < 3; ++ri) {
+                    const float x = sides[si], y = rows[ri];
+                    float cost = static_cast<float>(si * 3 + ri); // preferred order on ties
+                    if (x < pos.x + U(4) || x + lw > end.x - U(4)) cost += 1e6f;
+                    for (int s2 = 0; s2 < 22; ++s2) {
+                        if (!sync.snapshot.playerOnPitch[s2]) continue;
+                        const ImVec2 tp = toScreen(sync.snapshot.playerPos[s2].x, sync.snapshot.playerPos[s2].z);
+                        const float rr = U(11);
+                        const float ow = std::min(x + lw, tp.x + rr) - std::max(x, tp.x - rr);
+                        const float oh = std::min(y + lh, tp.y + rr) - std::max(y, tp.y - rr);
+                        if (ow > 0.0f && oh > 0.0f) cost += ow * oh;
+                    }
+                    if (cost < bestCost) { bestCost = cost; offsideLabelPos = ImVec2(x, y); }
+                }
+            }
+            offsideLabelPos.x = std::clamp(offsideLabelPos.x, pos.x + U(4), std::max(pos.x + U(4), end.x - U(4) - lw));
         }
     }
 
@@ -1235,6 +1260,24 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
         dl->AddCircle(sp, cr + Uf(2.0f), C::Yellow, 20, t);
         dl->AddLine(ImVec2(sp.x - cr, sp.y - cr), ImVec2(sp.x + cr, sp.y + cr), C::Yellow, t);
         dl->AddLine(ImVec2(sp.x + cr, sp.y - cr), ImVec2(sp.x - cr, sp.y + cr), C::Yellow, t);
+    }
+
+    // Team chips (which team defends each goal), under the players so they never hide a token or a tag
+    {   // also in the zoomed view: which goal belongs to whom
+        const int leftDef = (tel.teamAttackDir[0] < 0.0f) ? 0 : 1;
+        auto chip = [&](bool left, int teamIdx) {
+            const char* sn = g_controller.TeamShortName(teamIdx);
+            const float maxTw = std::max(U(24), (end.x - pos.x) * 0.5f - U(16) - U(27));
+            const float tw = std::min(TrackedW(sn), maxTw);
+            const float cw = U(8) + U(8) + tw + U(8);
+            const float ch = U(20);
+            const ImVec2 a(left ? pos.x + U(8) : end.x - U(8) - cw, pos.y + U(8));
+            dl->AddRectFilled(a, ImVec2(a.x + cw, a.y + ch), IM_COL32(8, 12, 18, 190), U(kRadChip));
+            dl->AddCircleFilled(ImVec2(a.x + U(8) + U(3), a.y + ch * 0.5f), U(4), RgbToImU32(teams[teamIdx].primaryColor), 12);
+            TrackedFit(dl, ImVec2(a.x + U(19), a.y + (ch - LineH(Txt::Caption)) * 0.5f), C::Text, sn, maxTw);
+        };
+        chip(true, leftDef);
+        chip(false, 1 - leftDef);
     }
 
     // Motion history of the frame on screen (trails, headings), refreshed only when that frame changes
@@ -1458,22 +1501,11 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
         dl->AddCircle(bp, br, IM_COL32(10, 14, 20, 235), 0, std::max(1.0f, Uf(1.3f)));
     }
 
-    // Team chips (which team defends each goal) on the full pitch
-    {   // also in the zoomed view: which goal belongs to whom
-        const int leftDef = (tel.teamAttackDir[0] < 0.0f) ? 0 : 1;
-        auto chip = [&](bool left, int teamIdx) {
-            const char* sn = g_controller.TeamShortName(teamIdx);
-            const float maxTw = std::max(U(24), (end.x - pos.x) * 0.5f - U(16) - U(27));
-            const float tw = std::min(TrackedW(sn), maxTw);
-            const float cw = U(8) + U(8) + tw + U(8);
-            const float ch = U(20);
-            const ImVec2 a(left ? pos.x + U(8) : end.x - U(8) - cw, pos.y + U(8));
-            dl->AddRectFilled(a, ImVec2(a.x + cw, a.y + ch), IM_COL32(8, 12, 18, 190), U(kRadChip));
-            dl->AddCircleFilled(ImVec2(a.x + U(8) + U(3), a.y + ch * 0.5f), U(4), RgbToImU32(teams[teamIdx].primaryColor), 12);
-            TrackedFit(dl, ImVec2(a.x + U(19), a.y + (ch - LineH(Txt::Caption)) * 0.5f), C::Text, sn, maxTw);
-        };
-        chip(true, leftDef);
-        chip(false, 1 - leftDef);
+    if (offsideLabel) {
+        const float lw = TrackedW(offsideLabel) + U(10);
+        const float lh = LineH(Txt::Caption) + U(4);
+        dl->AddRectFilled(offsideLabelPos, ImVec2(offsideLabelPos.x + lw, offsideLabelPos.y + lh), IM_COL32(8, 12, 18, 200), U(kRadChip));
+        Tracked(dl, ImVec2(offsideLabelPos.x + U(5), offsideLabelPos.y + U(2)), C::Offside, offsideLabel);
     }
 
     dl->AddRectFilled(zoomP, zoomE, overZoom ? IM_COL32(30, 38, 52, 230) : IM_COL32(8, 12, 18, 190), U(kRadChip));
@@ -2474,7 +2506,8 @@ bool VarHudRenderer::EnsureFonts(float viewportW, float viewportH) {
     if (n > 0 && n < MAX_PATH) WideCharToMultiByte(CP_UTF8, 0, winDirW, -1, winDir, sizeof(winDir), nullptr, nullptr);
     else std::snprintf(winDir, sizeof(winDir), "C:\\Windows");
 
-    static const ImWchar kRanges[] = { 0x0020, 0x017F, 0x0218, 0x021B, 0x2013, 0x2014, 0x2022, 0x2022, 0x2026, 0x2026, 0 };
+    static const ImWchar kRanges[] = { 0x0020, 0x017F, 0x018F, 0x018F, 0x01A0, 0x01A1, 0x01AF, 0x01B0, 0x01CD, 0x01D4,
+                                       0x0218, 0x021B, 0x0259, 0x0259, 0x2013, 0x2014, 0x2022, 0x2022, 0x2026, 0x2026, 0 };
     // Legibility floor for small screens (720p, 4:3, 800x600): the UI scale keeps the panel's share of the screen,
     // but text below these sizes stops being readable. Only small scales are affected.
     auto load = [&](const char* file, float px, float minPx) -> ImFont* {

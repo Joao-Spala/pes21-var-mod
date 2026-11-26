@@ -106,6 +106,13 @@ function Compile-Object($srcFile, $extraFlags) {
 }
 
 $ImguiHeadersTime = (Get-ChildItem -LiteralPath $ImguiDir -Filter "*.h" | Measure-Object -Property LastWriteTimeUtc -Maximum).Maximum
+# The imgui object cache is also keyed on its compile flags: a flag change rebuilds those objects
+$ImguiFlagsKey = "-O2 -Os -Wno-deprecated-declarations"
+$ImguiFlagsStamp = Join-Path $BuildTmp "imgui_flags.txt"
+if (-not (Test-Path $ImguiFlagsStamp) -or ((Get-Content -LiteralPath $ImguiFlagsStamp -Raw).Trim() -ne $ImguiFlagsKey)) {
+    Get-ChildItem -LiteralPath $BuildTmp -Filter "imgui*.o" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Set-Content -LiteralPath $ImguiFlagsStamp -Value $ImguiFlagsKey -Encoding ascii
+}
 $ImguiObjs = @()
 foreach ($f in $ImguiSources) {
     # Size over speed for Dear ImGui: same HUD frame time measured (62 us), 52 KB smaller DLL
