@@ -1,5 +1,23 @@
 # Changelog
 
+## v4.4.5
+
+Verificação tripla final por três ângulos novos (temporização do executor contra o binário, detecção e classificação de lances, empacotamento e documentação) e rodada de convergência.
+
+- **Asserts do ImGui realmente desligados**: o cache do build não recompilava a imgui quando um header mudava, então a desativação dos asserts da v4.4.2 nunca chegou à DLL publicada. Agora a imgui é recompilada quando seus headers mudam, e a DLL saiu sem nenhum assert (`_wassert` ausente).
+- **Bola parada nunca fica pela metade**: em `SetPlayReady` a engine pode sair do estado sem montar a cobrança (troca de jogador, menu). O mod agora confere isso no fim do mesmo tick, antes do registro do cartão, e desfaz tudo o que escreveu (cartões, cobrança e falta da partida, campos da FSM). A decisão volta a esperar.
+- **Linha do tempo fiel**:
+  - a falta apitada depois de uma vantagem fica no momento do contato e não no apito
+  - cada marcador oficial usa o lance mais forte da jogada
+  - duas disputas simultâneas não viram dezenas de marcadores
+  - a zona (dentro ou fora da área) usa o lado do campo do momento do lance, também depois do intervalo
+- **Vantagem para o time certo**: o time beneficiado vem de quem sofreu o contato.
+- **Simulação**: o jogador que simulou é o infrator do lance, e a área considerada é a do adversário.
+- **Pacote reenfileirado** se junta ao que foi armado no meio tempo, sem perder nada.
+- **Build**: a DLL só vai para `dist/` depois que os testes passam.
+- **Instalador**: um erro no menu (por exemplo, o jogo aberto) volta ao menu em vez de fechar. A desinstalação guarda o `var_mod.ini` com os atalhos. O `sider.ini` mantém o final de arquivo original.
+- **README**: instalação manual com `lua.enabled = 1`, limite de 32 ajustes de cartão e aviso de jogo aberto.
+
 ## v4.4.4
 
 Nova verificação tripla: simulação passo a passo de oito combinações de decisões, auditoria da máquina de estados do painel, revisão das mudanças da v4.4.3 contra o executável (o buffer duplo do TeamInfo foi confirmado em todos os pontos) e uma rodada de convergência.
@@ -8,13 +26,13 @@ Nova verificação tripla: simulação passo a passo de oito combinações de de
 - **Saída de bola nunca é trocada** por uma decisão do VAR.
 - **Segundo amarelo e vermelho direto**: um jogador com vermelho direto ainda pode receber o amarelo da falta, sem terceiro amarelo nem segundo vermelho. O histórico mostra o cartão realmente dado, e o segundo amarelo usa o aviso vermelho.
 - **Painel**:
-  - confirmar sem jogador mostra o aviso na própria tela de decisão e leva ao campo Jogador;
-  - clicar no campinho não muda mais o reinício de uma anulação;
-  - `[` e `]` não trocam o lance com uma decisão aberta;
-  - o mouse não troca mais a seleção da página recém-aberta;
-  - redecidir o mesmo lance aparece como "Atualizar" e não como "Substituir";
-  - uma decisão recusada avisa em vez de dizer que foi enviada;
-  - as teclas longas cabem na página de controles;
+  - confirmar sem jogador mostra o aviso na própria tela de decisão e leva ao campo Jogador
+  - clicar no campinho não muda mais o reinício de uma anulação
+  - `[` e `]` não trocam o lance com uma decisão aberta
+  - o mouse não troca mais a seleção da página recém-aberta
+  - redecidir o mesmo lance aparece como "Atualizar" e não como "Substituir"
+  - uma decisão recusada avisa em vez de dizer que foi enviada
+  - as teclas longas cabem na página de controles
   - os textos do pool não são mais refeitos a cada frame.
 - **Robustez**: a validação do buffer do time acontece antes de consumir o pacote, que continua armado até poder ser aplicado. O reenfileiramento tem limite.
 

@@ -184,6 +184,9 @@ struct VarEvent {
     // A slot changes owner on substitution: cards and fouls must follow the player, not the slot.
     int8_t       offenderRosterIdx    = -1;
     int8_t       victimRosterIdx      = -1;
+    // Signed distance to the offender's defending box with the sides of the moment it was recorded
+    float        boxDistM             = 0.0f;
+    bool         boxDistValid         = false;
 
     Vec3         pos{};
     bool         wasAdvantage         = false;
@@ -221,6 +224,10 @@ struct DetectedIncident {
     float        contactDistM = 99.0f;
     bool         insideBox    = false;
     bool         nearFoul     = false; // the victim went down from a contact with an identified opponent
+    // Signed distance to the relevant penalty box with the sides of THAT moment (sides swap at half-time)
+    float        boxDistM     = 0.0f;
+    bool         boxDistValid = false;
+    float        lastSeenTime60Hz = 0.0f; // last frame of this duel (clustering window)
 };
 
 struct PlayerSlotInfo {
@@ -667,12 +674,14 @@ public:
     // Consumes only if gate(pool, user) returns true; the gate runs under the same lock as the consume, so no
     // edit can slip in between the check and the take.
     bool ConsumeVerdictPoolIf(bool (*gate)(const VerdictPool&, void*), void* user, VerdictPool& outPool);
-    // Puts back a consumed pool that wrote nothing, only into the same match and only if the user has not
-    // armed anything since (a newer pool always wins). Returns true when restored.
+    // Puts back a consumed pool that wrote nothing, only into the same match. Items armed since then win on the
+    // same key and on the play slot. Returns true when restored.
     bool RequeueVerdictPool(const VerdictPool& pool, uint32_t matchGeneration);
     // Removes a pending play decision armed in an earlier stoppage (cards of the pool stay). Returns true
     // when one was removed. Overturns of an already taken call are kept (they only revoke a card).
     bool DropStalePlayDecision(uint32_t currentStoppage);
+    // Offender of the strongest physical incident in [time - window, time] of this half, or -1
+    int32_t RecentIncidentOffender(int32_t matchPhase, float time60Hz, float window60Hz) const;
     void UpdateEventAfterVerdict(const VarVerdict& applied);
     void IncrementInterventions();
     void SetPostApplyBanner(const char* text, uint64_t durationMs = 4500, BannerStyle style = BannerStyle::Applied);

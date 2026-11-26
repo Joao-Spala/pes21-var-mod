@@ -3,7 +3,7 @@
 -- Escopo: exclusivamente partidas offline (Exibicao, Master Liga, BAL, Copas, Ligas).
 -- Performance: carregamento nativo sob demanda (lazy load em set_teams / overlay_on) -> 0.00 ms no boot do jogo!
 
-local m = { version = "4.4.4" }
+local m = { version = "4.4.5" }
 
 local ffi = ffi
 local cdef_registered = false

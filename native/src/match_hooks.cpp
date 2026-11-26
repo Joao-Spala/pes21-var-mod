@@ -1011,6 +1011,22 @@ struct ExecCtx {
     uint32_t    expectSnapId   = 0;
     bool        injected       = false; // the request was written into the JudgeResult
     bool        playOrigRevoked = false; // the play's original card was revoked by hand
+    // Undo data of a SetPlayReady injection, verified right after this tick's MainTick (before the commit)
+    bool        verifyAfterTick = false;
+    bool        undoActive      = false;
+    struct CardUndo { uint8_t* rec; uint8_t* wbRec; uint8_t y; uint8_t r; };
+    // Worst case per injection: 1 revocation + 2 writes per moved card edit (32) + 1 dropped-offender card
+    std::array<CardUndo, 2 * kMaxCardPoolEntries + 8> cardUndo{};
+    size_t      cardUndoCount   = 0;
+    bool        cardUndoOverflow = false;
+    uint8_t     savedJudge[sizeof(RawSetPlayInfo) + sizeof(RawFoulInfo)]{};
+    uint8_t     savedMiSetPlay[0x30]{};
+    uint8_t     savedMiFoul[0x3C]{};
+    uint8_t     savedWbSetPlay[0x30]{};
+    uint8_t     savedWbFoul[0x3C]{};
+    bool        savedWbValid    = false;
+    uint32_t    savedQuickRestart = 0;
+    uint64_t    savedKickerCache  = 0;
     bool        baselineValid  = false; // offender's cards right before the injection (engine commit check)
     uint8_t     baselineYellows = 0;
     uint8_t     baselineReds    = 0;
@@ -1091,6 +1107,13 @@ bool SetPlayerCardsAbsolute(uint8_t* gmatch, int32_t slot, uint8_t newYellows, u
     const uint8_t* cur = wbRec;
     const uint8_t oldYellows = cur[Offsets::PlayerRecord_Yellows];
     const uint8_t oldReds = cur[Offsets::PlayerRecord_Reds];
+    if (g_exec.undoActive) {
+        if (g_exec.cardUndoCount < g_exec.cardUndo.size()) {
+            g_exec.cardUndo[g_exec.cardUndoCount++] = ExecCtx::CardUndo{ rec, wbRec, oldYellows, oldReds };
+        } else {
+            g_exec.cardUndoOverflow = true;
+        }
+    }
     rec[Offsets::PlayerRecord_Yellows] = newYellows;
     rec[Offsets::PlayerRecord_Reds] = newReds;
     wbRec[Offsets::PlayerRecord_Yellows] = newYellows;
@@ -1592,6 +1615,12 @@ void FillRevEvent(uint8_t* gmatch, uint8_t* matchInfo, int32_t offenderSlot, int
     ev.cardKind      = card;
     ev.pos           = req.spot;
     ev.reviewedByVar = true;
+    {
+        const PitchDims bd = ReadPitchDims(gmatch);
+        const int32_t bTeam = IsValidSlot(offenderSlot) ? SlotToTeam(offenderSlot) : (1 - req.benefitedTeam);
+        ev.boxDistM = PitchGeometry::SignedDistanceToDefendingBox(bd, ev.pos, ReadTeamAttackDir(gmatch, bTeam));
+        ev.boxDistValid = true;
+    }
     std::snprintf(ev.varNote, sizeof(ev.varNote), "%s",
                   (req.spKind == SetPlayKind::PenaltyKick) ? "Pênalti pelo VAR" : "Falta pelo VAR");
     g_exec.pushRevEvent = true;
@@ -1686,8 +1715,28 @@ void FinalizeInjectedFoul(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo) {
 bool ExecPerform(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, bool fromFallback) {
     if (g_exec.req.kind == ExecRequestKind::InjectSetPlay) {
         if (fromFallback && !g_fnEnterOutOfPlay) return false;
+        // In SetPlayReady the handler can still leave without EnterOutOfPlay after FinalizeFrame (substitution /
+        // menu exits 0x14044DEA5, 0x14044E167). Everything written this tick is then undone after MainTick.
+        if (!fromFallback && g_exec.startFsmState == 0x1A) {
+            g_exec.verifyAfterTick = true;
+            g_exec.undoActive = true;
+            g_exec.cardUndoCount = 0;
+            g_exec.cardUndoOverflow = false;
+            std::memcpy(g_exec.savedJudge, fsm + Offsets::MatchFSM_JudgeResult, sizeof(g_exec.savedJudge));
+            std::memcpy(g_exec.savedMiSetPlay, matchInfo + Offsets::MatchInfo_SetPlayInfo, sizeof(g_exec.savedMiSetPlay));
+            std::memcpy(g_exec.savedMiFoul, matchInfo + Offsets::MatchInfo_FoulInfo, sizeof(g_exec.savedMiFoul));
+            uint8_t* wb = GetMatchInfoWriteBuffer(matchInfo);
+            g_exec.savedWbValid = (wb != nullptr);
+            if (wb) {
+                std::memcpy(g_exec.savedWbSetPlay, wb + Offsets::MatchInfo_SetPlayInfo, sizeof(g_exec.savedWbSetPlay));
+                std::memcpy(g_exec.savedWbFoul, wb + Offsets::MatchInfo_FoulInfo, sizeof(g_exec.savedWbFoul));
+            }
+            g_exec.savedQuickRestart = *reinterpret_cast<const uint32_t*>(fsm + Offsets::MatchFSM_QuickRestartFlag);
+            g_exec.savedKickerCache = *reinterpret_cast<const uint64_t*>(fsm + Offsets::MatchFSM_KickerCache);
+        }
         ApplyPlanCards(gmatch);
         FinalizeInjectedFoul(fsm, gmatch, matchInfo);
+        g_exec.undoActive = false;
         if (g_exec.req.foulValid) {
             g_exec.baselineValid = ReadCards(gmatch, g_exec.req.offenderSlot, g_exec.req.offenderRoster,
                                              g_exec.baselineYellows, g_exec.baselineReds);
@@ -1913,6 +1962,57 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
         return;
     }
     ExecFinish(true, nullptr);
+}
+
+// Right after the original MainTick of the injection tick, before CommitToRegistry: the SetPlayReady handler must
+// have called EnterOutOfPlay (queue reset reason 1). Otherwise every write of this tick is undone (cards, MatchInfo
+// set play / foul in both buffers, FSM fields, JudgeResult) and the pool goes back to wait: no half-applied
+// set play, no card without its decision. The JudgeResult only reaches the commit through EnterOutOfPlay.
+void ExecVerifyAfterMainTick(uint8_t* fsm) {
+    if (!g_exec.verifyAfterTick) return;
+    g_exec.verifyAfterTick = false;
+    if (fsm != g_exec.fsm || !IsValidPtr(fsm)) return;
+    const int32_t reason = *reinterpret_cast<const int32_t*>(fsm + Offsets::MatchFSM_QueueResetReason);
+    if (reason == 1) return; // EnterOutOfPlay ran: the decision goes on to the native commit
+    uint8_t* gmatch = GetGmatch();
+    uint8_t* matchInfo = GetMatchInfo(gmatch);
+    // A partial card undo followed by a retry would card some players twice: if the log overflowed, the cards
+    // stay as written and the pool is not retried (the set play data is still restored below)
+    const bool undoCards = !g_exec.cardUndoOverflow;
+    for (size_t i = undoCards ? g_exec.cardUndoCount : 0; i-- > 0;) {
+        const auto& u = g_exec.cardUndo[i];
+        if (u.rec) { u.rec[Offsets::PlayerRecord_Yellows] = u.y; u.rec[Offsets::PlayerRecord_Reds] = u.r; }
+        if (u.wbRec) { u.wbRec[Offsets::PlayerRecord_Yellows] = u.y; u.wbRec[Offsets::PlayerRecord_Reds] = u.r; }
+    }
+    if (IsValidPtr(matchInfo)) {
+        std::memcpy(matchInfo + Offsets::MatchInfo_SetPlayInfo, g_exec.savedMiSetPlay, sizeof(g_exec.savedMiSetPlay));
+        std::memcpy(matchInfo + Offsets::MatchInfo_FoulInfo, g_exec.savedMiFoul, sizeof(g_exec.savedMiFoul));
+        if (g_exec.savedWbValid) {
+            if (uint8_t* wb = GetMatchInfoWriteBuffer(matchInfo)) {
+                std::memcpy(wb + Offsets::MatchInfo_SetPlayInfo, g_exec.savedWbSetPlay, sizeof(g_exec.savedWbSetPlay));
+                std::memcpy(wb + Offsets::MatchInfo_FoulInfo, g_exec.savedWbFoul, sizeof(g_exec.savedWbFoul));
+            }
+        }
+    }
+    *reinterpret_cast<uint32_t*>(fsm + Offsets::MatchFSM_QuickRestartFlag) = g_exec.savedQuickRestart;
+    *reinterpret_cast<uint64_t*>(fsm + Offsets::MatchFSM_KickerCache) = g_exec.savedKickerCache;
+    // Back to the engine's own resting JudgeResult (its FoulInfo half is not all zeros: 0x18 / 9 / 4 sentinels)
+    std::memcpy(fsm + Offsets::MatchFSM_JudgeResult, g_exec.savedJudge, sizeof(g_exec.savedJudge));
+    VAR_LOG_WRN("VAR pool seq=%u: SetPlayReady left without EnterOutOfPlay (queue reason 0x%X), tick undone",
+                g_exec.poolSeq, reason);
+    const VerdictPool pool = g_exec.pool;
+    const uint32_t gen = g_exec.matchGen;
+    const uint32_t seq = g_exec.poolSeq;
+    ExecResetToIdle();
+    if (g_requeueSeq != seq) { g_requeueSeq = seq; g_requeueCount = 0; }
+    if (undoCards && ++g_requeueCount <= 3 && VarState::Instance().RequeueVerdictPool(pool, gen)) {
+        ExecEnter(ExecState::Cooldown, kExecCooldownTicks);
+        return;
+    }
+    VarState::Instance().SetPostApplyBanner(undoCards ? "DECISÃO NÃO APLICADA  ·  O lance já mudou"
+                                                      : "REINÍCIO NÃO APLICADO  ·  Os cartões foram aplicados, o lance já mudou",
+                                            4800, BannerStyle::Amber);
+    ExecEnter(ExecState::Cooldown, kExecCooldownTicks);
 }
 
 // Runs at the top of every MainTick (sim thread). The only place that changes g_exec.state, together with
@@ -2309,11 +2409,19 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
             ev.matchTick = matchTick;
             ev.setPlayKind = SetPlayKind::FreeKick;
             ev.wasAdvantage = true;
-            // Advantage is played by the team in possession
-            if (IsValidSlot(g_recentBallOwnerSlot)) ev.benefitedTeam = SlotToTeam(g_recentBallOwnerSlot);
+            // Advantage goes to the team that suffered the foul: the opponents of the offender of the contact
+            // that just happened. Only without a detected contact, the team in possession.
+            const int32_t advOff = VarState::Instance().RecentIncidentOffender(matchPhase, time60Hz, 90.0f);
+            if (IsValidSlot(advOff)) ev.benefitedTeam = 1 - SlotToTeam(advOff);
+            else if (IsValidSlot(g_recentBallOwnerSlot)) ev.benefitedTeam = SlotToTeam(g_recentBallOwnerSlot);
             uint8_t* ball = *reinterpret_cast<uint8_t**>(gmatch + Offsets::GMATCH_Ball);
             if (IsValidPtr(ball)) {
                 std::memcpy(&ev.pos, ball + Offsets::Ball_PosVec3, sizeof(Vec3));
+            }
+            {
+                const PitchDims bd = ReadPitchDims(gmatch);
+                ev.boxDistM = PitchGeometry::SignedDistanceToDefendingBox(bd, ev.pos, ReadTeamAttackDir(gmatch, 1 - ev.benefitedTeam));
+                ev.boxDistValid = true;
             }
             VarState::Instance().PushEvent(ev);
         }
@@ -2388,7 +2496,9 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
         }
     }
 
-    return g_hookMainTick.Original<FnMainTick>()(matchFsm, runCtx, arg3);
+    const uint32_t result = g_hookMainTick.Original<FnMainTick>()(matchFsm, runCtx, arg3);
+    ExecVerifyAfterMainTick(static_cast<uint8_t*>(matchFsm));
+    return result;
 }
 
 // ============================================================================
@@ -2492,6 +2602,12 @@ void __fastcall Detour_UpdateFoulCounters(void* matchControl, void* matchInfo, v
                     }
                 }
 
+                if (gmatch) {
+                    const PitchDims bd = ReadPitchDims(gmatch);
+                    const int32_t bTeam = IsValidSlot(ev.offenderSlot) ? SlotToTeam(ev.offenderSlot) : (1 - ev.benefitedTeam);
+                    ev.boxDistM = PitchGeometry::SignedDistanceToDefendingBox(bd, ev.pos, ReadTeamAttackDir(gmatch, bTeam));
+                    ev.boxDistValid = true;
+                }
                 const uint32_t id = VarState::Instance().PushEvent(ev);
                 g_forceRosterSyncNextTick = true;
 

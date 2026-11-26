@@ -266,6 +266,9 @@ namespace Offsets {
     constexpr uintptr_t MatchFSM_KickerCache       = 0x4954; // uint64_t (0x000000FF000000FF clears)
     constexpr uintptr_t MatchFSM_JudgeResult       = 0x49C0; // RawSetPlayInfo (+0x00) + RawFoulInfo (+0x30)
     constexpr uintptr_t MatchFSM_JudgeFoulInfo     = 0x49F0; // RawFoulInfo
+    // Reason of the last queue reset (0x1404529F0 writes its edx here): 1 = EnterOutOfPlay / RebuildSetPlay,
+    // 0xE / 0xF = the two SetPlayReady handler exits that skip EnterOutOfPlay (0x140453F10, 0x140453370)
+    constexpr uintptr_t MatchFSM_QueueResetReason  = 0x874;
     // Judge snapshot pool = JudgeResult + 0x148 (AddSnapshot 0x140A82070 at 0x14050E887, ctor 0x1404437BE).
     // FSM working state (+0x2790) is copied to MatchControl + 0x6E0 (0x14044402D) and CommitToRegistry copies
     // MatchControl + 0x2A58 over MatchInfo + 0x17AC (0x140423196 -> 0x140A3D3B0). So a foul snapshot id is only

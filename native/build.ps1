@@ -88,8 +88,9 @@ function Compile-Object($srcFile, $extraFlags) {
     if (Test-Path $objFile) {
         $srcTime = (Get-Item $srcFile).LastWriteTimeUtc
         $objTime = (Get-Item $objFile).LastWriteTimeUtc
-        # Always rebuild project sources when headers may have changed; cache third_party imgui
-        if ($srcFile.StartsWith($ImguiDir) -and $objTime -ge $srcTime) {
+        # Always rebuild project sources when headers may have changed. imgui objects are cached, but only
+        # while they are newer than the imgui sources AND headers (imconfig.h changes IM_ASSERT for all of them)
+        if ($srcFile.StartsWith($ImguiDir) -and $objTime -ge $srcTime -and $objTime -ge $ImguiHeadersTime) {
             $needBuild = $false
         }
     }
@@ -104,6 +105,7 @@ function Compile-Object($srcFile, $extraFlags) {
     return $objFile
 }
 
+$ImguiHeadersTime = (Get-ChildItem -LiteralPath $ImguiDir -Filter "*.h" | Measure-Object -Property LastWriteTimeUtc -Maximum).Maximum
 $ImguiObjs = @()
 foreach ($f in $ImguiSources) {
     $ImguiObjs += Compile-Object $f @("-Wno-deprecated-declarations")
@@ -114,7 +116,8 @@ foreach ($f in $CoreSources) {
     $CoreObjs += Compile-Object $f @("-Werror=return-type")
 }
 
-$OutDll = Join-Path $DistCore "var_core.dll"
+$OutDll = Join-Path $BuildTmp "var_core.dll"
+$DistDll = Join-Path $DistCore "var_core.dll"
 Write-Host "[link] $OutDll"
 $LinkArgs = @(
     "-shared",
@@ -133,16 +136,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Erro ao linkar var_core.dll"
 }
 
-# Stage standalone distribution files
-Copy-Item -Force (Join-Path $RepoRoot "sider\modules\var_mod.lua") (Join-Path $DistMod "var_mod.lua")
-if (Test-Path (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.ps1")) {
-    Copy-Item -Force (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.ps1") (Join-Path $DistDir "VAR_Mod_Gerenciar.ps1")
-}
-if (Test-Path (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.bat")) {
-    Copy-Item -Force (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.bat") (Join-Path $DistDir "VAR_Mod_Gerenciar.bat")
-}
-
-Write-Host "[ok] var_core.dll pronta em: $OutDll"
+Write-Host "[ok] var_core.dll compilada em: $OutDll"
 
 if (-not $SkipTests) {
     $TestSrc = Join-Path $TestDir "test_var_core.cpp"
@@ -187,3 +181,14 @@ if (-not $SkipTests) {
         }
     }
 }
+
+# Stage the distribution only now: dist/ never holds an untested build (the installer copies from it)
+Copy-Item -Force $OutDll $DistDll
+Copy-Item -Force (Join-Path $RepoRoot "sider\modules\var_mod.lua") (Join-Path $DistMod "var_mod.lua")
+if (Test-Path (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.ps1")) {
+    Copy-Item -Force (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.ps1") (Join-Path $DistDir "VAR_Mod_Gerenciar.ps1")
+}
+if (Test-Path (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.bat")) {
+    Copy-Item -Force (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.bat") (Join-Path $DistDir "VAR_Mod_Gerenciar.bat")
+}
+Write-Host "[ok] Distribuicao pronta em: $DistDll"

@@ -1,6 +1,6 @@
-# PES 2021 - VAR Mod v4.4.4 (PT-BR & EN)
+# PES 2021 - VAR Mod v4.4.5 (PT-BR & EN)
 
-![Version](https://img.shields.io/badge/Version-v4.4.4-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.4.5-38BDF8?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Idiomas](https://img.shields.io/badge/Idiomas-PT--BR_%7C_English-2EA043?style=for-the-badge)
 ![Sider Compatible](https://img.shields.io/badge/Sider_7.3_%2F_BMPES_16.3-100%25_Compatible-F59E0B?style=for-the-badge)
@@ -24,19 +24,20 @@
 
 ### Instalação
 
-1. Baixe o **`PES2021_VAR_Mod_v4.4.4.zip`** na página de [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
-2. Feche o jogo e rode o **`VAR_Mod_Gerenciar.bat`**. No menu, escolha **`1 - Instalar ou atualizar`**.
-   - O instalador acha a pasta do Sider ou do BMPES (ou pede o caminho), copia os arquivos, ativa `luajit.ext.enabled = 1` e registra `lua.module = "var_mod.lua"` no `sider.ini`. Antes de mexer no `sider.ini`, ele cria um backup datado.
+1. Baixe o **`PES2021_VAR_Mod_v4.4.5.zip`** na página de [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
+2. Feche o jogo e rode o **`VAR_Mod_Gerenciar.bat`**. No menu, escolha **`1 - Instalar ou atualizar`**. Se o jogo estiver aberto, o instalador avisa e não mexe em nada.
+   - O instalador acha a pasta do Sider ou do BMPES (ou pede o caminho), copia os arquivos, ativa `lua.enabled = 1` e `luajit.ext.enabled = 1` e registra `lua.module = "var_mod.lua"` no `sider.ini`. Antes de mexer no `sider.ini`, ele cria um backup datado.
 3. Abra o jogo pelo **Sider** (no BMPES, pelo atalho do próprio patch). A DLL só carrega na primeira partida (ou ao abrir o menu do Sider), então a abertura do jogo não fica mais lenta.
 
 **Instalação manual:** copie `modules\var_mod.lua` para `<pasta do sider>\modules\` e `modules\var_mod\var_core.dll` para `<pasta do sider>\modules\var_mod\`. Depois adicione ao `sider.ini`:
 
 ```ini
+lua.enabled = 1
 luajit.ext.enabled = 1
 lua.module = "var_mod.lua"
 ```
 
-**Atualizar:** rode o instalador da versão nova e escolha a opção 1 de novo. **Desativar sem apagar:** opção 3. **Remover tudo:** opção 4 (apaga os arquivos e a linha `lua.module` do mod, e mantém `luajit.ext.enabled = 1`, que outros módulos do Sider também usam).
+**Atualizar:** rode o instalador da versão nova e escolha a opção 1 de novo. **Desativar sem apagar:** opção 3. **Remover tudo:** opção 4 (guarda o `var_mod.ini` com seus atalhos ao lado do `sider.ini`, apaga os arquivos e a linha `lua.module` do mod, e mantém `luajit.ext.enabled = 1`, que outros módulos do Sider também usam).
 
 ### Como usar
 
@@ -71,12 +72,12 @@ O controle só abre e recolhe o painel. Ele continua controlando o replay normal
 
 - **Painel VAR no Replay Manual**: abre ao entrar no replay da pausa, com barra de lances clicável, `Seek` nativo do replay 3D, `Play / Pause` e foco da câmera no infrator, na vítima ou na bola.
 - **Detecção de lances a 60 Hz**: carrinhos, quedas, divididas, trancos e os eventos oficiais de falta, pênalti, cartão e vantagem viram marcadores na barra do replay, com infrator, vítima, local e zona (`DENTRO` ou `FORA DA ÁREA`) já preenchidos.
-- **Pool de decisões compostas**: junte numa mesma revisão uma decisão de lance (no máximo 1 falta ou reinício por vez) e quantos ajustes de cartão quiser. Editar o mesmo lance de novo substitui a edição anterior, e lances diferentes do mesmo jogador ficam lado a lado. Tudo é aplicado de uma vez, em ordem, ao sair do replay.
+- **Pool de decisões compostas**: junte numa mesma revisão uma decisão de lance (no máximo 1 falta ou reinício por vez) e até 32 ajustes de cartão. Editar o mesmo lance de novo substitui a edição anterior, e lances diferentes do mesmo jogador ficam lado a lado. Tudo é aplicado de uma vez, em ordem, ao sair do replay.
 - **Decisões aplicadas na engine (`MatchFSM`)**: anular falta ou pênalti, converter em pênalti, inverter falta, falta ou pênalti retroativo, aplicar ou retirar cartão de qualquer jogador e bola parada (escanteio, tiro de meta ou lateral), inclusive com o cobrador já posicionado (`SetPlayReady`). O cartão aplicado pelo VAR nunca é contado duas vezes pela engine.
 - **Nomes, números e uniformes reais**: lidos da memória do jogo (`MatchRoster`), incluindo substituições ao vivo, avatar do Rumo ao Estrelato e uniformes licenciados ou editados (BMPES). Se o elenco não puder ser lido, o painel mostra `CASA` / `FORA`.
 - **Campo tático 2D**: escala `1:1` com zoom automático na área, linha do penúltimo defensor, contato infrator x vítima e clique no gramado para mover o local da cobrança.
 - **Atalhos e idioma**: remap de cada ação com 2 teclas, troca automática em conflito e proteção contra ficar sem atalho essencial. Interface em **Português (BR)** ou **English**, trocada na hora.
-- **Leve e seguro**: DLL de ~910 KB, hook nativo em `GrSwapChain::Present0` (sem dispositivo DX11 extra), texto nítido de 720p a 4K, somente partidas offline e nenhum arquivo do jogo alterado.
+- **Leve e seguro**: DLL de menos de 1 MB, hook nativo em `GrSwapChain::Present0` (sem dispositivo DX11 extra), texto nítido de 720p a 4K, somente partidas offline e nenhum arquivo do jogo alterado.
 
 ### Solução de problemas
 
@@ -99,19 +100,20 @@ Video assistant referee (**VAR**) for **eFootball PES 2021 (`v1.7.2.0`, Steam)**
 
 ### Installation
 
-1. Download **`PES2021_VAR_Mod_v4.4.4.zip`** from the [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) page and extract it anywhere.
-2. Close the game and run **`VAR_Mod_Gerenciar.bat`**. In the menu, pick **`1 - Instalar ou atualizar`** (install or update).
-   - The installer finds your Sider or BMPES folder (or asks for the path), copies the files, enables `luajit.ext.enabled = 1` and registers `lua.module = "var_mod.lua"` in `sider.ini`. It makes a timestamped backup of `sider.ini` first.
+1. Download **`PES2021_VAR_Mod_v4.4.5.zip`** from the [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) page and extract it anywhere.
+2. Close the game and run **`VAR_Mod_Gerenciar.bat`**. In the menu, pick **`1 - Instalar ou atualizar`** (install or update). If the game is still open, the installer says so and changes nothing.
+   - The installer finds your Sider or BMPES folder (or asks for the path), copies the files, enables `lua.enabled = 1` and `luajit.ext.enabled = 1` and registers `lua.module = "var_mod.lua"` in `sider.ini`. It makes a timestamped backup of `sider.ini` first.
 3. Launch the game through **Sider** (for BMPES, through the patch launcher). The DLL only loads on the first match (or when the Sider menu is opened), so game startup is not slowed down.
 
 **Manual install:** copy `modules\var_mod.lua` to `<sider folder>\modules\` and `modules\var_mod\var_core.dll` to `<sider folder>\modules\var_mod\`. Then add to `sider.ini`:
 
 ```ini
+lua.enabled = 1
 luajit.ext.enabled = 1
 lua.module = "var_mod.lua"
 ```
 
-**Update:** run the new version's installer and pick option 1 again. **Disable without deleting:** option 3. **Remove everything:** option 4 (deletes the files and the mod's `lua.module` line, and keeps `luajit.ext.enabled = 1`, which other Sider modules also use).
+**Update:** run the new version's installer and pick option 1 again. **Disable without deleting:** option 3. **Remove everything:** option 4 (keeps a copy of `var_mod.ini` with your shortcuts next to `sider.ini`, deletes the files and the mod's `lua.module` line, and keeps `luajit.ext.enabled = 1`, which other Sider modules also use).
 
 ### How to use
 
@@ -146,12 +148,12 @@ The gamepad only opens and collapses the panel and keeps controlling the replay.
 
 - **VAR panel in the Manual Replay**: opens when you enter the pause menu replay, with a clickable incident bar, native 3D replay `Seek`, `Play / Pause` and camera focus on the offender, the fouled player or the ball.
 - **60 Hz incident detection**: slide tackles, falls, challenges, shoulder charges and the official foul, penalty, card and advantage events become markers on the replay bar, with offender, fouled player, spot and zone (`INSIDE` or `OUTSIDE THE BOX`) already filled in.
-- **Composite decision pool**: combine one play decision (at most 1 foul or restart at a time) with as many card edits as you need in the same review. Editing the same play again replaces the previous edit, and different plays of the same player stay side by side. Everything is applied at once, in order, when you leave the replay.
+- **Composite decision pool**: combine one play decision (at most 1 foul or restart at a time) with up to 32 card edits in the same review. Editing the same play again replaces the previous edit, and different plays of the same player stay side by side. Everything is applied at once, in order, when you leave the replay.
 - **Decisions applied in the engine (`MatchFSM`)**: overturn a foul or penalty, upgrade to penalty, reverse a foul, retroactive free kick or penalty, show or remove a card for any player and set pieces (corner, goal kick or throw-in), including when the kicker is already standing over the ball (`SetPlayReady`). A card given by the VAR is never counted twice by the engine.
 - **Real names, numbers and kits**: read from game memory (`MatchRoster`), including live substitutions, Become a Legend avatar and licensed or edited kits (BMPES). If the squad cannot be read, the panel shows `HOME` / `AWAY`.
 - **2D tactical pitch**: `1:1` scale with automatic box zoom, second-to-last defender line, offender vs fouled contact and click-to-move restart spot.
 - **Shortcuts and language**: remap every action with 2 keys, automatic swap on conflict and a guard that never leaves an essential action unbound. UI in **English** or **Português (BR)**, switched instantly.
-- **Light and safe**: ~910 KB DLL, native `GrSwapChain::Present0` hook (no extra DX11 device), crisp text from 720p to 4K, offline matches only and no game file modified.
+- **Light and safe**: DLL under 1 MB, native `GrSwapChain::Present0` hook (no extra DX11 device), crisp text from 720p to 4K, offline matches only and no game file modified.
 
 ### Troubleshooting
 

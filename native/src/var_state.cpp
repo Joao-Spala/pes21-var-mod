@@ -609,18 +609,22 @@ void VarState::PushDetectedIncident(const DetectedIncident& inc) {
     if (inc.kind == IncidentKind::None || !IsValidSlot(inc.offenderSlot)) return;
 
     std::lock_guard<std::mutex> lock(mutex_);
-    // Temporal clustering (~1.2s = 72 ticks at 60Hz): merge consecutive frames of the same tackle/fall
-    if (incCount_ > 0) {
-        const size_t lastIdx = (incHead_ + kMaxIncidents - 1) % kMaxIncidents;
-        auto& prev = incidents_[lastIdx];
+    // Temporal clustering (~1.2s = 72 ticks at 60Hz after the duel was last seen): frames of the same
+    // tackle/fall merge into one incident even when another duel nearby alternates with it frame by frame
+    const size_t lookBack = std::min<size_t>(incCount_, 8);
+    for (size_t k = 0; k < lookBack; ++k) {
+        const size_t pIdx = (incHead_ + kMaxIncidents - 1 - k) % kMaxIncidents;
+        auto& prev = incidents_[pIdx];
         const bool sameHalf = IsPhaseCompatible(prev.matchPhase, inc.matchPhase);
-        const float dt = std::fabs(inc.time60Hz - prev.time60Hz);
+        const float lastSeen = std::max(prev.time60Hz, prev.lastSeenTime60Hz);
+        const float dt = std::fabs(inc.time60Hz - lastSeen);
         if (sameHalf && dt <= 72.0f) {
             // Same play only when it is the same pair of players: a different duel 3 m away is another incident
             const bool samePair =
                 (prev.offenderSlot == inc.offenderSlot && prev.victimSlot == inc.victimSlot) ||
                 (prev.offenderSlot == inc.victimSlot && prev.victimSlot == inc.offenderSlot);
             if (samePair) {
+                prev.lastSeenTime60Hz = std::max(lastSeen, inc.time60Hz);
                 const bool upgrade = (inc.priority > prev.priority) ||
                                      (inc.priority == prev.priority && inc.contactDistM < prev.contactDistM);
                 if (upgrade) {
@@ -633,6 +637,7 @@ void VarState::PushDetectedIncident(const DetectedIncident& inc) {
                     prev.contactDistM = inc.contactDistM;
                     prev.insideBox    = prev.insideBox || inc.insideBox;
                     prev.nearFoul     = prev.nearFoul || inc.nearFoul;
+                    if (inc.boxDistValid) { prev.boxDistM = inc.boxDistM; prev.boxDistValid = true; }
                     // Keep first high-severity impact timestamp unless upgrading from a weak contact
                     if (oldPriority < 55 || inc.priority >= oldPriority + 8) {
                         prev.time60Hz   = inc.time60Hz;
@@ -651,6 +656,7 @@ void VarState::PushDetectedIncident(const DetectedIncident& inc) {
     }
 
     incidents_[incHead_] = inc;
+    incidents_[incHead_].lastSeenTime60Hz = inc.time60Hz;
     incHead_ = (incHead_ + 1) % kMaxIncidents;
     if (incCount_ < kMaxIncidents) {
         ++incCount_;
@@ -899,6 +905,7 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
     const float span = winEndTime - winStartTime;
     if (span <= 1.0f) return;
 
+    auto storedOr = [](bool valid, float stored, float live) { return valid ? stored : live; };
     auto computeBoxDist = [this](int32_t offSlot, int32_t benefitedTeam, const Vec3& pos) -> float {
         int32_t offTeam = IsValidSlot(offSlot) ? SlotToTeam(offSlot) : (1 - benefitedTeam);
         if (offTeam != 0 && offTeam != 1) offTeam = 0;
@@ -924,7 +931,7 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         m.victimSlot      = ev.victimSlot;
         m.pos             = ev.pos;
         m.contactDistM    = 0.0f;
-        m.signedBoxDistM  = computeBoxDist(ev.offenderSlot, ev.benefitedTeam, ev.pos);
+        m.signedBoxDistM  = storedOr(ev.boxDistValid, ev.boxDistM, computeBoxDist(ev.offenderSlot, ev.benefitedTeam, ev.pos));
 
         if (ev.type == VarEventType::NoFoul && ev.reviewedByVar) {
             m.kind = IncidentKind::None;
@@ -954,6 +961,48 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         markers.push_back(m);
     }
 
+    // 1b. Official markers take the strongest physical incident of their play and move to its contact moment
+    // (the event is recorded at the whistle; a foul whistled after an advantage comes seconds after the contact)
+    std::vector<uint8_t> consumedInc(incCount_, 0);
+    {
+        size_t evMarker = 0;
+        for (size_t i = 0; i < eventCount_ && evMarker < markers.size(); ++i) {
+            const size_t eIdx = (eventHead_ + kMaxEvents - 1 - i) % kMaxEvents;
+            const auto& ev = events_[eIdx];
+            if (!IsPhaseCompatible(ev.matchPhase, winPhase)) continue;
+            if (ev.time60Hz < winStartTime - 15.0f || ev.time60Hz > winEndTime + 15.0f) continue;
+            ReplayMarker& om = markers[evMarker++];
+            const float lookBack = ev.wasAdvantage ? 600.0f : 90.0f;
+            int bestK = -1;
+            int32_t bestPrio = -1;
+            for (size_t k = 0; k < incCount_; ++k) {
+                if (consumedInc[k]) continue;
+                const auto& inc = incidents_[(incHead_ + kMaxIncidents - incCount_ + k) % kMaxIncidents];
+                if (!IsPhaseCompatible(inc.matchPhase, winPhase) || !IsValidSlot(inc.offenderSlot)) continue;
+                const float d = inc.time60Hz - ev.time60Hz;
+                if (d < -lookBack || d > 15.0f) continue;
+                const bool samePlayers = (!IsValidSlot(om.offenderSlot) && !IsValidSlot(om.victimSlot)) ||
+                                         om.offenderSlot == inc.offenderSlot || om.victimSlot == inc.victimSlot ||
+                                         om.offenderSlot == inc.victimSlot || om.victimSlot == inc.offenderSlot;
+                if (!samePlayers) continue;
+                if (inc.priority > bestPrio) { bestPrio = inc.priority; bestK = static_cast<int>(k); }
+            }
+            if (bestK < 0) continue;
+            consumedInc[static_cast<size_t>(bestK)] = 1;
+            const auto& inc = incidents_[(incHead_ + kMaxIncidents - incCount_ + static_cast<size_t>(bestK)) % kMaxIncidents];
+            if (!IsValidSlot(om.victimSlot) && IsValidSlot(inc.victimSlot) && inc.victimSlot != om.offenderSlot) {
+                om.victimSlot = inc.victimSlot;
+            }
+            if (!IsValidSlot(om.offenderSlot) && IsValidSlot(inc.offenderSlot)) {
+                om.offenderSlot = inc.offenderSlot;
+            }
+            if (inc.time60Hz < om.time60Hz && inc.time60Hz >= winStartTime) {
+                om.time60Hz = inc.time60Hz;
+                om.timelineNorm = std::clamp((om.time60Hz - winStartTime) / span, 0.0f, 1.0f);
+            }
+        }
+    }
+
     // 2. Physical engine incidents detected at 60Hz (Slide Tackle, Victim Fall, Stand Tackle, Body Charge)
     std::vector<ReplayMarker> detected;
     for (size_t i = 0; i < incCount_; ++i) {
@@ -963,26 +1012,18 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         if (inc.time60Hz < winStartTime || inc.time60Hz > winEndTime) continue;
         if (!IsValidSlot(inc.offenderSlot)) continue;
 
-        // If near an official event (<= 1.5s), enrich missing victimSlot on the official marker instead of duplicating
+        // Folded into an official marker above, or another frame of the same play as one (same players, close)
+        if (consumedInc[i]) continue;
         bool mergedIntoOfficial = false;
-        for (auto& om : markers) {
-            const bool samePlayers = (!IsValidSlot(om.offenderSlot) && !IsValidSlot(om.victimSlot)) ||
-                                     om.offenderSlot == inc.offenderSlot || om.victimSlot == inc.victimSlot ||
+        for (const auto& om : markers) {
+            const bool samePlayers = om.offenderSlot == inc.offenderSlot || om.victimSlot == inc.victimSlot ||
                                      om.offenderSlot == inc.victimSlot || om.victimSlot == inc.offenderSlot;
-            if (std::fabs(om.time60Hz - inc.time60Hz) <= 90.0f && samePlayers) {
-                if (!IsValidSlot(om.victimSlot) && IsValidSlot(inc.victimSlot) && inc.victimSlot != om.offenderSlot) {
-                    om.victimSlot = inc.victimSlot;
-                }
-                if (!IsValidSlot(om.offenderSlot) && IsValidSlot(inc.offenderSlot)) {
-                    om.offenderSlot = inc.offenderSlot;
-                }
-                mergedIntoOfficial = true;
-                break;
-            }
+            if (std::fabs(om.time60Hz - inc.time60Hz) <= 90.0f && samePlayers) { mergedIntoOfficial = true; break; }
         }
         if (mergedIntoOfficial) continue;
 
-        const float boxDist = computeBoxDist(inc.offenderSlot, 1 - SlotToTeam(inc.offenderSlot), inc.pos);
+        const float boxDist = storedOr(inc.boxDistValid, inc.boxDistM,
+                                       computeBoxDist(inc.offenderSlot, 1 - SlotToTeam(inc.offenderSlot), inc.pos));
         ReplayMarker m{};
         m.time60Hz        = inc.time60Hz;
         m.matchPhase      = inc.matchPhase;
@@ -1042,6 +1083,10 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         } else if (sn.ballOwnerSlot == sn.closestA || sn.recentBallOwnerSlot == sn.closestA) {
             vic = sn.closestA;
             off = sn.closestB;
+        } else if (DistSq2D(sn.playerPos[sn.closestB], sn.ballPos) < DistSq2D(sn.playerPos[sn.closestA], sn.ballPos)) {
+            // No owner known: the player nearer the ball is the one being challenged (never "always home")
+            vic = sn.closestB;
+            off = sn.closestA;
         }
 
         const Vec3 mid{
@@ -1498,6 +1543,23 @@ bool VarState::ConsumeVerdict(VarVerdict& outVerdict) {
     return true;
 }
 
+int32_t VarState::RecentIncidentOffender(int32_t matchPhase, float time60Hz, float window60Hz) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    int32_t best = -1;
+    int32_t bestPrio = -1;
+    for (size_t k = 0; k < incCount_; ++k) {
+        const auto& inc = incidents_[(incHead_ + kMaxIncidents - 1 - k) % kMaxIncidents];
+        if (!IsPhaseCompatible(inc.matchPhase, matchPhase)) continue;
+        const float d = time60Hz - std::max(inc.time60Hz, inc.lastSeenTime60Hz);
+        if (d < 0.0f || d > window60Hz) continue;
+        if (IsValidSlot(inc.offenderSlot) && inc.priority > bestPrio && inc.kind != IncidentKind::Dive) {
+            bestPrio = inc.priority;
+            best = inc.offenderSlot;
+        }
+    }
+    return best;
+}
+
 bool VarState::DropStalePlayDecision(uint32_t currentStoppage) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!verdictPool_.hasPlayDecision) return false;
@@ -1518,10 +1580,31 @@ bool VarState::DropStalePlayDecision(uint32_t currentStoppage) {
 
 bool VarState::RequeueVerdictPool(const VerdictPool& pool, uint32_t matchGeneration) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (matchGeneration != matchGeneration_ || !verdictPool_.Empty() || pool.Empty()) return false;
+    if (matchGeneration != matchGeneration_ || pool.Empty()) return false;
     if (!enabled_.load(std::memory_order_acquire) || !offlineAllowed_.load(std::memory_order_acquire)) return false;
-    verdictPool_ = pool;
-    hasArmedVerdict_.store(true, std::memory_order_release);
+    if (verdictPool_.Empty()) {
+        verdictPool_ = pool;
+        hasArmedVerdict_.store(true, std::memory_order_release);
+        return true;
+    }
+    // The user armed something meanwhile: merge, the newer items win on the same key / the play slot
+    if (!verdictPool_.hasPlayDecision && pool.hasPlayDecision) {
+        verdictPool_.hasPlayDecision = true;
+        verdictPool_.playDecision = pool.playDecision;
+        verdictPool_.playOrder = pool.playOrder;
+    }
+    for (const auto& old : pool.cardEntries) {
+        if (!old.active) continue;
+        bool taken = false;
+        for (const auto& e : verdictPool_.cardEntries) {
+            if (e.active && SameCardPoolKey(e.verdict, old.verdict)) { taken = true; break; }
+        }
+        if (taken) continue;
+        for (auto& e : verdictPool_.cardEntries) {
+            if (!e.active) { e = old; break; }
+        }
+    }
+    hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
     return true;
 }
 
@@ -1763,7 +1846,10 @@ bool VarState::DetectPhysicalIncident(const PlaySnapshot& snap, const PitchDims&
             0.0f,
             0.35f * snap.playerPos[offSlot].z + 0.65f * snap.playerPos[vicSlot].z
         };
-        const bool inBox = PitchGeometry::IsInsideDefendingBox(dims, spot, teamAttackDir[SlotToTeam(offSlot)]);
+        // The box that matters is the one the offender defends, except for a simulation: the diver goes down in
+        // the box his opponents defend
+        const int32_t boxTeam = (kind == IncidentKind::Dive) ? SlotToTeam(vicSlot) : SlotToTeam(offSlot);
+        const bool inBox = PitchGeometry::IsInsideDefendingBox(dims, spot, teamAttackDir[boxTeam]);
         const int32_t adjPrio = prio + (inBox ? 6 : 0);
         const float distM = std::sqrt(std::max(0.0f, DistSq2D(snap.playerPos[offSlot], snap.playerPos[vicSlot])));
         if (adjPrio > bestPriority || (adjPrio == bestPriority && distM < outInc.contactDistM)) {
@@ -1779,6 +1865,8 @@ bool VarState::DetectPhysicalIncident(const PlaySnapshot& snap, const PitchDims&
             outInc.contactDistM = distM;
             outInc.insideBox    = inBox;
             outInc.nearFoul     = nearFoul;
+            outInc.boxDistM     = PitchGeometry::SignedDistanceToDefendingBox(dims, spot, teamAttackDir[boxTeam]);
+            outInc.boxDistValid = true;
         }
     };
     auto nearestOpponent = [&](int32_t actor, float maxDist, bool requireChallenger) -> int32_t {
@@ -1812,8 +1900,9 @@ bool VarState::DetectPhysicalIncident(const PlaySnapshot& snap, const PitchDims&
         // Simulation: the player went down by himself
         if (aid == PlayerActionId::Dive || (flags & PlayerActionId::FlagSimulation) != 0) {
             int32_t opp = snap.playerCauser[v];
-            if (!opponents(v, opp)) opp = nearestOpponent(v, 2.5f, false);
-            if (opponents(v, opp)) considerCandidate(IncidentKind::Dive, 48, opp, v, false);
+            if (!opponents(v, opp) || !snap.playerOnPitch[opp]) opp = nearestOpponent(v, 2.5f, false);
+            // The diver is the one to punish (card, indirect restart for the opponents): he is the offender
+            if (opponents(v, opp)) considerCandidate(IncidentKind::Dive, 48, v, opp, false);
             continue;
         }
 

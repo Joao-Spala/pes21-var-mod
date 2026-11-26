@@ -29,8 +29,8 @@ Pesquisa da v4.4.1. Endereços do `PES2021.exe` Steam `1.7.2.0`. **[P]** comprov
 ## 5. Correção
 
 - `heap_guard.cpp` substitui o `win32munmap` (AOB único, hint `0x3FC0D0`) por uma versão atômica:
-  - percorre o intervalo por alocação (`AllocationBase`), não por trecho de proteção;
-  - valida o intervalo inteiro antes de liberar qualquer coisa: cada alocação começa onde a anterior termina, está toda em `MEM_COMMIT` e cabe no intervalo;
+  - percorre o intervalo por alocação (`AllocationBase`), não por trecho de proteção
+  - valida o intervalo inteiro antes de liberar qualquer coisa: cada alocação começa onde a anterior termina, está toda em `MEM_COMMIT` e cabe no intervalo
   - só então libera alocação por alocação e devolve `0`. Se a validação falha, devolve `-1` sem tocar em nada, e o dlmalloc mantém o chunk mapeado.
 - Os seis chamadores (`0x1403FC717`, `0x1403FC77A`, `0x1403FD410`, `0x1403FE2C3`, `0x1403FE6D3`, `0x1403FE7D8`) tratam `0` e `-1` com o mesmo contrato **[P]**.
 - O gancho é instalado no `var_init`, separado dos ganchos da partida, e fica ativo no processo inteiro.

@@ -16,8 +16,8 @@ $SrcDll = Join-Path $RepoRoot "modules\var_mod\var_core.dll"
 $ModuleLine = 'lua.module = "var_mod.lua"'
 $Latin1 = [System.Text.Encoding]::GetEncoding(28591)
 
-# sider.ini is read and written byte for byte (Latin1 maps every byte 1:1), keeping a UTF-8 BOM and the
-# original line breaks, so module names in UTF-8 and other modules' lines are never re-encoded.
+# sider.ini is read and written as raw bytes (Latin1 maps every byte 1:1), keeping a UTF-8 BOM, the line
+# break style of the file and whether it ends with a line break. Mixed line breaks become the first style found.
 function Read-IniFile([string]$path) {
     $bytes = [System.IO.File]::ReadAllBytes($path)
     $bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
@@ -35,7 +35,7 @@ function Read-IniFile([string]$path) {
 
 function Write-IniFile([string]$path, $ini, [string[]]$lines) {
     $text = [string]::Join($ini.NewLine, $lines)
-    if ($ini.Trailing -or $lines.Length -gt 0) { $text += $ini.NewLine }
+    if ($ini.Trailing) { $text += $ini.NewLine }
     $body = $Latin1.GetBytes($text)
     if ($ini.Bom) {
         $out = New-Object byte[] ($body.Length + 3)
@@ -272,6 +272,14 @@ function Do-Uninstall([string]$dir) {
     }
     $dstLua = Join-Path $dir "modules\var_mod.lua"
     $dstCoreDir = Join-Path $dir "modules\var_mod"
+    # The user's settings (shortcuts, language) are kept next to sider.ini before the folder goes away
+    $userIni = Join-Path $dstCoreDir "var_mod.ini"
+    if (Test-Path -LiteralPath $userIni) {
+        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $kept = Join-Path $dir "var_mod.ini.antes-desinstalar-$stamp.bak"
+        Copy-Item -Force -LiteralPath $userIni -Destination $kept
+        Write-Host "[backup] Configuracao do VAR Mod guardada em: $kept"
+    }
     if (Test-Path -LiteralPath $dstLua) { Remove-Item -Force -LiteralPath $dstLua }
     if (Test-Path -LiteralPath $dstCoreDir) { Remove-Item -Recurse -Force -LiteralPath $dstCoreDir }
     Write-Host "[uninstall] Arquivos do VAR Mod removidos de $dir"
@@ -295,13 +303,19 @@ switch ($Action) {
             Write-Host "4 - Desinstalar completamente"
             Write-Host "0 - Sair"
             $choice = Read-Host "Escolha uma opcao"
-            switch ($choice) {
-                "1" { Do-Install $targetDir }
-                "2" { Do-Toggle $targetDir $true }
-                "3" { Do-Toggle $targetDir $false }
-                "4" { Do-Uninstall $targetDir }
-                "0" { break }
-                default { Write-Host "Opcao invalida." }
+            try {
+                switch ($choice) {
+                    "1" { Do-Install $targetDir }
+                    "2" { Do-Toggle $targetDir $true }
+                    "3" { Do-Toggle $targetDir $false }
+                    "4" { Do-Uninstall $targetDir }
+                    "0" { break }
+                    default { Write-Host "Opcao invalida." }
+                }
+            } catch {
+                # An error (for example the game still open) goes back to the menu instead of closing it
+                Write-Host ""
+                Write-Host "[erro] $($_.Exception.Message)"
             }
             if ($choice -eq "0") { break }
         }

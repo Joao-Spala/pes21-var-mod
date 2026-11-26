@@ -2643,6 +2643,99 @@ void TestFinalReviewRegressions() {
     st.SetEnabled(true);
     st.ResetMatch();
 
+    // Incident clustering: two duels alternating frame by frame stay two incidents (not one per frame)
+    {
+        st.ResetMatch();
+        for (int t = 0; t < 120; ++t) {
+            DetectedIncident a{};
+            a.matchPhase = 1;
+            a.time60Hz = 1000.0f + static_cast<float>(t);
+            a.kind = IncidentKind::BodyCharge;
+            a.priority = 60;
+            if (t % 2 == 0) { a.offenderSlot = 2; a.victimSlot = 14; } else { a.offenderSlot = 5; a.victimSlot = 18; }
+            st.PushDetectedIncident(a);
+        }
+        const auto mk = st.GetReplayWindowMarkers(1, 900.0f, 1200.0f);
+        size_t phys = 0;
+        for (const auto& m : mk) if (!m.isOfficialEvent) ++phys;
+        EXPECT_EQ(phys, static_cast<size_t>(2), "Alternating duels must give exactly two markers");
+        st.ResetMatch();
+    }
+
+    // Official foul whistled after an advantage: one marker, at the contact, with the strongest incident's players
+    {
+        st.ResetMatch();
+        DetectedIncident weak{};
+        weak.matchPhase = 1; weak.time60Hz = 2000.0f; weak.kind = IncidentKind::BodyCharge; weak.priority = 60;
+        weak.offenderSlot = 3; weak.victimSlot = 15;
+        st.PushDetectedIncident(weak);
+        DetectedIncident slide{};
+        slide.matchPhase = 1; slide.time60Hz = 2100.0f; slide.kind = IncidentKind::SlideTackle; slide.priority = 82;
+        slide.offenderSlot = 4; slide.victimSlot = 16;
+        st.PushDetectedIncident(slide);
+        VarEvent ev{};
+        ev.type = VarEventType::Foul;
+        ev.matchPhase = 1;
+        ev.time60Hz = 2340.0f; // whistle 4 s after the slide (advantage played)
+        ev.matchTick = 900;
+        ev.offenderSlot = 4;
+        ev.victimSlot = 16;
+        ev.cardKind = CardKind::Simple;
+        ev.wasAdvantage = true;
+        st.PushEvent(ev);
+        const auto mk = st.GetReplayWindowMarkers(1, 1900.0f, 2400.0f);
+        const ReplayMarker* om = nullptr;
+        size_t slideMarkers = 0;
+        for (const auto& m : mk) {
+            if (m.isOfficialEvent) om = &m;
+            else if (m.offenderSlot == 4) ++slideMarkers;
+        }
+        EXPECT_TRUE(om != nullptr, "Official marker must exist");
+        EXPECT_TRUE(std::fabs(om->time60Hz - 2100.0f) < 0.5f, "Official marker must sit at the contact, not the whistle");
+        EXPECT_EQ(slideMarkers, static_cast<size_t>(0), "The slide must not appear twice");
+        EXPECT_EQ(st.RecentIncidentOffender(1, 2120.0f, 90.0f), 4, "Advantage team comes from the contact's offender");
+        st.ResetMatch();
+    }
+
+    // Zone label keeps the sides of the moment it was recorded
+    {
+        st.ResetMatch();
+        VarEvent ev{};
+        ev.type = VarEventType::Foul;
+        ev.matchPhase = 1;
+        ev.time60Hz = 3000.0f;
+        ev.matchTick = 1000;
+        ev.offenderSlot = 2;
+        ev.cardKind = CardKind::Simple;
+        ev.boxDistM = -3.0f;
+        ev.boxDistValid = true;
+        st.PushEvent(ev);
+        const auto mk = st.GetReplayWindowMarkers(1, 2900.0f, 3100.0f);
+        EXPECT_TRUE(!mk.empty() && std::fabs(mk.front().signedBoxDistM + 3.0f) < 0.01f, "Stored box distance must be used");
+        st.ResetMatch();
+    }
+
+    // A requeued pool merges with what the user armed meanwhile (nothing is lost)
+    {
+        st.ResetMatch();
+        VarVerdict play{};
+        play.action = VarAction::RetroactiveFreeKick;
+        play.offenderSlot = 3;
+        st.AddToVerdictPool(play);
+        const VerdictPool consumedPool = st.PeekVerdictPool();
+        st.CancelVerdict();
+        VarVerdict card{};
+        card.action = VarAction::EditCard;
+        card.directCardEdit = true;
+        card.offenderSlot = 9;
+        card.directYellows = 1;
+        st.AddToVerdictPool(card);
+        EXPECT_TRUE(st.RequeueVerdictPool(consumedPool, st.MatchGeneration()), "Requeue must merge");
+        const VerdictPool mp = st.PeekVerdictPool();
+        EXPECT_TRUE(mp.hasPlayDecision && mp.CardCount() == 1, "Both the old play and the new card must be there");
+        st.ResetMatch();
+    }
+
     MarkPass("TestFinalReviewRegressions");
 }
 
