@@ -3,8 +3,8 @@
 // PES2021.exe uses dlmalloc for its game heaps (mstate at 0x56F0010 in both crash dumps). Its win32munmap
 // (0x1403FC0D0) releases a segment by walking VirtualQuery runs and calling VirtualFree(MEM_RELEASE) on
 // each one, and returns -1 as soon as a run does not start its own allocation. VirtualFree(MEM_RELEASE)
-// always frees the WHOLE allocation, so when an allocation has pages with a different protection (BMPES Lua
-// modules write game memory through Sider and leave single pages PAGE_EXECUTE_READWRITE, including the
+// always frees the WHOLE allocation, so when an allocation has pages with a different protection (Lua modules
+// of large patches write game memory through Sider and leave single pages PAGE_EXECUTE_READWRITE, including the
 // mstate page itself) the first call frees everything, the next VirtualQuery finds free memory and the
 // function reports failure. The caller (trim in release_unused_segments, 0x1403FE2C3) then puts the
 // "unreleased" chunk back into its bins by writing into memory that no longer exists:

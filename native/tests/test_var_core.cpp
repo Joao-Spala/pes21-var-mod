@@ -1881,7 +1881,7 @@ void TestHudRenderSmoke() {
     ev.benefitedTeam = 1;
     st.PushEvent(ev);
 
-    // Real data read from the running game (Flamengo x Coritiba, BMPES 16.3): names, numbers, short names
+    // Real data read from the running game (Flamengo x Coritiba, patched game): names, numbers, short names
     {
         std::array<TeamDisplayInfo, 2> tm{};
         std::snprintf(tm[0].fullName, sizeof(tm[0].fullName), "%s", "FLAMENGO");

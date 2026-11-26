@@ -319,7 +319,7 @@ namespace Offsets {
     constexpr size_t    TeamEntry_KitTableCount     = 10;
     constexpr size_t    TeamEntry_KitEntryStride    = 8;
 
-    // Edited / BMPES team kits (*(matchData + 0x58) + (teamIdx * 2) * 0x84)
+    // Edited / patch team kits (*(matchData + 0x58) + (teamIdx * 2) * 0x84)
     constexpr uintptr_t EditedKit_TeamStride        = 0x108; // 2 * 0x84 (home outfield at 0, away outfield at +0x108)
     constexpr uintptr_t EditedKit_PrimaryRGB        = 0x1991;
     constexpr uintptr_t EditedKit_SecondaryRGB      = 0x1994;

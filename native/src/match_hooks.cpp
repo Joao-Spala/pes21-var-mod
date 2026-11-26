@@ -462,7 +462,7 @@ bool ExtractRosterEntryIdentity(const uint8_t* matchRoster, const uint8_t* roste
                                 char* outShirt, size_t outShirtSz,
                                 uint8_t& outShirtNum) {
     // Shirt numbers live in the team entry (uint16[40], same order as the roster), verified live on
-    // Flamengo x Coritiba (BMPES 16.3): Arrascaeta 10, Pedro 9, Rossi 1, Danilo 13, Bruno Henrique 27.
+    // Flamengo x Coritiba (patched game): Arrascaeta 10, Pedro 9, Rossi 1, Danilo 13, Bruno Henrique 27.
     const uint8_t* teamEntry = rosterTable + Offsets::MatchRoster_TeamEntryBase +
                                static_cast<size_t>(teamIdx) * Offsets::MatchRoster_TeamEntryStride;
     const uint16_t num = *reinterpret_cast<const uint16_t*>(
@@ -658,7 +658,7 @@ void SyncTeamsAndColors() {
             }
         }
         if (!gotColor && editedKitReadable) {
-            // Edited / BMPES team kits at *(MatchRoster + 0x58) + (teamIdx * 2) * 0x84
+            // Edited / patch team kits at *(MatchRoster + 0x58) + (teamIdx * 2) * 0x84
             const uint8_t* kb = editedKitPtr + static_cast<size_t>(t) * Offsets::EditedKit_TeamStride;
             const RgbColor pri{ kb[Offsets::EditedKit_PrimaryRGB + 0],
                                 kb[Offsets::EditedKit_PrimaryRGB + 1],

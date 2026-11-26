@@ -1,6 +1,6 @@
-# 03. Replay Manager, Estado de Pausa, Menu do BMPES e Integracao DX11
+# 03. Replay Manager, Estado de Pausa, Menu do Patch e Integracao DX11
 
-Mapeamento tecnico do subsistema de Replay (`GMATCH + 0x388`), tela de Replay Manual (`Replay@Screen@match2D`), menu de Pausa (`MatchPause@menu`) e interacao com o ecossistema BMPES 16.3 e Sider 7.3.3.
+Mapeamento tecnico do subsistema de Replay (`GMATCH + 0x388`), tela de Replay Manual (`Replay@Screen@match2D`), menu de Pausa (`MatchPause@menu`) e interacao com o ecossistema de patches e Sider 7.3.3.
 
 ## 1. Layout Verificado de `ReplayManager` (`*(GMATCH + 0x388)`)
 
@@ -43,14 +43,14 @@ Para distinguir **Replay Manual** (acionado pelo usuario via menu de pausa) de *
 
 ---
 
-## 2. Analise de `MatchPause@menu` e Menus do BMPES 16.3
+## 2. Analise de `MatchPause@menu` e Menus de Patches
 
 ### 2.1. Evidencia no Binario (`MatchPause@menu` vtable `0x1425BCDB8`)
 - `MatchPause@menu::vfunc[1]` (`0x140E3DFC0`) e `vfunc[2]` (`0x140E40ED0`) gerenciam eventos de janela de menu (`0x1080001..0x1080009`) dirigidos por scripts de fluxo (`common\script\flow\Match\MatchPrePause.json` e `MatchPostPause.json`) e arquivos binarios de layout (`common\menu\general\game2dReplay.bin` e telas de pausa).
 - O Sider documenta em `doc\scripting.html` que esses fluxos passam por `livecpk_data_ready`.
 
-### 2.2. Evidencia no BMPES 16.3 (`modules\MenuServer.lua`)
-Inspecao direta de `<Steam>\steamapps\common\BMPES\modules\MenuServer.lua` (linhas 9 e 104-118) e pastas do BMPES:
+### 2.2. Evidencia em patch instalado (`modules\MenuServer.lua`)
+Inspecao direta de `<pasta do patch>\modules\MenuServer.lua` (linhas 9 e 104-118) e pastas do patch:
 - `MenuServer.lua` intercepta e substitui dinamicamente por competicao (`map_competitions.txt`) todos os arquivos sob:
   - `common\menu\system`
   - `common\menu\general`
@@ -59,17 +59,17 @@ Inspecao direta de `<Steam>\steamapps\common\BMPES\modules\MenuServer.lua` (linh
 
 ### 2.3. Veredito Tecnico: Botao no Menu de Pausa vs Integracao Direta na Tela de Replay
 - **Injetar botao extra no Menu de Pausa nativo: NAO RECOMENDADO.**
-  - Patchear arquivos `.bin`/`.json` de menu entraria em conflito direto com dezenas de temas do `Servidor de Menus` e `Estilos de Menus` do BMPES 16.3, quebrando atualizacoes do patch e layouts por campeonato.
+  - Patchear arquivos `.bin`/`.json` de menu entraria em conflito direto com dezenas de temas do `Servidor de Menus` e `Estilos de Menus` de um patch completo, quebrando atualizacoes do patch e layouts por campeonato.
   - Hackear o vetor interno de itens em `MatchPause@menu+0x88` exige recriar handlers de foco, localizacao de texto e transicao de `ProcessMatchReplay` (`0x1412FF730`), adicionando risco real de soft-lock no menu de pausa sem ganho funcional, ja que o usuario ainda precisa abrir o Replay para ver o lance.
 - **Integrar diretamente na Tela de Replay Manual: RECOMENDADO (100% seguro e nativo).**
   - Fluxo natural: usuario pausa -> entra no **Replay** nativo -> o painel VAR abre automaticamente (ou recolhe/reabre via `V`, `F7` ou `R3`) -> navega pelos lances com `Seek` nativo e escolhe o veredito por teclado/mouse enquanto o controle segue operando a camera do Replay -> sai do Replay normalmente para aplicar a decisao no campo.
-  - Zero alteracao em qualquer arquivo de menu do BMPES ou CPK do jogo.
+  - Zero alteracao em qualquer arquivo de menu do patch ou CPK do jogo.
 
 ---
 
 ## 3. Coexistencia com Sider 7.3.3 (DX11 Overlay e Input)
 
-Inspecao dos imports e strings de `<Steam>\steamapps\common\BMPES\sider.dll`:
+Inspecao dos imports e strings de `<pasta do patch>\sider.dll`:
 - **Graficos:** Sider 7.3.3 faz hook em `IDXGISwapChain::Present` para renderizar sua faixa superior de overlay (`overlay.enabled = 1`).
 - **Input:** Sider importa `XINPUT9_1_0.dll` (`XInputGetState`), `DINPUT8.dll` (`DirectInput8Create`) e `USER32.dll` (`SetWindowsHookExW`).
 - **Ordem de inicializacao e encadeamento seguro na v4.0:**

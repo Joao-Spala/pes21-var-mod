@@ -150,7 +150,7 @@ No commit de frame em `MatchControl::CommitToRegistry` (`0x140422A3F`, codigo na
 
 ### 4.3. Layout Validado de `MatchRoster` (Times, Uniformes, Camisas e Jogadores)
 
-Verificado em `0x1414BC550`, `0x1414C6A30`, `0x1414C9580` e validado ao vivo em partidas reais (BMPES 16.3):
+Verificado em `0x1414BC550`, `0x1414C6A30`, `0x1414C9580` e validado ao vivo em partidas reais (jogo com patch):
 - `matchRoster = *(uint64_t*)0x143714240` (retornado por `0x1414BC550()`)
 - `dataPtr = *(uint64_t*)(matchRoster + 0x50)` e `rosterTable = dataPtr + 0x35960`
 - `editedKitPtr = *(uint64_t*)(matchRoster + 0x58)` e `balNameString = matchRoster + 0x98` (`std::string` MSVC)
@@ -159,7 +159,7 @@ Verificado em `0x1414BC550`, `0x1414C6A30`, `0x1414C9580` e validado ao vivo em 
   - `+0x04`: `char[70] FullName` (UTF-8)
   - `+0x4A`: `char[16] ShortName` (sigla de 3 letras do placar)
   - `+0x29A`: `uint16_t[40] ShirtNumbers` (numeros de camisa na mesma ordem das 40 entradas de jogadores)
-  - `+0x5D8`: `KitTable` licenciada (10 entradas de 8 bytes, RGB primario em `+2..+4`, secundario em `+5..+7`). Para uniformes editados/BMPES, `editedKitPtr + teamIdx * 0x108` traz RGB primario em `+0x1991` e secundario em `+0x1994`.
+  - `+0x5D8`: `KitTable` licenciada (10 entradas de 8 bytes, RGB primario em `+2..+4`, secundario em `+5..+7`). Para uniformes editados por patches, `editedKitPtr + teamIdx * 0x108` traz RGB primario em `+0x1991` e secundario em `+0x1994`.
 - **Entrada por jogador (`entry = rosterTable + 0x1308 + teamIdx * 0x3D40 + i * 0x188`, ate 40 por time):**
   - `+0x2C`: `uint64_t PlayerKey` (`key >> 32` casa com `*(uint64_t*)(PlayerRecord + 0x30) >> 32`, com fallback em `TeamInfo + 0x04` para substituicoes ao vivo)
   - `+0x38`: `DisplayName` UTF-8

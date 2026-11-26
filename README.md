@@ -11,7 +11,7 @@
 ![Native](https://img.shields.io/badge/Native-C%2B%2B20_%2B_DX11_%2B_ImGui-84CC16?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Languages](https://img.shields.io/badge/Languages-PT--BR_%7C_English-2EA043?style=for-the-badge)
-![Patches](https://img.shields.io/badge/Sider_7.3_%2F_BMPES_16.3-Compatible-F59E0B?style=for-the-badge)
+![Sider](https://img.shields.io/badge/Sider_7.3+-Compatible-F59E0B?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-8B5CF6?style=for-the-badge)
 
 **[Português (PT-BR)](#português-pt-br)** · **[English](#english)** · **[Build & Testes / Build & Tests](#build--testes--build--tests)**
@@ -26,7 +26,7 @@
 
 ## Português (PT-BR)
 
-Módulo **Sider** independente (**DLL nativa x64 em C++20 + DirectX 11 + Dear ImGui**, menos de 1 MB, mais um módulo Lua) que coloca um **árbitro de vídeo** dentro do **eFootball PES 2021 (`v1.7.2.0`, Steam)**. Você revisa o lance no **Replay Manual** e aplica ou reverte faltas, pênaltis, cartões e bolas paradas **direto na engine do jogo**, como se o próprio árbitro tivesse decidido. Feito por engenharia reversa e compatível com **Sider 7.3+** e grandes patches como o **BMPES 16.3**.
+Módulo **Sider** independente (**DLL nativa x64 em C++20 + DirectX 11 + Dear ImGui**, menos de 1 MB, mais um módulo Lua) que coloca um **árbitro de vídeo** dentro do **eFootball PES 2021 (`v1.7.2.0`, Steam)**. Você revisa o lance no **Replay Manual** e aplica ou reverte faltas, pênaltis, cartões e bolas paradas **direto na engine do jogo**, como se o próprio árbitro tivesse decidido. Feito por engenharia reversa e compatível com **Sider 7.3+**, sozinho ou dentro dos grandes patches que usam o Sider.
 
 Somente partidas offline. Nenhum arquivo do jogo é alterado e nada de rede, DRM ou modo online é tocado.
 
@@ -35,16 +35,16 @@ Somente partidas offline. Nenhum arquivo do jogo é alterado e nada de rede, DRM
 | Item | Versão |
 | --- | --- |
 | **Jogo** | eFootball PES 2021 **`v1.7.2.0` da Steam** (outras versões do executável não são suportadas) |
-| **Sider** | **7.3+** com LuaJIT, sozinho ou dentro de um patch como o **BMPES 16.3** |
+| **Sider** | **7.3+** com LuaJIT, sozinho ou dentro de um patch que use o Sider |
 | **Sistema** | Windows 10 ou 11 (x64) |
 
 ### Instalação
 
 1. Baixe o **`PES2021_VAR_Mod_v4.4.7.zip`** em [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
 2. Feche o jogo e rode o **`VAR_Mod_Gerenciar.bat`**. No menu, escolha **`1 - Instalar ou atualizar`**.
-3. Abra o jogo pelo **Sider** (no BMPES, pelo atalho do próprio patch).
+3. Abra o jogo pelo **Sider** (num patch, pelo atalho do próprio patch).
 
-O instalador acha a pasta do Sider ou do BMPES (ou pede o caminho), copia os arquivos, ativa `lua.enabled = 1` e `luajit.ext.enabled = 1` e registra `lua.module = "var_mod.lua"` no `sider.ini`, sempre com backup datado antes. Se o jogo estiver aberto, ele avisa e não mexe em nada. A DLL só carrega na primeira partida (ou ao abrir o menu do Sider), então a abertura do jogo não fica mais lenta.
+O instalador acha a pasta do Sider ou do patch (ou pede o caminho), copia os arquivos, ativa `lua.enabled = 1` e `luajit.ext.enabled = 1` e registra `lua.module = "var_mod.lua"` no `sider.ini`, sempre com backup datado antes. Se o jogo estiver aberto, ele avisa e não mexe em nada. A DLL só carrega na primeira partida (ou ao abrir o menu do Sider), então a abertura do jogo não fica mais lenta.
 
 | Opção do instalador | O que faz |
 | --- | --- |
@@ -85,7 +85,7 @@ lua.module = "var_mod.lua"
 | **Pool de decisões** | Uma decisão de lance mais até 32 ajustes de cartão, aplicados juntos e em ordem. Anular a falta atual e marcar uma falta anterior cabem no mesmo pacote. Uma decisão sobre uma parada que já passou nunca é aplicada fora de hora. |
 | **Engine nativa (`MatchFSM`)** | O cartão passa pelo registro da própria engine, que conta uma vez só, e a expulsão sai pelo fluxo dela. Se a engine não montar a bola parada, o mod desfaz tudo o que escreveu naquele instante. |
 | **Jogador certo, sempre** | Cartões e faltas seguem o jogador do lance, não a posição, mesmo depois de substituições. Nunca há terceiro amarelo nem segundo vermelho. |
-| **Nomes, números e uniformes** | Lidos da memória do jogo, com substituições ao vivo, avatar do Rumo ao Estrelato e uniformes licenciados ou editados (BMPES). |
+| **Nomes, números e uniformes** | Lidos da memória do jogo, com substituições ao vivo, avatar do Rumo ao Estrelato e uniformes licenciados ou editados por patches. |
 | **Campo tático 2D** | Escala real com zoom automático na área, lados corretos em cada tempo, contato infrator x vítima e clique para mover o local da cobrança. |
 | **Atalhos e idioma** | Remap de cada ação com 2 teclas, troca automática em conflito, proteção contra ficar sem atalho essencial e interface em **Português (BR)** ou **English**, trocada na hora e salva. |
 
@@ -128,7 +128,7 @@ O controle só abre e recolhe o painel e continua controlando o replay normalmen
 
 ## English
 
-Standalone **Sider** module (**native x64 DLL in C++20 + DirectX 11 + Dear ImGui**, under 1 MB, plus a Lua module) that brings a **video assistant referee** to **eFootball PES 2021 (`v1.7.2.0`, Steam)**. Review the play in the **Manual Replay** and apply or overturn fouls, penalties, cards and set pieces **straight in the game engine**, as if the referee had made the call. Built through reverse engineering and compatible with **Sider 7.3+** and major patches such as **BMPES 16.3**.
+Standalone **Sider** module (**native x64 DLL in C++20 + DirectX 11 + Dear ImGui**, under 1 MB, plus a Lua module) that brings a **video assistant referee** to **eFootball PES 2021 (`v1.7.2.0`, Steam)**. Review the play in the **Manual Replay** and apply or overturn fouls, penalties, cards and set pieces **straight in the game engine**, as if the referee had made the call. Built through reverse engineering and compatible with **Sider 7.3+**, standalone or inside the major patches built on Sider.
 
 Offline matches only. No game file is modified and nothing related to network, DRM or online modes is touched.
 
@@ -137,16 +137,16 @@ Offline matches only. No game file is modified and nothing related to network, D
 | Item | Version |
 | --- | --- |
 | **Game** | eFootball PES 2021 **Steam `v1.7.2.0`** (other executable versions are not supported) |
-| **Sider** | **7.3+** with LuaJIT, standalone or inside a patch such as **BMPES 16.3** |
+| **Sider** | **7.3+** with LuaJIT, standalone or inside a patch that uses Sider |
 | **System** | Windows 10 or 11 (x64) |
 
 ### Installation
 
 1. Download **`PES2021_VAR_Mod_v4.4.7.zip`** from [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) and extract it anywhere.
 2. Close the game and run **`VAR_Mod_Gerenciar.bat`**. In the menu, pick **`1 - Instalar ou atualizar`** (install or update).
-3. Launch the game through **Sider** (for BMPES, through the patch launcher).
+3. Launch the game through **Sider** (with a patch, through the patch launcher).
 
-The installer finds your Sider or BMPES folder (or asks for the path), copies the files, enables `lua.enabled = 1` and `luajit.ext.enabled = 1` and registers `lua.module = "var_mod.lua"` in `sider.ini`, always with a timestamped backup first. If the game is open, it says so and changes nothing. The DLL only loads on the first match (or when the Sider menu opens), so game startup is not slowed down.
+The installer finds your Sider or patch folder (or asks for the path), copies the files, enables `lua.enabled = 1` and `luajit.ext.enabled = 1` and registers `lua.module = "var_mod.lua"` in `sider.ini`, always with a timestamped backup first. If the game is open, it says so and changes nothing. The DLL only loads on the first match (or when the Sider menu opens), so game startup is not slowed down.
 
 | Installer option | What it does |
 | --- | --- |
@@ -187,7 +187,7 @@ lua.module = "var_mod.lua"
 | **Decision pool** | One play decision plus up to 32 card edits, applied together and in order. Overturning the current foul and giving an earlier one fit in the same pool. A decision about a stoppage that has already passed is never applied out of time. |
 | **Native engine (`MatchFSM`)** | The card goes through the engine's own commit, which counts it once, and the sending off follows the engine's flow. If the engine does not set up the restart, the mod undoes everything it wrote at that moment. |
 | **Always the right player** | Cards and fouls follow the player of the play, not the slot, even after substitutions. Never a third yellow or a second red. |
-| **Names, numbers and kits** | Read from game memory, with live substitutions, Become a Legend avatar and licensed or edited kits (BMPES). |
+| **Names, numbers and kits** | Read from game memory, with live substitutions, Become a Legend avatar and licensed or patch-edited kits. |
 | **2D tactical pitch** | True scale with automatic box zoom, correct sides in each half, offender vs fouled contact and click-to-move restart spot. |
 | **Shortcuts and language** | Remap every action with 2 keys, automatic swap on conflict, a guard that never leaves an essential action unbound, and a UI in **English** or **Português (BR)**, switched instantly and saved. |
 

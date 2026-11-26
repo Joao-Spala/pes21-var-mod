@@ -84,7 +84,7 @@ Revisão profunda final com quatro auditorias independentes (motor de execução
 - **Anular falta sem infrator identificado** usa o lado certo do campo, e uma falta injetada sem infrator não é registrada de novo como lance do árbitro.
 - **Nova partida sem aviso do Sider** (revanche, sequências de liga e copa) também limpa o pool, o histórico e o painel.
 - **Estabilidade do render**: os asserts do ImGui não encerram mais o jogo, um frame que não pode ser desenhado libera o bloqueio de controle, os ponteiros da partida são revalidados a cada frame e o encerramento do processo não depende mais de travas.
-- **Instalador**: recusa instalar ou desinstalar com o PES aberto, copia a DLL antes do Lua, preserva a codificação do `sider.ini` (BOM e quebras de linha), aceita pastas com colchetes, garante `lua.enabled = 1` e prioriza o Sider do BMPES na detecção.
+- **Instalador**: recusa instalar ou desinstalar com o PES aberto, copia a DLL antes do Lua, preserva a codificação do `sider.ini` (BOM e quebras de linha), aceita pastas com colchetes, garante `lua.enabled = 1` e prioriza o Sider do patch instalado na detecção.
 - **Tecla 7 no overlay do Sider**: segurar a tecla não liga e desliga mais várias vezes.
 
 ## v4.4.1
@@ -92,7 +92,7 @@ Revisão profunda final com quatro auditorias independentes (motor de execução
 Análise do dump completo do travamento ao avançar depois do fim da partida. Evidências em `re_notes/07_engine_heap_segment_release.md`.
 
 - **Travamento e crash depois do apito final corrigidos**: na troca de cena do pós-jogo a engine compacta os heaps e devolve ao Windows os blocos livres. A rotina nativa de liberação (`0x1403FC0D0`) liberava a alocação inteira, falhava no meio e em seguida escrevia no bloco que tinha acabado de liberar. O jogo travava enquanto o Windows gravava o dump e caía em `PES2021.exe+0x3FE31D`.
-- **Gatilho**: módulos Lua do BMPES escrevem na memória do jogo pelo Sider e deixam páginas soltas do heap com proteção de execução. Uma única página assim dentro de um bloco basta para a rotina nativa se perder. O defeito existe com ou sem o VAR.
+- **Gatilho**: módulos Lua de patches escrevem na memória do jogo pelo Sider e deixam páginas soltas do heap com proteção de execução. Uma única página assim dentro de um bloco basta para a rotina nativa se perder. O defeito existe com ou sem o VAR.
 - **Correção**: o mod substitui essa rotina por uma versão atômica que valida o bloco inteiro antes de liberar e libera por alocação do sistema. Ou o bloco sai inteiro ou nada é tocado. A proteção vale para o processo todo, inclusive com o VAR desligado.
 
 ## v4.4.0

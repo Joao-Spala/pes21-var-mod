@@ -67,13 +67,21 @@ function Resolve-SiderDir([string]$hint) {
     }
 
     $candidates = @($ScriptDir, (Split-Path -Parent $ScriptDir))
-    # Steam libraries on any drive (default install and extra libraries), vanilla Sider and BMPES
+    # Steam libraries on any drive (default install and extra libraries)
     $steamRoots = @("C:\Program Files (x86)\Steam")
     foreach ($drv in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
         $steamRoots += (Join-Path $drv.Root "SteamLibrary")
     }
-    # BMPES first: with both installed, the patch's Sider is the one the game is launched with
-    foreach ($root in $steamRoots) { $candidates += (Join-Path $root "steamapps\common\BMPES") }
+    # Patch folders first (any game folder of the library that ships its own Sider): with a patch installed, the
+    # patch's Sider is the one the game is launched with. The vanilla Sider folder comes after them.
+    foreach ($root in $steamRoots) {
+        $common = Join-Path $root "steamapps\common"
+        if (Test-Path -LiteralPath $common) {
+            foreach ($d in (Get-ChildItem -LiteralPath $common -Directory -ErrorAction SilentlyContinue)) {
+                if ($d.Name -ne "eFootball PES 2021") { $candidates += $d.FullName }
+            }
+        }
+    }
     foreach ($root in $steamRoots) { $candidates += (Join-Path $root "steamapps\common\eFootball PES 2021\sider") }
     foreach ($c in $candidates) {
         if ($c -and (Test-Path -LiteralPath (Join-Path $c "sider.dll"))) {

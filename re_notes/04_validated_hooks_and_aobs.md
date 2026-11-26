@@ -1,12 +1,12 @@
-# 04. Hook Sites Validados, Assinaturas AOB e Matriz de Colisao Sider/BMPES
+# 04. Hook Sites Validados, Assinaturas AOB e Matriz de Colisao Sider/Patches
 
-Todos os 17 AOBs e hook sites abaixo foram validados em `PES2021.exe` (Steam 1.7.2.0) usando `pes2021-re:verify_hook_site` e `decompile_function`, confirmados por teste automatizado no binario real (`test_var_core.exe`) e cruzados contra os modulos ativos do Sider 7.3.3 e BMPES 16.3.
+Todos os 17 AOBs e hook sites abaixo foram validados em `PES2021.exe` (Steam 1.7.2.0) usando `pes2021-re:verify_hook_site` e `decompile_function`, confirmados por teste automatizado no binario real (`test_var_core.exe`) e cruzados contra os modulos ativos do Sider 7.3.3 e de um patch completo.
 
-## 1. Enderecos Ocupados pelo BMPES 16.3 (Proibidos para Hook)
+## 1. Enderecos Ocupados por Modulos de Patch (Proibidos para Hook)
 
-Extraido diretamente de `<Steam>\steamapps\common\BMPES\modules\goal_pyro.lua` e `PESCustomCelebrationsReload.lua`:
+Extraido diretamente de `<pasta do patch>\modules\goal_pyro.lua` e `PESCustomCelebrationsReload.lua`:
 
-| VA | Modulo BMPES | Uso |
+| VA | Modulo do patch | Uso |
 |---|---|---|
 | `0x140423974` | `goal_pyro.lua` | `SOURCE_RECORD_SITE` dentro de `MatchControl::vfunc[6]` (`0x1404238F0`) |
 | `0x140478C3F` | `goal_pyro.lua` | Call site `native_get_scorer` |
@@ -15,7 +15,7 @@ Extraido diretamente de `<Steam>\steamapps\common\BMPES\modules\goal_pyro.lua` e
 | `0x141AC9050` | `goal_pyro.lua` | Funcao auditada como original canonica |
 | `0x141E2xxxx..0x142xxxxxx` | `PESCustomCelebrationsReload.lua` | Tabelas de celebracoes |
 
-**Status de colisao do VAR Mod v4.0:** `0` colisoes com qualquer modulo BMPES ou Sider.
+**Status de colisao do VAR Mod v4.0:** `0` colisoes com qualquer modulo de patch ou do Sider.
 
 ---
 
@@ -29,8 +29,8 @@ Para eliminar qualquer fragilidade de registradores volateis e garantir iniciali
 - **AOB unico (30 bytes):**
   `48 89 5C 24 20 4C 89 44 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 60`
 - **Stolen bytes (5 bytes, 0 NOPs):** `48 89 5C 24 20` (`mov qword ptr [rsp + 0x20], rbx`)
-- **Conflitos Sider/BMPES:** nenhum (`[]`)
-- **Papel no VAR Mod:** captura `MatchFSM*`, resolve `GMATCH` (`0x143702208`) em `MainTick + 0x30`, executa deteccao fisica a 60 Hz (`PlayerAction + 0x01 / +0x08` e `BallState + 0x2601C`), grava snapshots taticos a 10 Hz (90 s), sincroniza nomes reais (`#N NOME`), numeros de camisa, substituicoes e cores dos uniformes (licenciados e editados/BMPES) e aplica vereditos dos Cenarios 1, 2 e 4.
+- **Conflitos Sider/patches:** nenhum (`[]`)
+- **Papel no VAR Mod:** captura `MatchFSM*`, resolve `GMATCH` (`0x143702208`) em `MainTick + 0x30`, executa deteccao fisica a 60 Hz (`PlayerAction + 0x01 / +0x08` e `BallState + 0x2601C`), grava snapshots taticos a 10 Hz (90 s), sincroniza nomes reais (`#N NOME`), numeros de camisa, substituicoes e cores dos uniformes (licenciados e editados por patches) e aplica vereditos dos Cenarios 1, 2 e 4.
 
 ### Hook 2: `Judge::FinalizeFrame` (Injecao Nativa do Cenario 3 em `InPlay`)
 
@@ -38,7 +38,7 @@ Para eliminar qualquer fragilidade de registradores volateis e garantir iniciali
 - **AOB unico (17 bytes):**
   `33 C0 48 89 81 B8 03 00 00 48 89 81 C0 03 00 00 C3`
 - **Stolen bytes (9 bytes, 4 NOPs, `cmpxchg16b` em endereco alinhado a 16 bytes):** `33 C0 48 89 81 B8 03 00 00`
-- **Conflitos Sider/BMPES:** nenhum (`[]`)
+- **Conflitos Sider/patches:** nenhum (`[]`)
 - **Papel no VAR Mod:** injeta `RawSetPlayInfo` + `RawFoulInfo` em `MatchFSM + 0x49C0` / `+0x49F0` durante `InPlay` (`0x1C`) para faltas e penaltis retroativos.
 
 ### Hook 3: `MatchControl::UpdateFoulCounters` (Auditoria Oficial e Anti-Duplicacao)
@@ -47,7 +47,7 @@ Para eliminar qualquer fragilidade de registradores volateis e garantir iniciali
 - **AOB unico (16 bytes):**
   `41 80 B8 60 22 00 00 00 74 13 8B 82 44 01 00 00`
 - **Stolen bytes (8 bytes, 3 NOPs):** `41 80 B8 60 22 00 00 00` (trampolim preserva integralmente `EFLAGS`/`ZF`)
-- **Conflitos Sider/BMPES:** nenhum (`[]`)
+- **Conflitos Sider/patches:** nenhum (`[]`)
 - **Papel no VAR Mod:** registra eventos oficiais de falta, penalti e cartao (filtrando impedimento) e suprime duplicacao de contagem em rebuilds do VAR.
 
 ### Hook 4: `ManualReplayController::SyncToReplayManager` (Seek Nativo, Play/Pause e Foco de Camera 3D)
@@ -56,7 +56,7 @@ Para eliminar qualquer fragilidade de registradores volateis e garantir iniciali
 - **AOB unico (20 bytes):**
   `40 53 55 56 57 41 54 41 56 41 57 48 83 EC 40 48 8B 99 30 04`
 - **Stolen bytes (5 bytes, 0 NOPs, zero RIP-relative):** `40 53 55 56 57` (`push rbx`, `push rbp`, `push rsi`, `push rdi`)
-- **Conflitos Sider/BMPES:** nenhum (`[]`)
+- **Conflitos Sider/patches:** nenhum (`[]`)
 - **Papel no VAR Mod:** executa na propria thread do Replay, imediatamente antes de espelhar o estado para `ReplayManager`, comandos enfileirados pela interface:
   - **Seek nativo:** busca o frame exato na janela circular `[winStart..winEnd]` do `ReplaySingleton` (`0x143703558`, `+0x6A8 -> +0x40`, stride `0x1FB0`) compativel com a metade da partida, chama `ReplayPlayer::SetFrame` (`0x14217E800`), pausa opcionalmente (`ctrl + 0x5C = 0`, `ctrl + 0x310 = 0.0f`) e atualiza `LookAtPos` da camera 3D.
   - **Play/Pause:** alterna `ctrl + 0x5C` (`0`/`1`) e `ctrl + 0x310` (`0.0f`/`1.0f`).

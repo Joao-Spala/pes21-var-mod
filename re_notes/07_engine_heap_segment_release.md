@@ -23,7 +23,7 @@ Pesquisa da v4.4.1. Endereços do `PES2021.exe` Steam `1.7.2.0`. **[P]** comprov
 ## 4. Quem muda a proteção
 
 - O `var_core.dll` só chama `VirtualProtect` em código (`.text`), vtables e IAT, nunca em dados de heap **[P]**.
-- Dezenas de módulos Lua do BMPES usam `memory.write` do Sider em endereços de dados do jogo **[P]**. Deixar páginas com proteção de execução é o efeito observado **[I]**.
+- Dezenas de módulos Lua de patches usam `memory.write` do Sider em endereços de dados do jogo **[P]**. Deixar páginas com proteção de execução é o efeito observado **[I]**.
 - O defeito independe do VAR. Mais atividade na partida só aumenta a chance de um segmento afetado ser liberado no trim **[I]**.
 
 ## 5. Correção

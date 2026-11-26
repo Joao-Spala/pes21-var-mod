@@ -111,7 +111,7 @@ __declspec(dllexport) int __cdecl var_init(const char* logDirUtf8) {
     var_mod::HeapGuard::Install();
 
     // Install XInput IAT hook immediately (< 1 ms); defer all AOB scans and DX11 hooking
-    // to the async background worker so Sider / BMPES startup never stalls the main thread.
+    // to the async background worker so Sider / patch startup never stalls the main thread.
     var_mod::InputManager::InstallXInputHook();
     var_mod::Dx11Hook::StartAsync();
     VAR_LOG_INF("var_core.dll v" VAR_MOD_VERSION " initialization started (async)");
