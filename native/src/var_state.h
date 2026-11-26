@@ -547,10 +547,13 @@ struct HudRenderSnapshot {
     uint32_t rosterRev      = 0;
     uint32_t teamsRev       = 0;
     uint32_t historyRev     = 0;
+    uint32_t snapRev        = 0;
     uint32_t syncDataRev    = 0;
+    uint32_t syncSnapRev    = 0;
     int32_t  syncPhase      = -999;
     float    syncCursorTime = -1e9f;
     uint32_t markersDataRev = 0;
+    uint32_t markersSnapRev = 0;
     int32_t  markersPhase   = -999;
     float    markersWinStart = -1e9f;
     float    markersWinEnd   = -1e9f;
@@ -559,7 +562,8 @@ struct HudRenderSnapshot {
 class VarState {
 public:
     static constexpr size_t kMaxEvents    = 128;
-    static constexpr size_t kMaxSnapshots = 900; // 90s at 10Hz
+    // One snapshot per simulation frame (60 Hz, the replay's own frame rate): 90 s, about 2.6 MB
+    static constexpr size_t kMaxSnapshots = 5400;
     static constexpr size_t kMaxIncidents = 160; // Clustered physical incidents
 
     static VarState& Instance();
@@ -729,8 +733,18 @@ private:
     uint32_t nextEventId_ = 1;
 
     std::vector<PlaySnapshot> snapshots_;
+    // Phase and time of each ring slot, so the replay cursor search walks 8-byte keys instead of whole snapshots.
+    // Interpolation limits: frames more than 3 ticks apart are not neighbours (dropped frames tolerated), and a
+    // move above 3 m between two consecutive frames is a teleport (restart, substitution), never blended.
+    static constexpr float kMaxInterpolationGap60Hz = 3.0f;
+    static constexpr float kMaxInterpolationStepSq  = 9.0f;
+    void InterpolateSnapshotLocked(size_t idx, size_t age, float cursorTime60Hz, PlaySnapshot& out) const;
+    struct SnapKey { int32_t phase; float time60Hz; };
+    std::vector<SnapKey> snapKeys_;
     size_t snapHead_ = 0;
     size_t snapCount_ = 0;
+    // Snapshot pushes only invalidate what reads snapshots (sync and markers), not the event history
+    uint32_t snapRevision_ = 1;
 
     std::array<DetectedIncident, kMaxIncidents> incidents_{};
     size_t incHead_ = 0;

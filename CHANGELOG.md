@@ -1,5 +1,12 @@
 # Changelog
 
+## v4.4.9
+
+- **Tactical pitch at 60 Hz**: the match is recorded once per simulation frame (60 Hz, the replay's own rate) instead of 10 Hz, still covering the last 90 s. In the replay the pitch follows the play frame by frame, with no 100 ms steps.
+- **Interpolation**: in slow motion and between two frames, ball and player positions are blended between the two neighbouring frames. Actions, contact and possession stay those of the nearest frame, and a stopped clock, a gap or a teleport (restart, substitution) is never blended.
+- **Lighter search**: the replay cursor lookup walks an 8-byte key per frame instead of whole snapshots, and recording a frame no longer invalidates the event history cache. Measured: about 2.5 us per cursor move and 0.04 us per recorded frame, against a 16,600 us frame.
+- Ring memory grows from 0.4 MB to 2.5 MB.
+
 ## v4.4.8
 
 - **Generic installer**: auto-detection looks for any Steam library folder that has its own Sider, instead of a fixed folder name. Patch folders still take priority over the Sider in the game folder.

@@ -77,7 +77,6 @@ std::atomic<void*> g_lastMatchControl{ nullptr };
 uint64_t g_mainTickCount = 0;
 uint64_t g_finalizeFrameCount = 0;
 uint64_t g_foulCommitCount = 0;
-uint32_t g_lastSnapshotTick = 0;
 uint32_t g_lastSeenMatchTick = 0;
 bool     g_lastAdvActive = false;
 bool     g_lastFoulValidEdge = false;
@@ -846,7 +845,7 @@ void SyncPlayersAndCards(uint8_t* gmatch, uint8_t* matchInfo) {
 }
 
 void SampleInPlayFrame(uint8_t* gmatch, uint8_t* matchInfo, int32_t matchPhase, float time60Hz,
-                       uint32_t matchTick, bool storeSnapshot) {
+                       uint32_t matchTick) {
     // 1. Track real ball owner at 60Hz so we always know who held possession before any tackle
     const int32_t realOwner = ReadRealBallOwnerSlot(gmatch);
     if (IsValidSlot(realOwner)) {
@@ -879,12 +878,8 @@ void SampleInPlayFrame(uint8_t* gmatch, uint8_t* matchInfo, int32_t matchPhase, 
         }
     }
 
-    // Every frame with physical contact is evaluated: the incident clustering keeps the closest
-    // contact distance across the whole tackle, so sub-sampling here would degrade detection.
-    if (!storeSnapshot && !anyPhysicalAction) {
-        return;
-    }
-
+    // Every frame is stored and every frame with physical contact is evaluated: the incident clustering keeps
+    // the closest contact distance across the whole tackle, so sub-sampling here would degrade detection.
     PlaySnapshot snap{};
     snap.matchPhase          = matchPhase;
     snap.time60Hz            = time60Hz;
@@ -919,10 +914,8 @@ void SampleInPlayFrame(uint8_t* gmatch, uint8_t* matchInfo, int32_t matchPhase, 
         }
     }
 
-    if (storeSnapshot) {
-        VarState::ComputeClosestContact(snap);
-        VarState::Instance().PushSnapshot(snap);
-    }
+    VarState::ComputeClosestContact(snap);
+    VarState::Instance().PushSnapshot(snap);
 }
 
 bool IsMatchEligibleForExecution(uint8_t* gmatch, uint8_t* matchInfo, uint8_t* replayMgr) {
@@ -2316,7 +2309,6 @@ void OnManualReplayController(uint8_t* ctrl) {
 } // namespace ReplayDiag
 
 void ResetSimTrackersOnSimThread() {
-    g_lastSnapshotTick = 0;
     g_lastSeenMatchTick = 0;
     g_lastAdvActive = false;
     g_lastFoulValidEdge = false;
@@ -2408,11 +2400,10 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
         const int32_t matchStatus = *reinterpret_cast<const int32_t*>(matchInfo + Offsets::MatchInfo_MatchStatus);
         const float time60Hz      = GetMatchTime60Hz(matchInfo);
 
-        // 60Hz physical incident detection + 10Hz rolling spatial snapshot during InPlay (every 6 frames)
+        // 60Hz physical incident detection + 60Hz spatial snapshot during InPlay: one snapshot per simulation
+        // frame, the same rate the replay records, so the tactical pitch follows the replay frame by frame
         if (matchStatus == static_cast<int32_t>(MatchStatus::InPlay)) {
-            const bool storeSnap = (matchTick < g_lastSnapshotTick || matchTick - g_lastSnapshotTick >= 6);
-            if (storeSnap) g_lastSnapshotTick = matchTick;
-            SampleInPlayFrame(gmatch, matchInfo, matchPhase, time60Hz, matchTick, storeSnap);
+            SampleInPlayFrame(gmatch, matchInfo, matchPhase, time60Hz, matchTick);
         }
 
         // Sync roster names, shirt numbers, substitutions, team colors & cards periodically

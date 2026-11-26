@@ -23,14 +23,14 @@ Extracted directly from `<patch folder>\modules\goal_pyro.lua` and `PESCustomCel
 
 To eliminate any fragility from volatile registers and guarantee instant startup (zero static imports of `d3d11.dll` / `dxgi.dll`, zero dummy DX11 device), v4.0 uses exclusively Microsoft x64 ABI function-entry hooks with atomic writes (`InterlockedExchange64` / `cmpxchg16b`) and prior trampoline publication with a memory barrier.
 
-### Hook 1: `MatchFSM::MainTick` (60 Hz Monitoring, 10 Hz Snapshots and Execution of Scenarios 1, 2 and 4)
+### Hook 1: `MatchFSM::MainTick` (60 Hz Monitoring, 60 Hz Snapshots and Execution of Scenarios 1, 2 and 4)
 
 - **VA / RVA:** `0x1404468F0` / `0x4468F0`
 - **Unique AOB (30 bytes):**
   `48 89 5C 24 20 4C 89 44 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 60`
 - **Stolen bytes (5 bytes, 0 NOPs):** `48 89 5C 24 20` (`mov qword ptr [rsp + 0x20], rbx`)
 - **Sider/patch conflicts:** none (`[]`)
-- **Role in the VAR Mod:** captures `MatchFSM*`, resolves `GMATCH` (`0x143702208`) at `MainTick + 0x30`, runs physical detection at 60 Hz (`PlayerAction + 0x01 / +0x08` and `BallState + 0x2601C`), records tactical snapshots at 10 Hz (90 s), synchronizes real names (`#N NAME`), shirt numbers, substitutions and kit colors (licensed and patch-edited) and applies the verdicts of Scenarios 1, 2 and 4.
+- **Role in the VAR Mod:** captures `MatchFSM*`, resolves `GMATCH` (`0x143702208`) at `MainTick + 0x30`, runs physical detection at 60 Hz (`PlayerAction + 0x01 / +0x08` and `BallState + 0x2601C`), records tactical snapshots at 60 Hz, one per simulation frame (90 s), synchronizes real names (`#N NAME`), shirt numbers, substitutions and kit colors (licensed and patch-edited) and applies the verdicts of Scenarios 1, 2 and 4.
 
 ### Hook 2: `Judge::FinalizeFrame` (Native Injection of Scenario 3 in `InPlay`)
 

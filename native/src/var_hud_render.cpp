@@ -32,6 +32,7 @@ std::atomic<bool> g_resetPending{ false };
 // VarState data revision captured this frame (render thread only). Keys per-frame caches so a new
 // snapshot, incident, verdict or match reset always invalidates them.
 uint32_t g_frameDataRevision = 0;
+uint32_t g_frameSnapRevision = 0;
 // Horizontal extent of the open panel in the last frame it was drawn: banners and toasts are centred in the free
 // part of the screen so they never cover the panel on small or narrow screens
 float    g_panelX0 = 0.0f;
@@ -1007,15 +1008,18 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     static float s_lockTime = -1e9f;
     static ReplaySyncResult s_lockSync{};
     static uint32_t s_lockRev = 0;
+    static uint32_t s_lockSnapRev = 0;
     const ReplaySyncResult* syncPtr = &g_controller.Sync();
     int32_t lockPhase = 0;
     float lockTime = 0.0f;
     if (g_controller.GetLockedMarkerTime(lockPhase, lockTime) && std::fabs(tel.replayCursorTime - lockTime) > 6.0f) {
-        if (s_lockPhase != lockPhase || std::fabs(s_lockTime - lockTime) > 0.05f || s_lockRev != g_frameDataRevision) {
+        if (s_lockPhase != lockPhase || std::fabs(s_lockTime - lockTime) > 0.05f || s_lockRev != g_frameDataRevision ||
+            s_lockSnapRev != g_frameSnapRevision) {
             s_lockSync = state.SyncToReplayCursor(lockPhase, lockTime);
             s_lockPhase = lockPhase;
             s_lockTime = lockTime;
             s_lockRev = g_frameDataRevision;
+            s_lockSnapRev = g_frameSnapRevision;
         }
         if (s_lockSync.hasSnapshot) syncPtr = &s_lockSync;
     }
@@ -2257,6 +2261,7 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
     // Single mutex lock + revision-cached players/teams/history/sync/markers (0 heap allocs on steady frames)
     state.CaptureHudRenderSnapshot(s_renderSnap);
     g_frameDataRevision = s_renderSnap.historyRev;
+    g_frameSnapRevision = s_renderSnap.snapRev;
     g_frameNamesRevision = (static_cast<uint64_t>(s_renderSnap.rosterRev) << 32) ^ s_renderSnap.teamsRev;
     const LiveTelemetry& tel = s_renderSnap.tel;
     const VarVerdict& pending = s_renderSnap.pending;

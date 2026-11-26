@@ -1408,6 +1408,73 @@ void PatchReplayTelemetryForTest(bool active, int32_t cursorPhase, float cursorT
         0, 0.0f, 0, 0, 0, 0, 0, -1, -1);
 }
 
+void TestSnapshotInterpolation() {
+    auto& st = VarState::Instance();
+    st.ResetMatch();
+    auto frame = [&st](float time, uint32_t tick, float px, float bx, uint8_t onPitch, int8_t action) {
+        PlaySnapshot sn{};
+        sn.matchPhase = 0;
+        sn.time60Hz = time;
+        sn.matchTick = tick;
+        sn.ballPos = Vec3{ bx, 0.2f, 1.0f };
+        sn.playerPos[0] = Vec3{ px, 0.0f, 2.0f };
+        sn.playerOnPitch[0] = onPitch;
+        sn.playerActionId[0] = action;
+        st.PushSnapshot(sn);
+    };
+    frame(100.0f, 1, 0.0f, 10.0f, 1, 5);
+    frame(101.0f, 2, 1.0f, 12.0f, 1, 13);
+    frame(102.0f, 3, 9.0f, 12.5f, 1, 13);   // 8 m in one frame: teleport, never blended
+    frame(110.0f, 4, 9.5f, 13.0f, 1, 13);   // 8-tick gap: not neighbours
+    frame(111.0f, 5, 9.7f, 13.2f, 0, 13);   // player off the pitch in the newer frame
+
+    ReplaySyncResult r = st.SyncToReplayCursor(0, 100.25f);
+    EXPECT_TRUE(r.hasSnapshot && r.snapshot.matchTick == 1, "Interpolated sync must keep the nearest frame identity");
+    EXPECT_TRUE(std::fabs(r.snapshot.playerPos[0].x - 0.25f) < 1e-4f, "Player position not interpolated at 1/4 frame");
+    EXPECT_TRUE(std::fabs(r.snapshot.ballPos.x - 10.5f) < 1e-4f, "Ball position not interpolated at 1/4 frame");
+    EXPECT_TRUE(r.snapshot.playerActionId[0] == 5, "Discrete fields must come from the nearest frame");
+
+    r = st.SyncToReplayCursor(0, 100.75f);
+    EXPECT_TRUE(r.snapshot.matchTick == 2 && std::fabs(r.snapshot.playerPos[0].x - 0.75f) < 1e-4f,
+                "Interpolation from the newer side of the pair");
+    EXPECT_TRUE(r.snapshot.playerActionId[0] == 13, "Nearest frame on the newer side keeps its action");
+
+    r = st.SyncToReplayCursor(0, 101.0f);
+    EXPECT_TRUE(r.snapshot.playerPos[0].x == 1.0f && r.snapshot.ballPos.x == 12.0f, "Exact frame must be returned as is");
+
+    r = st.SyncToReplayCursor(0, 101.4f);
+    EXPECT_TRUE(r.snapshot.playerPos[0].x == 1.0f, "Teleport between frames must not be blended");
+    EXPECT_TRUE(std::fabs(r.snapshot.ballPos.x - 12.2f) < 1e-4f, "Ball still blends when only a player teleports");
+
+    r = st.SyncToReplayCursor(0, 104.0f);
+    EXPECT_TRUE(r.snapshot.matchTick == 3 && r.snapshot.playerPos[0].x == 9.0f, "Gap between frames must not be blended");
+
+    r = st.SyncToReplayCursor(0, 110.4f);
+    EXPECT_TRUE(r.snapshot.playerPos[0].x == 9.5f, "Player leaving the pitch must not be blended");
+
+    r = st.SyncToReplayCursor(0, 115.0f);
+    EXPECT_TRUE(r.snapshot.matchTick == 5 && r.snapshot.ballPos.x == 13.2f, "Cursor past the newest frame keeps it");
+    r = st.SyncToReplayCursor(0, 90.0f);
+    EXPECT_TRUE(r.snapshot.matchTick == 1 && r.snapshot.ballPos.x == 10.0f, "Cursor before the oldest frame keeps it");
+
+    // Snapshot pushes must not invalidate the event history cache, but must refresh sync
+    PatchReplayTelemetryForTest(true, 0, 100.5f, 90.0f, 120.0f);
+    HudRenderSnapshot snap;
+    st.CaptureHudRenderSnapshot(snap);
+    const uint32_t histRev = snap.historyRev;
+    const uint32_t snapRev = snap.snapRev;
+    frame(112.0f, 6, 9.8f, 13.4f, 1, 13);
+    PatchReplayTelemetryForTest(true, 0, 111.5f, 90.0f, 120.0f);
+    st.CaptureHudRenderSnapshot(snap);
+    EXPECT_TRUE(snap.historyRev == histRev, "Snapshot push must not invalidate the event history");
+    EXPECT_TRUE(snap.snapRev != snapRev, "Snapshot push must bump the snapshot revision");
+    EXPECT_TRUE(snap.sync.hasSnapshot && std::fabs(snap.sync.snapshot.ballPos.x - 13.3f) < 1e-4f,
+                "Cached sync must see the new frame");
+    PatchReplayTelemetryForTest(false, 0, 0.0f, 0.0f, 0.0f);
+    st.ResetMatch();
+    MarkPass("TestSnapshotInterpolation");
+}
+
 void TestPerfOverhaulEquivalence() {
     auto& st = VarState::Instance();
     st.ResetMatch();
@@ -1419,10 +1486,14 @@ void TestPerfOverhaulEquivalence() {
     uint32_t lcg = 12345u;
     auto rnd = [&lcg](uint32_t mod) { lcg = lcg * 1664525u + 1013904223u; return (lcg >> 8) % mod; };
     float t = 0.0f;
+    float maxT = 0.0f;
     uint32_t tick = 1;
-    for (int i = 0; i < 1300; ++i) {
-        const int32_t phase = (i < 700) ? 0 : 2;
-        if (i == 700) t = 0.0f;                       // 2nd half clock restarts
+    // More pushes than the ring holds, so the search also runs across the wrap
+    const int total = static_cast<int>(VarState::kMaxSnapshots) + 900;
+    const int halfSplit = total * 11 / 20;
+    for (int i = 0; i < total; ++i) {
+        const int32_t phase = (i < halfSplit) ? 0 : 2;
+        if (i == halfSplit) t = 0.0f;                 // 2nd half clock restarts
         const uint32_t r = rnd(10);
         t += (r < 2) ? 0.0f : static_cast<float>(r);  // plateaus (clock stopped) and 2..9 tick steps
         PlaySnapshot sn{};
@@ -1431,13 +1502,14 @@ void TestPerfOverhaulEquivalence() {
         sn.matchTick = tick++;
         st.PushSnapshot(sn);
         pushed.push_back({ phase, t, sn.matchTick });
+        maxT = std::max(maxT, t);
     }
     const size_t keep = std::min<size_t>(pushed.size(), VarState::kMaxSnapshots);
     const std::vector<RefSnap> live(pushed.end() - static_cast<std::ptrdiff_t>(keep), pushed.end());
 
     for (int q = 0; q < 3000; ++q) {
         const int32_t cph = (q % 3 == 0) ? 0 : 2;
-        const float ct = static_cast<float>(rnd(4200)) * 0.75f - 50.0f;
+        const float ct = static_cast<float>(rnd(static_cast<uint32_t>(maxT * 4.0f / 3.0f) + 200)) * 0.75f - 50.0f;
         // Brute force: newest-first, strict < (newest wins ties), identical to the v4.0 full scan
         bool refHas = false;
         float refBest = 999999.0f;
@@ -2823,6 +2895,7 @@ int main() {
     TestV4EngineAndDataExtraction();
     TestV4BroadcastHudAndRadar();
     TestPerfOverhaulEquivalence();
+    TestSnapshotInterpolation();
     TestRemapAndLanguage();
     TestHudRenderSmoke();
     TestCompositeVerdictPoolAndRcuOffsets();

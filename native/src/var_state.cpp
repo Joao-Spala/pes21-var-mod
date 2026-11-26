@@ -226,11 +226,15 @@ void VarState::ResetMatch() {
     if (snapshots_.size() != kMaxSnapshots) {
         snapshots_.resize(kMaxSnapshots);
     }
+    if (snapKeys_.size() != kMaxSnapshots) {
+        snapKeys_.resize(kMaxSnapshots);
+    }
     eventHead_ = 0;
     eventCount_ = 0;
     nextEventId_ = 1;
     snapHead_ = 0;
     snapCount_ = 0;
+    ++snapRevision_;
     incHead_ = 0;
     incCount_ = 0;
     ++dataRevision_;
@@ -597,12 +601,16 @@ void VarState::PushSnapshot(const PlaySnapshot& snap) {
     if (snapshots_.size() != kMaxSnapshots) {
         snapshots_.resize(kMaxSnapshots);
     }
+    if (snapKeys_.size() != kMaxSnapshots) {
+        snapKeys_.resize(kMaxSnapshots);
+    }
     snapshots_[snapHead_] = snap;
+    snapKeys_[snapHead_] = SnapKey{ snap.matchPhase, snap.time60Hz };
     snapHead_ = (snapHead_ + 1) % kMaxSnapshots;
     if (snapCount_ < kMaxSnapshots) {
         ++snapCount_;
     }
-    ++dataRevision_;
+    ++snapRevision_;
 }
 
 void VarState::PushDetectedIncident(const DetectedIncident& inc) {
@@ -830,6 +838,48 @@ MatchVarStats VarState::GetStats() const {
     return stats_;
 }
 
+// Positions between the two consecutive frames around the cursor (slow motion and frames between ticks).
+// Only positions move: action ids, contact and ownership stay those of the nearest frame, so everything the
+// panel derives from the snapshot is unchanged. No blending across a phase change, a stopped clock, a gap
+// or a teleport (restart, substitution), where the nearest frame is the faithful one.
+void VarState::InterpolateSnapshotLocked(size_t idx, size_t age, float cursorTime60Hz, PlaySnapshot& out) const {
+    const SnapKey& k = snapKeys_[idx];
+    size_t olderIdx = 0;
+    size_t newerIdx = 0;
+    if (k.time60Hz < cursorTime60Hz) {
+        if (age == 0) return; // newest frame, nothing after it
+        olderIdx = idx;
+        newerIdx = (idx + 1) % kMaxSnapshots;
+    } else if (k.time60Hz > cursorTime60Hz) {
+        if (age + 1 >= snapCount_) return; // oldest frame, nothing before it
+        olderIdx = (idx + kMaxSnapshots - 1) % kMaxSnapshots;
+        newerIdx = idx;
+    } else {
+        return; // exact frame
+    }
+    const SnapKey& ka = snapKeys_[olderIdx];
+    const SnapKey& kb = snapKeys_[newerIdx];
+    if (ka.phase != kb.phase) return;
+    const float span = kb.time60Hz - ka.time60Hz;
+    if (!(span > 0.0f) || span > kMaxInterpolationGap60Hz) return;
+    const float alpha = std::clamp((cursorTime60Hz - ka.time60Hz) / span, 0.0f, 1.0f);
+    const PlaySnapshot& a = snapshots_[olderIdx];
+    const PlaySnapshot& b = snapshots_[newerIdx];
+    auto blend = [alpha](const Vec3& p, const Vec3& q, Vec3& dst) {
+        const float dx = q.x - p.x;
+        const float dz = q.z - p.z;
+        if (!(dx * dx + dz * dz <= kMaxInterpolationStepSq)) return; // teleport or NaN: keep the nearest frame
+        dst.x = p.x + dx * alpha;
+        dst.y = p.y + (q.y - p.y) * alpha;
+        dst.z = p.z + dz * alpha;
+    };
+    blend(a.ballPos, b.ballPos, out.ballPos);
+    for (int s = 0; s < 22; ++s) {
+        if (!a.playerOnPitch[s] || !b.playerOnPitch[s] || !out.playerOnPitch[s]) continue;
+        blend(a.playerPos[s], b.playerPos[s], out.playerPos[s]);
+    }
+}
+
 ReplaySyncResult VarState::SyncToReplayCursorLocked(int32_t cursorPhase, float cursorTime60Hz, float eventToleranceTicks) const {
     ReplaySyncResult res{};
 
@@ -852,24 +902,27 @@ ReplaySyncResult VarState::SyncToReplayCursorLocked(int32_t cursorPhase, float c
     // scan (newest snapshot wins ties), verified against brute force in TestPerfOverhaulEquivalence.
     float bestSnapDelta = 999999.0f;
     size_t bestSnapIdx = kMaxSnapshots;
+    size_t bestSnapAge = 0;
     for (size_t i = 0; i < snapCount_; ++i) {
         const size_t idx = (snapHead_ + kMaxSnapshots - 1 - i) % kMaxSnapshots;
-        const auto& sn = snapshots_[idx];
-        if (!IsPhaseCompatible(sn.matchPhase, cursorPhase)) {
+        const SnapKey& key = snapKeys_[idx];
+        if (!IsPhaseCompatible(key.phase, cursorPhase)) {
             if (bestSnapIdx != kMaxSnapshots) break;
             continue;
         }
-        const float dt = std::fabs(sn.time60Hz - cursorTime60Hz);
+        const float dt = std::fabs(key.time60Hz - cursorTime60Hz);
         if (dt < bestSnapDelta) {
             bestSnapDelta = dt;
             bestSnapIdx = idx;
-        } else if (bestSnapIdx != kMaxSnapshots && sn.time60Hz < cursorTime60Hz && dt > bestSnapDelta + 12.0f) {
+            bestSnapAge = i;
+        } else if (bestSnapIdx != kMaxSnapshots && key.time60Hz < cursorTime60Hz && dt > bestSnapDelta + 12.0f) {
             break; // Monotonically moving further into the past -> early exit
         }
     }
     if (bestSnapIdx != kMaxSnapshots) {
         res.hasSnapshot = true;
-        res.snapshot = snapshots_[bestSnapIdx]; // single 450-byte copy instead of one per improvement
+        res.snapshot = snapshots_[bestSnapIdx]; // single copy instead of one per improvement
+        InterpolateSnapshotLocked(bestSnapIdx, bestSnapAge, cursorTime60Hz, res.snapshot);
     }
 
     return res;
@@ -1054,13 +1107,14 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         }
     }
 
-    // 3. Fallback from 10Hz snapshots only for close contests not already covered by official or physical markers
+    // 3. Fallback from the snapshots only for close contests not already covered by official or physical markers
     constexpr float kFallbackContactDistSq = 2.10f; // <= 1.45m
     for (size_t i = 0; i < snapCount_; ++i) {
         const size_t idx = (snapHead_ + kMaxSnapshots - snapCount_ + i) % kMaxSnapshots;
+        const SnapKey& key = snapKeys_[idx]; // filter on the 8-byte key before touching the snapshot
+        if (!IsPhaseCompatible(key.phase, winPhase)) continue;
+        if (key.time60Hz < winStartTime || key.time60Hz > winEndTime) continue;
         const auto& sn = snapshots_[idx];
-        if (!IsPhaseCompatible(sn.matchPhase, winPhase)) continue;
-        if (sn.time60Hz < winStartTime || sn.time60Hz > winEndTime) continue;
         if (!IsValidSlot(sn.closestA) || !IsValidSlot(sn.closestB)) continue;
         if (sn.closestDistSq > kFallbackContactDistSq) continue;
 
@@ -1176,6 +1230,7 @@ void VarState::CaptureHudRenderSnapshot(HudRenderSnapshot& io) const {
         io.teams = teams_;
         io.teamsRev = teamsRevision_;
     }
+    io.snapRev = snapRevision_;
     if (io.historyRev != dataRevision_) {
         const size_t n = std::min<size_t>(16, eventCount_);
         io.history.resize(n);
@@ -1187,16 +1242,17 @@ void VarState::CaptureHudRenderSnapshot(HudRenderSnapshot& io) const {
     }
 
     if (io.tel.matchActive && io.tel.replayMode >= 1 && io.tel.replayMode <= 3) {
-        if (io.syncDataRev != dataRevision_ ||
+        if (io.syncDataRev != dataRevision_ || io.syncSnapRev != snapRevision_ ||
             io.syncPhase != io.tel.replayCursorPhase ||
             std::fabs(io.syncCursorTime - io.tel.replayCursorTime) > 0.05f) {
             io.sync = SyncToReplayCursorLocked(io.tel.replayCursorPhase, io.tel.replayCursorTime, 210.0f);
             io.syncDataRev    = dataRevision_;
+            io.syncSnapRev    = snapRevision_;
             io.syncPhase      = io.tel.replayCursorPhase;
             io.syncCursorTime = io.tel.replayCursorTime;
         }
 
-        if (io.markersDataRev != dataRevision_ ||
+        if (io.markersDataRev != dataRevision_ || io.markersSnapRev != snapRevision_ ||
             io.markersPhase != io.tel.replayWindowStartPhase ||
             std::fabs(io.markersWinStart - io.tel.replayWindowStartTime) > 0.5f ||
             std::fabs(io.markersWinEnd - io.tel.replayWindowEndTime) > 0.5f) {
@@ -1205,6 +1261,7 @@ void VarState::CaptureHudRenderSnapshot(HudRenderSnapshot& io) const {
                                            io.tel.replayWindowEndTime,
                                            io.markers);
             io.markersDataRev  = dataRevision_;
+            io.markersSnapRev  = snapRevision_;
             io.markersPhase    = io.tel.replayWindowStartPhase;
             io.markersWinStart = io.tel.replayWindowStartTime;
             io.markersWinEnd   = io.tel.replayWindowEndTime;
