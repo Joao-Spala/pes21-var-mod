@@ -19,117 +19,104 @@
 
 ---
 
-## O que é
+## Visão geral
 
-O **VAR para PES 2021** adiciona uma revisão manual de vídeo às partidas offline. Você pausa, abre o replay, escolhe o lance e decide. A decisão é aplicada dentro da engine do PES, então a cobrança, o cartão e a expulsão seguem como se o árbitro tivesse tomado aquela decisão desde o começo. Quando é uma falta ou um pênalti com a bola rolando, a engine depois mostra o lance de novo.
+O VAR para PES 2021 é um módulo de revisão de vídeo para partidas offline do eFootball PES 2021 (Steam `v1.7.2.0`). Ele adiciona um painel de revisão ao Replay Manual. As decisões confirmadas ali são aplicadas pela própria engine do jogo: cobranças, cartões e expulsões seguem o fluxo da engine.
 
-É um módulo do Sider (DLL nativa x64 e Lua) para a versão Steam do jogo.
+É distribuído como módulo do Sider: uma DLL nativa x64 e um script Lua.
 
-## Veja em movimento
+## Demonstração
 
-<p align="center"><img src="docs/images/pt/replay.gif" alt="O painel do VAR acompanhando o replay quadro a quadro" width="450"></p>
+<p align="center"><img src="docs/images/pt/replay.gif" alt="Painel de revisão acompanhando o replay" width="450"></p>
 
-<p align="center"><sub>O replay corre e o painel acompanha quadro a quadro. Primeiro uma dividida no meio-campo, depois o campinho entra sozinho na área quando o ataque chega lá. O marcador dourado da barra não para de pulsar: é o lance com mais cara de falta que o árbitro deixou passar, um carrinho que derrubou o centroavante dentro da área.</sub></p>
+<p align="center"><sub>Painel de revisão durante o Replay Manual. O campinho tático acompanha o replay quadro a quadro e o marcador dourado indica o lance com a maior nota de falta não marcada.</sub></p>
 
-## O que você pode fazer
+## Funcionalidades
 
-| Situação | O que o VAR faz |
+| Área | Descrição |
 | --- | --- |
-| **O pênalti que não foi marcado.** Seu atacante foi derrubado e o jogo seguiu. | Volte ao lance no replay e escolha **Marcar pênalti**. A partida vai para a marca da cal com o cartão que você decidir, e a engine repete o lance revisado depois do apito. |
-| **A marcação injusta.** O árbitro deu falta e amarelo num lance limpo. | Escolha **Anular falta**. A falta some, o cartão é retirado e a posse volta para o time certo. |
-| **O cartão errado.** Era o segundo amarelo e o jogador ficou em campo, ou o contrário. | Ajuste o cartão de qualquer jogador na aba **CARTÕES**. A engine tira ou devolve o jogador na bola parada. |
+| **Detecção de lances** | A partida é amostrada a 60 Hz. Carrinhos, botes, trancos, quedas e simulações são marcados na barra do replay junto com as faltas, cartões e vantagens do árbitro, cada um com infrator, vítima, local e zona. |
+| **Indicador de falta não marcada** | Os lances que o árbitro não puniu recebem uma nota pelo tipo de entrada, se o adversário caiu pelo contato, posição em relação à área e distância do contato. A maior nota é destacada na barra do replay e indicada no cartão do lance. |
+| **Decisões** | Marcar falta ou pênalti num lance anterior, anular falta ou pênalti, converter em pênalti, inverter a falta, ajustar os cartões de qualquer jogador e dar escanteio, tiro de meta ou lateral. |
+| **Pool de decisões** | Uma decisão de lance e até 32 ajustes de cartão, aplicados juntos e em ordem ao sair do replay. |
+| **Integração com a engine** | As decisões passam pela máquina de estados da partida (`MatchFSM`) e pelo registro de cartões da própria engine. Se a engine não montar a cobrança, todas as alterações daquele tick são desfeitas. |
+| **Replay após a decisão** | Numa falta ou pênalti marcado com a bola rolando, a engine repete o momento revisado depois das cenas da parada, pelo próprio mecanismo de clipe pendente. Pode ser desligado. |
+| **Campinho tático** | Enquadramento automático (lance ou área), números das camisas, setas de direção, rastro de 1,5 s dos dois jogadores envolvidos e da bola, sentido de ataque de cada time, linha de impedimento e local da cobrança. |
+| **Câmera do replay** | Selecionar um lance na barra leva a câmera 3D do replay até aquele quadro. |
+| **Identidade dos jogadores** | Nomes, números e uniformes lidos da memória do jogo, inclusive dados editados por patches. Cartões e faltas seguem o jogador, não a posição, mesmo após substituições. |
+| **Interface** | PT-BR e inglês. Escala de 720p a 4K, ultrawide e 4:3, em três tamanhos. Teclado e mouse dentro do painel. |
 
-## Do lance à decisão
-
-```mermaid
-flowchart LR
-    A["Lance<br/>polêmico"] --> B["Pause e abra o<br/>Replay Manual"]
-    B --> C["O lance suspeito<br/>pulsa em dourado"]
-    C --> D["Confirme<br/>a decisão"]
-    D --> E["Saia do replay:<br/>a engine aplica"]
-    E --> F["A engine repete<br/>o lance revisado"]
-```
-
-O painel encontra sozinho os momentos que importam. Ele acompanha a partida 60 vezes por segundo e marca na barra do replay carrinhos, botes, trancos, quedas e simulações, além das faltas, cartões e vantagens do árbitro. Cada marcador já chega com infrator, vítima, local e zona. Você confere, ajusta o que quiser e aperta **Confirmar decisão**. A decisão vai para o **pool de decisões** e, ao sair do replay, a engine aplica tudo de uma vez.
-
-## De perto
+## Detalhes
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/pt/feat_timeline.png" alt="Barra do replay com o lance suspeito"></td>
-<td><b>O lance suspeito salta aos olhos.</b><br>Cada lance que o árbitro deixou passar ganha uma nota de falta não marcada: o tipo de entrada, se o adversário caiu por causa daquele contato, a área e quão justo foi o contato. O mais forte pulsa em dourado até você abri-lo. Marcações oficiais e simulações nunca entram.</td>
+<td width="50%"><img src="docs/images/pt/feat_timeline.png" alt="Barra do replay"></td>
+<td><b>Barra do replay.</b> Marcadores das decisões oficiais e dos lances detectados. O marcador dourado é o indicador de falta não marcada.</td>
 </tr>
 <tr>
 <td><img src="docs/images/pt/feat_card.png" alt="Cartão do lance"></td>
-<td><b>Quem fez o quê, num relance.</b><br>Infrator em laranja e vítima em ciano, cores que nenhum uniforme e nenhum estado da interface usam. A distância diz o que mede: <i>7,8 m dentro da área</i>.</td>
+<td><b>Cartão do lance.</b> Tipo de lance, distância até a área, infrator (laranja) e vítima (ciano).</td>
 </tr>
 <tr>
 <td><img src="docs/images/pt/feat_pitch.png" alt="Campinho tático"></td>
-<td><b>Uma prancheta tática, não um radar.</b><br>Enquadrada no lance e acompanhando o movimento, com número da camisa legível em qualquer uniforme, seta de direção nos jogadores perto da bola, rastro de 1,5 s dos dois jogadores do lance e um rastro pontilhado da bola, setas que mostram para onde cada time ataca, linha de impedimento e rótulos que ficam onde não cobrem ninguém.</td>
+<td><b>Campinho tático.</b> Posições no quadro do replay, setas de direção, rastros, linha de impedimento e rótulos dos papéis.</td>
 </tr>
 </table>
 
-**Também novo na v4.4.9 e v4.4.10**
+## Fluxo de uso
 
-- **A câmera acompanha o salto.** Clique num lance da barra e a câmera 3D do replay vai para o novo quadro, mantendo ângulo e distância.
-- **Replay depois da decisão.** Uma falta ou um pênalti marcado com a bola rolando é mostrado de novo pela própria engine, depois das cenas da parada. Dá para desligar em **OPÇÕES**.
-- **Legível em qualquer tela.** Tamanho mínimo de texto e de ficha em 720p, 4:3 e 800x600.
-- **Mais leve.** Atlas de fonte menor e sem cópia na RAM, sombra do painel mais barata e DLL menor.
+```mermaid
+flowchart LR
+    A["Pause a partida"] --> B["Abra o<br/>Replay Manual"]
+    B --> C["Selecione um lance<br/>na barra do replay"]
+    C --> D["Confirme<br/>a decisão"]
+    D --> E["Saia do replay:<br/>a engine aplica"]
+```
 
-## O painel
+O painel abre automaticamente no Replay Manual. Os lances detectados já trazem infrator, vítima, local e zona preenchidos, que podem ser ajustados antes de confirmar. As decisões confirmadas ficam no pool de decisões e são aplicadas ao fechar o replay.
+
+## Capturas de tela
 
 <table>
 <tr>
-<td align="center" width="33%"><img src="docs/images/pt/revisao.png" alt="Revisão"><br><b>Revisão</b><br><sub>A barra de lances, o lance em foco e o campinho tático com o contato entre infrator e vítima.</sub></td>
-<td align="center" width="33%"><img src="docs/images/pt/decisao.png" alt="Decisão"><br><b>Decisão</b><br><sub>Ajuste jogador, cartão, time e local. O X branco com o rótulo COBRANÇA é onde o jogo recomeça, um clique o move.</sub></td>
-<td align="center" width="33%"><img src="docs/images/pt/pool.png" alt="Pool de decisões"><br><b>Pool de decisões</b><br><sub>Um lance e até 32 ajustes de cartão, aplicados juntos e em ordem ao sair do replay.</sub></td>
+<td align="center" width="33%"><img src="docs/images/pt/revisao.png" alt="Revisão"><br><b>Revisão</b><br><sub>Barra do replay, cartão do lance e campinho tático.</sub></td>
+<td align="center" width="33%"><img src="docs/images/pt/decisao.png" alt="Decisão"><br><b>Decisão</b><br><sub>Cartão, time da cobrança, jogador e local da cobrança.</sub></td>
+<td align="center" width="33%"><img src="docs/images/pt/pool.png" alt="Pool de decisões"><br><b>Pool de decisões</b><br><sub>Decisões pendentes, aplicadas ao sair do replay.</sub></td>
 </tr>
 <tr>
-<td align="center"><img src="docs/images/pt/cartoes.png" alt="Cartões"><br><b>Cartões</b><br><sub>Os 22 jogadores com nomes e números reais. Corrija o cartão de qualquer um, mesmo sem lance.</sub></td>
-<td align="center"><img src="docs/images/pt/opcoes.png" alt="Opções"><br><b>Opções</b><br><sub>Lado da tela, tamanho, campinho, avisos, o replay depois da decisão e idioma, salvos para a próxima partida.</sub></td>
-<td align="center"><img src="docs/images/pt/controles.png" alt="Controles"><br><b>Controles</b><br><sub>Duas teclas por ação, troca automática em conflito e nenhum atalho essencial perdido.</sub></td>
+<td align="center"><img src="docs/images/pt/cartoes.png" alt="Cartões"><br><b>Cartões</b><br><sub>Os 22 jogadores com nomes e números.</sub></td>
+<td align="center"><img src="docs/images/pt/opcoes.png" alt="Opções"><br><b>Opções</b><br><sub>Configurações do painel, da partida e do idioma.</sub></td>
+<td align="center"><img src="docs/images/pt/controles.png" alt="Controles"><br><b>Controles</b><br><sub>Duas teclas por ação.</sub></td>
 </tr>
 </table>
 
-<p align="center"><img src="docs/images/pt/recolhido.png" alt="Painel recolhido com o pool pronto"><br><sub>Recolhido, o painel vira uma pílula que lembra o que vai ser aplicado.</sub></p>
+## Requisitos
 
-## Ver, decidir, aplicar, lembrar
-
-| | |
+| Item | Versão |
 | --- | --- |
-| **Ver** | A partida gravada a 60 Hz, um quadro por quadro da simulação, então o campinho acompanha o replay quadro a quadro e suaviza as posições em câmera lenta. Os lances vêm do modelo de contato da própria engine, e a falta apitada depois de uma vantagem fica no momento do contato. Nomes, números e uniformes vêm da memória do jogo, inclusive os editados por patches. |
-| **Decidir** | Marcar falta ou pênalti num lance anterior, anular a falta ou o pênalti marcado, converter em pênalti, inverter a falta, ajustar cartões e dar escanteio, tiro de meta ou lateral, mesmo com o cobrador já posicionado. |
-| **Aplicar** | O cartão passa pelo registro da própria engine, que conta uma vez só, e a expulsão sai pelo fluxo dela. Se o jogo não montar a cobrança, o mod desfaz tudo o que escreveu naquele instante. Numa falta ou num pênalti marcado com a bola rolando, a engine depois repete o momento revisado pelo seu próprio replay de lances passados. |
-| **Lembrar** | Cartões e faltas seguem o jogador do lance, não a posição, mesmo depois de uma substituição. Uma decisão sobre uma parada que já passou nunca é aplicada fora de hora. |
-| **Respeitar** | Nunca terceiro amarelo nem segundo vermelho. Nenhum arquivo do jogo é alterado. O painel ocupa a mesma fração da tela de 720p a 4K, em ultrawide e 4:3, nos tamanhos Compacto, Padrão e Grande. |
-
-## Limitações
-
-- Funciona só no **PES 2021 `v1.7.2.0` da Steam**. Outras versões do executável têm outros endereços e não são suportadas.
-- **Só partidas offline**: Exibição, Master Liga, Rumo ao Estrelato e Copas. Nada de rede, DRM ou modo online é tocado.
-- Não volta o jogo no tempo. Uma decisão vale para a parada em que foi tomada, e **gols não podem ser anulados**.
-- O replay depois da decisão vale para falta ou pênalti marcado com a bola rolando, com o lance revisado ainda na memória de replay do jogo (cerca de 11 s de jogo). A engine pode mostrar antes o replay instantâneo dela. Se faltar alguma condição, a decisão é aplicada sem o replay extra.
-- O controle abre e recolhe o painel e continua controlando o replay. Dentro do painel, a navegação é por teclado e mouse.
+| Jogo | eFootball PES 2021 `v1.7.2.0` (Steam). Outras versões do executável não são suportadas. |
+| Sider | 7.3 ou posterior com LuaJIT, sozinho ou dentro de um patch |
+| Sistema | Windows 10 ou 11, x64 |
 
 ## Instalação
 
-1. Baixe o **`PES2021_VAR_Mod_v4.4.10.zip`** em [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
+1. Baixe o **`PES2021_VAR_Mod_v4.4.10.zip`** em [Releases](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia.
 2. Com o jogo fechado, rode o **`VAR_Mod_Gerenciar.bat`** e escolha **`1 - Instalar ou atualizar`**.
-3. Abra o jogo pelo **Sider** (num patch, pelo atalho do próprio patch). Pronto.
+3. Abra o jogo pelo Sider (ou pelo atalho do patch).
 
-O instalador acha o Sider sozinho (ou pergunta o caminho), faz backup datado do `sider.ini` antes de qualquer mudança e não mexe em nada com o jogo aberto. A DLL só carrega na primeira partida, então a abertura do jogo continua igual.
+O instalador localiza o Sider (ou pede o caminho), faz backup do `sider.ini` antes de alterá-lo e não faz nada com o jogo aberto. A DLL é carregada na primeira partida.
 
 <details>
-<summary><b>Opções do instalador, instalação manual e requisitos</b></summary>
+<summary><b>Opções do instalador e instalação manual</b></summary>
 
-| Opção | O que faz |
+| Opção | Ação |
 | --- | --- |
-| **1 - Instalar ou atualizar** | Copia a versão nova e ativa o mod no `sider.ini` |
-| **2 - Ativar** | Volta a ligar o mod sem copiar nada |
-| **3 - Desativar** | Desliga o mod e mantém os arquivos |
-| **4 - Desinstalar** | Guarda seu `var_mod.ini` (atalhos e idioma) ao lado do `sider.ini`, apaga os arquivos e a linha do mod e mantém `luajit.ext.enabled = 1`, que outros módulos também usam |
+| **1 - Instalar ou atualizar** | Copia os arquivos e ativa o mod no `sider.ini` |
+| **2 - Ativar** | Ativa o mod sem copiar arquivos |
+| **3 - Desativar** | Desativa o mod e mantém os arquivos |
+| **4 - Desinstalar** | Guarda o `var_mod.ini` ao lado do `sider.ini`, remove os arquivos e a linha do mod e mantém `luajit.ext.enabled = 1` |
 
-**Manual:** copie `modules\var_mod.lua` para `<pasta do sider>\modules\` e `modules\var_mod\var_core.dll` para `<pasta do sider>\modules\var_mod\`. Depois adicione ao `sider.ini`:
+**Instalação manual:** copie `modules\var_mod.lua` para `<pasta do sider>\modules\` e `modules\var_mod\var_core.dll` para `<pasta do sider>\modules\var_mod\`, depois adicione ao `sider.ini`:
 
 ```ini
 lua.enabled = 1
@@ -137,9 +124,23 @@ luajit.ext.enabled = 1
 lua.module = "var_mod.lua"
 ```
 
-**Requisitos:** PES 2021 `v1.7.2.0` (Steam), Sider 7.3+ com LuaJIT (sozinho ou dentro de um patch) e Windows 10 ou 11 x64.
-
 </details>
+
+## Opções
+
+As configurações ficam em `<pasta do sider>\modules\var_mod\var_mod.ini`.
+
+| Opção | Padrão |
+| --- | --- |
+| Abrir no replay | Ligado |
+| Campo tático | Ligado |
+| Zoom automático na área | Ligado |
+| Posição | Direita |
+| Tamanho (Compacto, Padrão, Grande) | Padrão |
+| Alertas durante o jogo | Ligado |
+| Replay do lance após a decisão | Ligado |
+| Idioma | Português (BR) |
+| Controles | Duas teclas por ação, remapeáveis |
 
 ## Atalhos
 
@@ -150,31 +151,34 @@ lua.module = "var_mod.lua"
 | Aba anterior / próxima | `Page Up` ou `Q` / `Page Down` ou `E` | |
 | Lance anterior / próximo | `[` / `]` | |
 | Inverter papéis ou trocar time | `Tab` | |
-| Play / Pause do replay | `P` | |
+| Play / pause do replay | `P` | |
 | Navegar | Setas ou `W` `A` `S` `D` | |
 | Limpar o pool | `Delete` | |
 | Telemetria | `F10` | |
 
-Todos remapeáveis em **OPÇÕES > Controles**. Enquanto o painel está em foco, teclado e mouse não chegam ao jogo. No menu do Sider, a tecla **`7`** liga e desliga o VAR e a **`8`** mostra a telemetria ao vivo.
+Todos os atalhos podem ser alterados em **OPÇÕES > Controles**. Com o painel em foco, teclado e mouse não chegam ao jogo. No menu do Sider, `7` liga e desliga o mod e `8` mostra a telemetria ao vivo.
 
-<details>
-<summary><b>Solução de problemas</b></summary>
+## Limitações
 
-| Sintoma | O que fazer |
+- Suporta apenas o executável Steam `v1.7.2.0`.
+- Apenas partidas offline: Exibição, Master Liga, Rumo ao Estrelato e Copas. Rede, DRM e modos online não são tocados.
+- Uma decisão vale para a parada em que foi tomada. Gols não podem ser anulados.
+- O replay após a decisão exige falta ou pênalti marcado com a bola rolando e o momento revisado ainda na memória de replay do jogo (cerca de 11 s de jogo). O replay instantâneo da engine pode ser exibido antes.
+- O controle abre e recolhe o painel e controla o replay. A navegação dentro do painel usa teclado e mouse.
+
+## Solução de problemas
+
+| Sintoma | Ação |
 | --- | --- |
-| **O menu do Sider mostra `Status: ERRO (...)`** | A DLL não carregou e o texto diz o motivo. Confira se `var_core.dll` está em `<pasta do sider>\modules\var_mod\`, se `lua.enabled = 1` e `luajit.ext.enabled = 1` estão no `sider.ini` e veja o `sider.log`. |
-| **O painel não abre no replay** | Confirme que a partida é offline e que o VAR está ligado (tecla `7` no menu do Sider). `V`, `F7` ou `R3` reabrem o painel recolhido. |
-| **Não houve replay depois da decisão** | Ele só acontece numa falta ou pênalti marcado com a bola rolando, e pode estar desligado em **OPÇÕES**. Fora isso, o log diz o motivo numa linha `Decision replay: ...` (o lance já tinha saído da memória de replay, a engine não enfileirou replay naquela parada ou o espaço de replay dela estava ocupado). |
-| **Algo deu errado numa partida** | O log fica em `<pasta do sider>\modules\var_mod\var_core.log` e é recriado a cada abertura do jogo. Copie antes de abrir de novo e anexe numa [issue](https://github.com/Joao-Spala/pes21-var-mod/issues). |
-| **Voltar ao padrão** | Apague `<pasta do sider>\modules\var_mod\var_mod.ini`. |
-
-</details>
+| Menu do Sider mostra `Status: ERRO (...)` | A DLL não carregou. Confira se o `var_core.dll` está em `<pasta do sider>\modules\var_mod\`, se `lua.enabled = 1` e `luajit.ext.enabled = 1` estão no `sider.ini` e consulte o `sider.log`. |
+| O painel não abre no replay | Confirme que a partida é offline e que o mod está ligado (`7` no menu do Sider). `V`, `F7` ou `R3` reabrem o painel recolhido. |
+| Não houve replay após a decisão | Vale apenas para falta ou pênalti com a bola rolando e pode estar desligado em **OPÇÕES**. Fora isso, uma linha `Decision replay: ...` no log informa o motivo. |
+| Comportamento inesperado numa partida | O log é `<pasta do sider>\modules\var_mod\var_core.log` e é recriado a cada abertura do jogo. Copie-o antes de reabrir o jogo e anexe numa [issue](https://github.com/Joao-Spala/pes21-var-mod/issues). |
+| Restaurar configurações | Apague `<pasta do sider>\modules\var_mod\var_mod.ini`. |
 
 ---
 
-## Por dentro
-
-Um mod que escreve na memória de um jogo fechado só merece confiança se for previsível. Estas são as escolhas de engenharia que sustentam isso.
+## Visão técnica
 
 ```mermaid
 sequenceDiagram
@@ -184,26 +188,23 @@ sequenceDiagram
     participant E as Engine (MatchFSM)
     participant R as Replay da engine
     P->>Pool: Confirmar decisão
-    Note over Pool: Um lance + até 32 cartões
-    X->>Pool: Na parada certa
+    X->>Pool: Na parada correspondente
     X->>E: Resultado do árbitro
-    E->>E: Monta a cobrança e registra o cartão
-    X-->>E: Confere no mesmo tick
-    Note over X,E: Cobrança não montada? Tudo é desfeito
+    E->>E: Montagem da cobrança e registro do cartão
+    X-->>E: Verificação no mesmo tick
+    Note over X,E: Desfeito se a cobrança não foi montada
     X->>R: Clipe pendente do momento revisado
-    Note over X,R: Só depois que a engine enfileirou o estado de replay
-    R->>R: Mostra depois da cena do cartão
+    R->>R: Exibido após as cenas da parada
 ```
 
 | | |
 | --- | --- |
-| **Nativo** | DLL x64 em C++20 com cerca de 780 KB, um único gancho de render em `GrSwapChain::Present0`, sem dispositivo DX11 extra e sem trabalho de interface fora do replay. Medido nos caminhos reais do código num benchmark: 3 a 6 µs por tick da simulação e 2 µs por quadro. |
-| **Na engine** | Decisões entram pela máquina de estados da partida (`MatchFSM`) e pelo registro de cartões da própria engine, nos dois buffers que ela usa. O replay depois da decisão é o clipe pendente da própria engine, preenchido campo a campo como o construtor dela faz. |
-| **Atômico** | A cobrança é conferida no mesmo tick e, se o jogo não a montou, cartões e dados da partida voltam ao estado anterior. Um pedido de replay que ninguém consome volta sozinho ao estado ocioso. |
-| **Seguro** | Ganchos instalados com as outras threads congeladas, escrita só em estruturas validadas, correção de um defeito do alocador do jogo que derrubava o PES depois do apito final e um cache que mantém essa correção barata no loading. |
-| **Testado** | 23 suítes, contratos conferidos no executável real, painel desenhado em 7 resoluções nos dois idiomas e tudo validado com AddressSanitizer e UndefinedBehaviorSanitizer. |
+| **Binário** | DLL x64 em C++20, cerca de 780 KB. Um único gancho de render em `GrSwapChain::Present0`, sem dispositivo DX11 adicional e sem trabalho de interface fora do replay. |
+| **Custo** | Medido nos caminhos reais do código num benchmark: 3 a 6 µs por tick da simulação e 2 µs por quadro. Histórico da partida de 30 s (cerca de 0,87 MB). |
+| **Segurança** | Ganchos instalados com as demais threads suspensas. Escritas apenas em estruturas validadas. Inclui correção de um defeito do alocador da engine que derrubava o jogo após o apito final. |
+| **Testes** | 23 suítes, incluindo verificação de contratos no executável real e renderização do painel em 7 resoluções nos dois idiomas, também executadas com AddressSanitizer e UndefinedBehaviorSanitizer. |
 
-As notas de engenharia reversa estão em [`re_notes/`](re_notes), o histórico em [`CHANGELOG.md`](CHANGELOG.md) e as instruções de build e testes no [README em inglês](README.md#build--tests).
+As notas de engenharia reversa estão em [`re_notes/`](re_notes), o histórico de versões em [`CHANGELOG.md`](CHANGELOG.md) e as instruções de build e testes no [README em inglês](README.md#build-and-tests).
 
 ---
 
@@ -214,10 +215,10 @@ As notas de engenharia reversa estão em [`re_notes/`](re_notes), o histórico e
 <td width="160" align="center"><img src="docs/images/pix_qr.png" alt="QR Code Pix" width="140"></td>
 <td>
 
-Este mod é gratuito e de código aberto, e vai continuar assim. Se ele melhorou suas partidas e você quiser me pagar um café, vou ficar muito agradecido. Um relato de bug ou um obrigado vale tanto quanto.
+O mod é gratuito e de código aberto. Doações são bem-vindas e opcionais. Relatos de bug são igualmente úteis.
 
 **Pix:** escaneie o QR ou use a chave aleatória `925fd607-2011-4ca2-83a4-b3cf145b408b`<br>
-**De fora do Brasil:** [![Ko-fi](https://img.shields.io/badge/Ko--fi-Pague_um_caf%C3%A9-FF5E5B?style=flat&logo=ko-fi&logoColor=white)](https://ko-fi.com/AlfaceJao)
+**Fora do Brasil:** [![Ko-fi](https://img.shields.io/badge/Ko--fi-Pague_um_caf%C3%A9-FF5E5B?style=flat&logo=ko-fi&logoColor=white)](https://ko-fi.com/AlfaceJao)
 
 </td>
 </tr>
