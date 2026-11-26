@@ -269,6 +269,10 @@ namespace Offsets {
     // Reason of the last queue reset (0x1404529F0 writes its edx here): 1 = EnterOutOfPlay / RebuildSetPlay,
     // 0xE / 0xF = the two SetPlayReady handler exits that skip EnterOutOfPlay (0x140453F10, 0x140453370)
     constexpr uintptr_t MatchFSM_QueueResetReason  = 0x874;
+    // At the end of MainTick (0x140446D37) the engine copies the FSM working block (fsm + 0x2790) to the pointer
+    // stored at fsm + 0x17858 (MatchControl + 0x6E0, set by 0x140444A30). CommitToRegistry then reads that copy.
+    constexpr uintptr_t MatchFSM_WorkingBlock      = 0x2790;
+    constexpr uintptr_t MatchFSM_WorkingCopyPtr    = 0x17858;
     // Judge snapshot pool = JudgeResult + 0x148 (AddSnapshot 0x140A82070 at 0x14050E887, ctor 0x1404437BE).
     // FSM working state (+0x2790) is copied to MatchControl + 0x6E0 (0x14044402D) and CommitToRegistry copies
     // MatchControl + 0x2A58 over MatchInfo + 0x17AC (0x140423196 -> 0x140A3D3B0). So a foul snapshot id is only

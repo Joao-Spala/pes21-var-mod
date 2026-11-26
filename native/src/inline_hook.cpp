@@ -2,6 +2,7 @@
 #include "logger.h"
 
 #include <windows.h>
+#include <tlhelp32.h>
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -34,6 +35,75 @@ bool EqualsIgnoreCase(const char* a, const char* b) {
 bool FitsRel32(uintptr_t fromNextRip, uintptr_t toAddr) {
     const intptr_t diff = static_cast<intptr_t>(toAddr) - static_cast<intptr_t>(fromNextRip);
     return diff >= INT32_MIN && diff <= INT32_MAX;
+}
+
+// Freezes every other thread of the process while a multi-instruction prologue is replaced, and only proceeds
+// when none of them stands inside the bytes being replaced (a thread resumed in the middle of a new rel32 would
+// crash). Nothing between suspend and resume allocates or logs: a frozen thread may hold the heap or log lock.
+class ScopedThreadFreeze {
+public:
+    // Returns true when frozen with no thread inside (addr, addr + len); false = retry later / nothing frozen
+    bool Freeze(uintptr_t addr, size_t len) {
+        count_ = 0;
+        const DWORD self = GetCurrentThreadId();
+        const DWORD pid = GetCurrentProcessId();
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap == INVALID_HANDLE_VALUE) return false;
+        THREADENTRY32 te{};
+        te.dwSize = sizeof(te);
+        if (Thread32First(snap, &te)) {
+            do {
+                if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
+                if (count_ >= kMax) break;
+                HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE,
+                                      te.th32ThreadID);
+                if (!h) continue;
+                if (SuspendThread(h) == static_cast<DWORD>(-1)) { CloseHandle(h); continue; }
+                handles_[count_++] = h;
+            } while (Thread32Next(snap, &te));
+        }
+        CloseHandle(snap);
+        for (size_t i = 0; i < count_; ++i) {
+            CONTEXT ctx{};
+            ctx.ContextFlags = CONTEXT_CONTROL;
+            if (!GetThreadContext(handles_[i], &ctx)) continue;
+            if (ctx.Rip > addr && ctx.Rip < addr + len) {
+                Thaw();
+                return false;
+            }
+        }
+        return true;
+    }
+    void Thaw() {
+        for (size_t i = 0; i < count_; ++i) {
+            ResumeThread(handles_[i]);
+            CloseHandle(handles_[i]);
+        }
+        count_ = 0;
+    }
+    ~ScopedThreadFreeze() { Thaw(); }
+
+private:
+    static constexpr size_t kMax = 1024;
+    HANDLE handles_[kMax]{};
+    size_t count_ = 0;
+};
+
+void AtomicWriteCode(uintptr_t addr, const uint8_t* bytes, size_t len);
+
+// Writes a code patch with the process frozen. Falls back to the plain atomic write if no safe moment is found
+// in ~250 ms (the write itself is still a single atomic store for <= 16 bytes).
+void WriteCodeFrozen(uintptr_t addr, const uint8_t* bytes, size_t len) {
+    static ScopedThreadFreeze* freeze = new ScopedThreadFreeze(); // ~8 KB, allocated once, outside any freeze
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        if (freeze->Freeze(addr, len)) {
+            AtomicWriteCode(addr, bytes, len);
+            freeze->Thaw();
+            return;
+        }
+        Sleep(5);
+    }
+    AtomicWriteCode(addr, bytes, len);
 }
 
 void AtomicWriteCode(uintptr_t addr, const uint8_t* bytes, size_t len) {
@@ -349,7 +419,7 @@ bool InlineHook::Install(uintptr_t targetAddr, void* detourFunc, size_t stolenLe
     installed_ = true;
     MemoryBarrier();
 
-    AtomicWriteCode(targetAddr, patch, stolenLen);
+    WriteCodeFrozen(targetAddr, patch, stolenLen);
 
     DWORD tmpProt = 0;
     VirtualProtect(reinterpret_cast<void*>(targetAddr), stolenLen, oldProt, &tmpProt);
@@ -363,7 +433,7 @@ bool InlineHook::Uninstall() {
     DWORD oldProt = 0;
     bool restored = false;
     if (VirtualProtect(reinterpret_cast<void*>(target_), stolenLen_, PAGE_EXECUTE_READWRITE, &oldProt)) {
-        AtomicWriteCode(target_, originalBytes_.data(), stolenLen_);
+        WriteCodeFrozen(target_, originalBytes_.data(), stolenLen_);
         DWORD tmpProt = 0;
         VirtualProtect(reinterpret_cast<void*>(target_), stolenLen_, oldProt, &tmpProt);
         FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(target_), stolenLen_);

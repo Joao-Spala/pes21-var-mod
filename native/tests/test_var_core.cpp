@@ -237,6 +237,24 @@ void TestRealPes2021BinaryAobs() {
                     Offsets::TeamInfo_BufferSize, "40 player records must fit in one TeamInfo buffer");
     }
 
+    // Rollback contract (ExecVerifyAfterMainTick): the queue reset stores its reason at fsm + 0x874, EnterOutOfPlay
+    // passes 1, and MainTick ends by copying the working block (fsm + 0x2790) to *(fsm + 0x17858)
+    {
+        const auto* rp = reinterpret_cast<const uint8_t*>(bufBase + static_cast<uintptr_t>(0x1404529F0ULL - textVaBase));
+        EXPECT_TRUE(rp[13] == 0x89 && rp[14] == 0x91 &&
+                    *reinterpret_cast<const uint32_t*>(rp + 15) == Offsets::MatchFSM_QueueResetReason,
+                    "Queue reset must store its reason at fsm + MatchFSM_QueueResetReason");
+        const auto* ep = reinterpret_cast<const uint8_t*>(bufBase + static_cast<uintptr_t>(0x140454229ULL - textVaBase));
+        EXPECT_TRUE(ep[0] == 0xBA && *reinterpret_cast<const uint32_t*>(ep + 1) == 1U, "EnterOutOfPlay must reset with reason 1");
+        const auto* cp = reinterpret_cast<const uint8_t*>(bufBase + static_cast<uintptr_t>(0x140446D29ULL - textVaBase));
+        EXPECT_TRUE(cp[0] == 0x48 && cp[1] == 0x8B && cp[2] == 0x8D &&
+                    *reinterpret_cast<const uint32_t*>(cp + 3) == Offsets::MatchFSM_WorkingCopyPtr &&
+                    cp[7] == 0x48 && cp[8] == 0x8D && cp[9] == 0x95 &&
+                    *reinterpret_cast<const uint32_t*>(cp + 10) == Offsets::MatchFSM_WorkingBlock && cp[14] == 0xE8 &&
+                    0x140446D3CULL + static_cast<int64_t>(*reinterpret_cast<const int32_t*>(cp + 15)) == 0x140443DB0ULL,
+                    "MainTick must copy the FSM working block to *(fsm + MatchFSM_WorkingCopyPtr)");
+    }
+
     // Vanishing spray reset: the three calls must land on the accessor, the reset and the commit
     {
         auto callTarget = [&](uintptr_t bufSite, uint64_t siteVa) -> uint64_t {

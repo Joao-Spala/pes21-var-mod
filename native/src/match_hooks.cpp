@@ -1146,13 +1146,18 @@ bool ApplyCardDelta(uint8_t* gmatch, int32_t slot, CardKind origCard, CardKind t
     } else if (origCard == CardKind::Red) {
         if (curR > 0) --curR;
     }
-    // Same rule as CommitToRegistry (0x1404231FB..0x140423202): a second yellow also adds a red
+    // Same rule as CommitToRegistry (0x1404231FB..0x140423202): a second yellow also adds a red. Never a third
+    // yellow or a second red (the engine never produces them): a sent-off player gets no further card.
     if (targetCard == CardKind::Yellow) {
-        ++curY;
-        if (curY >= 2 && curR == 0) curR = 1;
+        if (!(curY >= 2 || (curY >= 1 && curR > 0))) {
+            ++curY;
+            if (curY >= 2 && curR == 0) curR = 1;
+        }
     } else if (targetCard == CardKind::Red) {
         if (curR == 0) curR = 1;
     }
+    curY = std::min<uint8_t>(curY, 2);
+    curR = std::min<uint8_t>(curR, 1);
     return SetPlayerCardsAbsolute(gmatch, slot, curY, curR, rosterIdx);
 }
 
@@ -1998,6 +2003,25 @@ void ExecVerifyAfterMainTick(uint8_t* fsm) {
     *reinterpret_cast<uint64_t*>(fsm + Offsets::MatchFSM_KickerCache) = g_exec.savedKickerCache;
     // Back to the engine's own resting JudgeResult (its FoulInfo half is not all zeros: 0x18 / 9 / 4 sentinels)
     std::memcpy(fsm + Offsets::MatchFSM_JudgeResult, g_exec.savedJudge, sizeof(g_exec.savedJudge));
+    // The working block was already copied to MatchControl at the end of MainTick (0x140446D37), and the commit
+    // reads that copy: restore the same three fields there (same offsets relative to the block)
+    if (uint8_t* copy = *reinterpret_cast<uint8_t* const*>(fsm + Offsets::MatchFSM_WorkingCopyPtr)) {
+        const uintptr_t judgeOff = Offsets::MatchFSM_JudgeResult - Offsets::MatchFSM_WorkingBlock;
+        const uintptr_t quickOff = Offsets::MatchFSM_QuickRestartFlag - Offsets::MatchFSM_WorkingBlock;
+        const uintptr_t kickOff  = Offsets::MatchFSM_KickerCache - Offsets::MatchFSM_WorkingBlock;
+        auto* mc = static_cast<uint8_t*>(g_lastMatchControl.load(std::memory_order_relaxed));
+        const bool expected = !IsValidPtr(mc) || copy == mc + Offsets::MatchControl_WorkingState;
+        if (expected && IsMemoryRangeReadable(copy, judgeOff + sizeof(g_exec.savedJudge)) &&
+            IsMemoryRangeReadable(copy + kickOff, sizeof(uint64_t))) {
+            // Same fields the engine copies (0x140A3C310 skips SetPlayInfo + 0x24): +0x00..+0x23 and +0x28..+0x6B
+            std::memcpy(copy + judgeOff, g_exec.savedJudge, 0x24);
+            std::memcpy(copy + judgeOff + 0x28, g_exec.savedJudge + 0x28, sizeof(g_exec.savedJudge) - 0x28);
+            *reinterpret_cast<uint32_t*>(copy + quickOff) = g_exec.savedQuickRestart;
+            *reinterpret_cast<uint64_t*>(copy + kickOff) = g_exec.savedKickerCache;
+        } else {
+            VAR_LOG_ERR("Rollback: MatchControl working copy not where expected, its JudgeResult was not restored");
+        }
+    }
     VAR_LOG_WRN("VAR pool seq=%u: SetPlayReady left without EnterOutOfPlay (queue reason 0x%X), tick undone",
                 g_exec.poolSeq, reason);
     const VerdictPool pool = g_exec.pool;

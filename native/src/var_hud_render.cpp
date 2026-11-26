@@ -328,7 +328,8 @@ void IconReset(ImDrawList* dl, ImVec2 c, float sz, ImU32 col) {
 void DrawDashedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float thickness, float dashLen, float gapLen) {
     const float dx = b.x - a.x, dy = b.y - a.y;
     const float dist = std::sqrt(dx * dx + dy * dy);
-    if (dist < 1.0f) return;
+    // Positions come from game memory: a non-finite or absurd value must never turn this into an endless loop
+    if (!std::isfinite(dist) || dist < 1.0f || dist > 20000.0f || dashLen + gapLen < 0.5f) return;
     const float ux = dx / dist, uy = dy / dist;
     for (float t = 0.0f; t < dist; t += dashLen + gapLen) {
         const float te = std::min(t + dashLen, dist);

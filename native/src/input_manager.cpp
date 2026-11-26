@@ -170,6 +170,8 @@ DWORD WINAPI Detour_XInputGetState(DWORD dwUserIndex, RawXInputState* pState) {
         if (g_rawPadButtonsBySlot[dwUserIndex].load(std::memory_order_relaxed) != 0) {
             g_rawPadButtonsBySlot[dwUserIndex].store(0, std::memory_order_relaxed);
         }
+        // An empty slot polled by the game is fresh information too: no need for our own (costly) poll
+        g_lastHookPadTickBySlot[dwUserIndex].store(GetTickCount64(), std::memory_order_relaxed);
     }
     return res;
 }
@@ -212,11 +214,18 @@ uint16_t ReadCurrentPadButtons() {
     }
 
     if (auto fn = ResolveFallbackXInput()) {
+        // XInputGetState on an empty slot re-enumerates devices and is expensive: an empty slot is asked again
+        // only every 2 s (render thread only)
+        static uint64_t s_nextEmptyPollMs[4] = { 0, 0, 0, 0 };
         uint16_t combined = 0;
         for (DWORD idx = 0; idx < 4; ++idx) {
+            if (now < s_nextEmptyPollMs[idx]) continue;
             RawXInputState st{};
             if (fn(idx, &st) == ERROR_SUCCESS) {
                 combined |= ExtractPadButtonsWithStick(st.Gamepad);
+                s_nextEmptyPollMs[idx] = 0;
+            } else {
+                s_nextEmptyPollMs[idx] = now + 2000;
             }
         }
         return combined;

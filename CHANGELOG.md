@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.4.7
+
+Verificação tripla de estabilidade: auditoria de crash e travamento em todo o código nativo, auditoria de cada escrita na memória do jogo conferida no executável, gate de release (DLL, Lua, `sider.ini`, logs e pacote) e a suíte inteira rodada com AddressSanitizer e UndefinedBehaviorSanitizer (20 de 20, sem erro de memória).
+
+- **Desfazer da bola parada completo**: no fim do `MainTick` a engine já copia o resultado do árbitro para a estrutura que registra o cartão. Agora o mod restaura também essa cópia quando a cobrança não chega a ser montada, então nenhum cartão fica registrado sem a decisão. O contrato foi travado por teste no executável real.
+- **Nunca terceiro amarelo nem segundo vermelho**, em qualquer caminho de ajuste de cartão.
+- **Instalação dos ganchos sem risco de crash**: as outras threads ficam congeladas durante a escrita do código, e o mod confere que nenhuma está parada no meio das instruções substituídas, como faz a biblioteca Detours.
+- **Sem perda de fps sem controle**: quem joga só no teclado não paga mais a consulta cara aos slots vazios do XInput a cada frame com o painel aberto.
+- **Campinho protegido contra posição inválida** vinda do jogo (sem laço infinito ao desenhar).
+
 ## v4.4.6
 
 - **Interface do mesmo tamanho relativo em qualquer resolução**: a escala segue a altura da tela (1,0 em 1080p) e é limitada pela largura, então o painel ocupa a mesma fração da tela de 720p a 4K, em ultrawide, 4:3 e 5:4. Antes, em 720p o painel ficava proporcionalmente maior que o normal, em 4:3 e 5:4 a largura não era considerada, e acima de 4K ele ficava pequeno. Há um piso de legibilidade em telas muito pequenas e um teto em 5K e 8K. O tamanho escolhido em Opções (Pequeno, Médio, Grande) continua valendo por cima.
