@@ -136,6 +136,10 @@ int ReleaseSegmentAtomicCore(void* ptr, size_t size) {
     }
 
     g_statReleased.fetch_add(1, std::memory_order_relaxed);
+    // The range is gone: a new allocation at the same address must not inherit an old refusal
+    AcquireSRWLockExclusive(&g_cacheLock);
+    g_refusedCache.RemoveOverlapping(base, size);
+    ReleaseSRWLockExclusive(&g_cacheLock);
     if (plan.splitAllocations > 0) {
         const uint64_t n = g_repaired.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= kMaxLoggedEvents) {
@@ -218,10 +222,34 @@ void RefusedRangeCache::Add(uintptr_t base, size_t size) {
     if (count_ < kCapacity) ++count_;
 }
 
+void RefusedRangeCache::RemoveOverlapping(uintptr_t base, size_t size) {
+    size_t w = 0;
+    uintptr_t keptBase[kCapacity];
+    size_t keptSize[kCapacity];
+    // Keep insertion order (oldest first) so replacement stays FIFO
+    for (size_t n = 0; n < count_; ++n) {
+        const size_t i = (count_ < kCapacity) ? n : (next_ + n) % kCapacity;
+        const bool overlaps = base_[i] < base + size && base < base_[i] + size_[i];
+        if (!overlaps) {
+            keptBase[w] = base_[i];
+            keptSize[w] = size_[i];
+            ++w;
+        }
+    }
+    for (size_t i = 0; i < w; ++i) {
+        base_[i] = keptBase[i];
+        size_[i] = keptSize[i];
+    }
+    count_ = w;
+    next_ = w % kCapacity;
+}
+
 void RefusedRangeCache::Clear() {
     count_ = 0;
     next_ = 0;
 }
+
+uint64_t PendingCalls() { return g_statCalls.load(std::memory_order_relaxed); }
 
 Stats TakeStats() {
     Stats s{};

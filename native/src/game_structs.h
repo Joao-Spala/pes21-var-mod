@@ -245,7 +245,16 @@ namespace Offsets {
     // SetLookAt(position, target, up) copy: +0x0C is the camera position, +0x00 the target, +0x18 the up vector
     constexpr uintptr_t ReplayCam_StatePtr         = 0x18;
     constexpr uintptr_t ReplayCamState_LookAtPos   = 0x00; // Vec3 (12 bytes)
-    constexpr uintptr_t ReplayCamState_Position    = 0x0C; // Vec3 (12 bytes)
+    constexpr uintptr_t ReplayCamState_Position    = 0x0C; // Vec3 (12 bytes), rebuilt by the controller each frame
+    // Camera controller: *(ReplayCamera + 0x00), updated each frame through vtable + 0x20 (0x141EB8444). The follow
+    // controllers of camera modes 0 and 1 (vtables 0x142BDFB40 / 0x142BDFB88) keep their target at +0x34: while the
+    // replay is paused, with no pad input and the same focus, they take the target from there instead of the state
+    // (0x14218169F..0x1421816AA, 0x14218235E) and rebuild the camera position around it. Mode 2 reads the state
+    // target, mode 3 (free cam) ignores both.
+    constexpr uintptr_t ReplayCam_ControllerPtr    = 0x00;
+    constexpr uintptr_t ReplayCamCtrl_CachedTarget = 0x34; // Vec3
+    constexpr uintptr_t ReplayCamCtrlMode0VtableRva = 0x2BDFB40;
+    constexpr uintptr_t ReplayCamCtrlMode1VtableRva = 0x2BDFB88;
     constexpr uintptr_t ReplayCamState_FocusTarget = 0x44; // int32_t (0=ball, 1..22=player)
 
     // Replay ring buffer singleton (*(*(0x143703558) + 0x6A8) + 0x40, stride 0x1FB0)
@@ -603,21 +612,16 @@ inline Vec3 CalcThrowInSpot(const PitchDims& d, const Vec3& refPos) {
     return Vec3{ x, 0.0f, zSign * zEdge };
 }
 
-// Replay camera follow after a seek: the target goes to the focus position at the new frame and the camera
-// position moves by the same offset, so the view keeps its angle and distance instead of turning from the old
-// spot. Returns false (nothing written) for a non-finite or off-world focus position.
+// Replay camera follow after a seek: the camera target goes to the focus position at the new frame. A focus is
+// usable with the same bounds the game applies when it cycles the focus (0x1420C00DC: |x| < 200, |z| < 100),
+// finite, and not the all-zero vector an absent entity can return.
 namespace ReplayCameraMath {
-inline bool FollowFocus(float target[3], float position[3], const float focus[3]) {
+inline bool IsUsableFocus(const float focus[3]) {
     for (int i = 0; i < 3; ++i) {
-        if (!std::isfinite(focus[i]) || !std::isfinite(target[i]) || !std::isfinite(position[i])) return false;
+        if (!std::isfinite(focus[i])) return false;
     }
-    if (std::fabs(focus[0]) > 150.0f || std::fabs(focus[2]) > 150.0f || focus[1] < -10.0f || focus[1] > 80.0f) return false;
-    for (int i = 0; i < 3; ++i) {
-        const float delta = focus[i] - target[i];
-        target[i] = focus[i];
-        position[i] += delta;
-    }
-    return true;
+    if (std::fabs(focus[0]) >= 200.0f || std::fabs(focus[2]) >= 100.0f) return false;
+    return !(focus[0] == 0.0f && focus[1] == 0.0f && focus[2] == 0.0f);
 }
 } // namespace ReplayCameraMath
 

@@ -605,7 +605,7 @@ void VarState::PushSnapshot(const PlaySnapshot& snap) {
         snapKeys_.resize(kMaxSnapshots);
     }
     snapshots_[snapHead_] = snap;
-    snapKeys_[snapHead_] = SnapKey{ snap.matchPhase, snap.time60Hz };
+    snapKeys_[snapHead_] = SnapKey{ snap.matchPhase, snap.time60Hz, snap.matchTick };
     snapHead_ = (snapHead_ + 1) % kMaxSnapshots;
     if (snapCount_ < kMaxSnapshots) {
         ++snapCount_;
@@ -860,8 +860,9 @@ void VarState::InterpolateSnapshotLocked(size_t idx, size_t age, float cursorTim
     const SnapKey& ka = snapKeys_[olderIdx];
     const SnapKey& kb = snapKeys_[newerIdx];
     if (ka.phase != kb.phase) return;
+    if (kb.tick <= ka.tick || kb.tick - ka.tick > kMaxInterpolationFrameGap) return; // not consecutive frames
     const float span = kb.time60Hz - ka.time60Hz;
-    if (!(span > 0.0f) || span > kMaxInterpolationGap60Hz) return;
+    if (!(span > 0.0f)) return; // clock stopped between them
     const float alpha = std::clamp((cursorTime60Hz - ka.time60Hz) / span, 0.0f, 1.0f);
     const PlaySnapshot& a = snapshots_[olderIdx];
     const PlaySnapshot& b = snapshots_[newerIdx];
@@ -926,6 +927,48 @@ ReplaySyncResult VarState::SyncToReplayCursorLocked(int32_t cursorPhase, float c
     }
 
     return res;
+}
+
+void VarState::SampleMotionHistory(int32_t phase, float time60Hz, MotionSample (&out)[kMotionSamples]) const {
+    for (auto& m : out) m = MotionSample{};
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (snapCount_ == 0 || snapKeys_.size() != kMaxSnapshots) return;
+    // Frame nearest to the cursor (same search as the replay sync: newest first, early exit once past it)
+    float best = 999999.0f;
+    size_t bestAge = snapCount_;
+    for (size_t i = 0; i < snapCount_; ++i) {
+        const SnapKey& key = snapKeys_[(snapHead_ + kMaxSnapshots - 1 - i) % kMaxSnapshots];
+        if (key.phase != phase) {
+            if (bestAge != snapCount_) break;
+            continue;
+        }
+        const float dt = std::fabs(key.time60Hz - time60Hz);
+        if (dt < best) { best = dt; bestAge = i; }
+        else if (bestAge != snapCount_ && key.time60Hz < time60Hz && dt > best + 12.0f) break;
+    }
+    if (bestAge == snapCount_) return;
+    const uint32_t baseTick = snapKeys_[(snapHead_ + kMaxSnapshots - 1 - bestAge) % kMaxSnapshots].tick;
+    // Walk older frames once; every target is met in order. A gap (stoppage, other phase) ends the history.
+    int k = 0;
+    for (size_t i = bestAge + 1; i < snapCount_ && k < kMotionSamples; ++i) {
+        const size_t idx = (snapHead_ + kMaxSnapshots - 1 - i) % kMaxSnapshots;
+        const SnapKey& key = snapKeys_[idx];
+        if (key.phase != phase || key.tick > baseTick) break;
+        const uint32_t back = baseTick - key.tick;
+        const uint32_t want = static_cast<uint32_t>(k + 1) * kMotionStepFrames;
+        if (back < want) continue;
+        if (back > want + 3) break; // frames missing around the target: no reliable history beyond this point
+        const PlaySnapshot& sn = snapshots_[idx];
+        MotionSample& m = out[k];
+        m.valid = true;
+        m.matchTick = key.tick;
+        m.ball = sn.ballPos;
+        for (int s = 0; s < 22; ++s) {
+            m.pos[s] = sn.playerPos[s];
+            m.onPitch[s] = sn.playerOnPitch[s];
+        }
+        ++k;
+    }
 }
 
 ReplaySyncResult VarState::SyncToReplayCursor(int32_t cursorPhase, float cursorTime60Hz, float eventToleranceTicks) const {

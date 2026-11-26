@@ -1453,19 +1453,17 @@ void TestSuspectAndCameraFollow() {
     VarState::FlagTopSuspect(weak);
     EXPECT_TRUE(!weak[0].topSuspect, "No suspect below the threshold");
 
-    // Replay camera follow: target onto the focus, position moved by the same offset
-    float target[3] = { 10.0f, 1.0f, 5.0f };
-    float position[3] = { 10.0f, 12.0f, -20.0f };
-    const float focus[3] = { -30.0f, 0.5f, 8.0f };
-    EXPECT_TRUE(PitchGeometry::ReplayCameraMath::FollowFocus(target, position, focus), "Valid focus must be followed");
-    EXPECT_TRUE(target[0] == -30.0f && target[1] == 0.5f && target[2] == 8.0f, "Target must land on the focus");
-    EXPECT_TRUE(position[0] == -30.0f && std::fabs(position[1] - 11.5f) < 1e-5f && position[2] == -17.0f,
-                "Camera position must keep its offset from the target");
-    const float bad[3] = { std::nanf(""), 0.0f, 0.0f };
-    const float offWorld[3] = { 900.0f, 0.0f, 0.0f };
-    EXPECT_TRUE(!PitchGeometry::ReplayCameraMath::FollowFocus(target, position, bad), "NaN focus must be rejected");
-    EXPECT_TRUE(!PitchGeometry::ReplayCameraMath::FollowFocus(target, position, offWorld), "Off-world focus must be rejected");
-    EXPECT_TRUE(target[0] == -30.0f && position[0] == -30.0f, "Rejected focus must leave the camera untouched");
+    // Replay camera follow: focus accepted with the game's own bounds, never NaN or the all-zero vector
+    using PitchGeometry::ReplayCameraMath::IsUsableFocus;
+    const float okFocus[3] = { -30.0f, 0.5f, 8.0f };
+    const float centreBall[3] = { 0.0f, 0.11f, 0.0f };
+    const float nanFocus[3] = { std::nanf(""), 0.0f, 0.0f };
+    const float offX[3] = { 200.0f, 0.0f, 0.0f };
+    const float offZ[3] = { 10.0f, 0.0f, -100.0f };
+    const float zero[3] = { 0.0f, 0.0f, 0.0f };
+    EXPECT_TRUE(IsUsableFocus(okFocus) && IsUsableFocus(centreBall), "Pitch positions (ball on the centre spot too) are usable");
+    EXPECT_TRUE(!IsUsableFocus(nanFocus) && !IsUsableFocus(offX) && !IsUsableFocus(offZ) && !IsUsableFocus(zero),
+                "NaN, out-of-bounds and all-zero focus must be rejected");
     MarkPass("TestSuspectAndCameraFollow");
 }
 
@@ -1486,8 +1484,8 @@ void TestSnapshotInterpolation() {
     frame(100.0f, 1, 0.0f, 10.0f, 1, 5);
     frame(101.0f, 2, 1.0f, 12.0f, 1, 13);
     frame(102.0f, 3, 9.0f, 12.5f, 1, 13);   // 8 m in one frame: teleport, never blended
-    frame(110.0f, 4, 9.5f, 13.0f, 1, 13);   // 8-tick gap: not neighbours
-    frame(111.0f, 5, 9.7f, 13.2f, 0, 13);   // player off the pitch in the newer frame
+    frame(110.0f, 12, 9.5f, 13.0f, 1, 13);  // 9 simulation frames later: not neighbours
+    frame(111.0f, 13, 9.7f, 13.2f, 0, 13);  // player off the pitch in the newer frame
 
     ReplaySyncResult r = st.SyncToReplayCursor(0, 100.25f);
     EXPECT_TRUE(r.hasSnapshot && r.snapshot.matchTick == 1, "Interpolated sync must keep the nearest frame identity");
@@ -1514,7 +1512,7 @@ void TestSnapshotInterpolation() {
     EXPECT_TRUE(r.snapshot.playerPos[0].x == 9.5f, "Player leaving the pitch must not be blended");
 
     r = st.SyncToReplayCursor(0, 115.0f);
-    EXPECT_TRUE(r.snapshot.matchTick == 5 && r.snapshot.ballPos.x == 13.2f, "Cursor past the newest frame keeps it");
+    EXPECT_TRUE(r.snapshot.matchTick == 13 && r.snapshot.ballPos.x == 13.2f, "Cursor past the newest frame keeps it");
     r = st.SyncToReplayCursor(0, 90.0f);
     EXPECT_TRUE(r.snapshot.matchTick == 1 && r.snapshot.ballPos.x == 10.0f, "Cursor before the oldest frame keeps it");
 
@@ -1524,7 +1522,7 @@ void TestSnapshotInterpolation() {
     st.CaptureHudRenderSnapshot(snap);
     const uint32_t histRev = snap.historyRev;
     const uint32_t snapRev = snap.snapRev;
-    frame(112.0f, 6, 9.8f, 13.4f, 1, 13);
+    frame(112.0f, 14, 9.8f, 13.4f, 1, 13);
     PatchReplayTelemetryForTest(true, 0, 111.5f, 90.0f, 120.0f);
     st.CaptureHudRenderSnapshot(snap);
     EXPECT_TRUE(snap.historyRev == histRev, "Snapshot push must not invalidate the event history");
@@ -1532,6 +1530,34 @@ void TestSnapshotInterpolation() {
     EXPECT_TRUE(snap.sync.hasSnapshot && std::fabs(snap.sync.snapshot.ballPos.x - 13.3f) < 1e-4f,
                 "Cached sync must see the new frame");
     PatchReplayTelemetryForTest(false, 0, 0.0f, 0.0f, 0.0f);
+
+    // Short match lengths: the match clock runs faster than real time (2.3 ticks per simulation frame in a user
+    // log). Consecutive simulation frames must still blend, and the motion history must still be 0.15 s apart.
+    st.ResetMatch();
+    for (int i = 0; i < 200; ++i) {
+        PlaySnapshot sn{};
+        sn.matchPhase = 2;
+        sn.time60Hz = 5000.0f + 2.3f * static_cast<float>(i);
+        sn.matchTick = 9000u + static_cast<uint32_t>(i);
+        sn.playerOnPitch[0] = 1;
+        sn.playerPos[0] = Vec3{ 0.1f * static_cast<float>(i), 0.0f, 0.0f }; // 6 m/s
+        st.PushSnapshot(sn);
+    }
+    r = st.SyncToReplayCursor(2, 5000.0f + 2.3f * 100.5f);
+    EXPECT_TRUE(std::fabs(r.snapshot.playerPos[0].x - 10.05f) < 1e-3f, "Fast match clock must still interpolate consecutive frames");
+    MotionSample hist[VarState::kMotionSamples];
+    st.SampleMotionHistory(2, 5000.0f + 2.3f * 150.0f, hist);
+    bool histOk = true;
+    for (int k = 0; k < VarState::kMotionSamples; ++k) {
+        const uint32_t wantTick = 9150u - static_cast<uint32_t>(k + 1) * VarState::kMotionStepFrames;
+        histOk = histOk && hist[k].valid && hist[k].matchTick == wantTick &&
+                 std::fabs(hist[k].pos[0].x - 0.1f * static_cast<float>(wantTick - 9000u)) < 1e-3f;
+    }
+    EXPECT_TRUE(histOk, "Motion history must step back 9 simulation frames per sample");
+    st.SampleMotionHistory(2, 5000.0f + 2.3f * 5.0f, hist);
+    EXPECT_TRUE(!hist[0].valid, "No history before the first recorded frame");
+    st.SampleMotionHistory(0, 5000.0f, hist);
+    EXPECT_TRUE(!hist[0].valid, "No history from another match phase");
     st.ResetMatch();
     MarkPass("TestSnapshotInterpolation");
 }
@@ -2027,7 +2053,7 @@ void TestHudRenderSmoke() {
         };
         const float s = (time - kWinStart) / (kSuspect - kWinStart);
         const float k = std::clamp(s, 0.0f, 1.0f);
-        const float ease = k * k * (3.0f - 2.0f * k);
+        const float ease = k; // steady build-up: players still running at the moment of the slide
         const float after = std::max(0.0f, time - kSuspect) / 60.0f; // seconds after the slide
         for (int p = 0; p < 22; ++p) {
             const float wob = 0.6f * std::sin(time * 0.003f + static_cast<float>(p) * 1.7f);
@@ -2722,6 +2748,14 @@ void TestHeapGuardAtomicSegmentRelease() {
         EXPECT_TRUE(!cache.Contains(0x1711D0000ULL, 0x60000), "Oldest entry is replaced when full");
         cache.Clear();
         EXPECT_EQ(cache.Count(), static_cast<size_t>(0), "Clear forgets every range");
+        cache.Add(0x100000ULL, 0x10000);
+        cache.Add(0x200000ULL, 0x10000);
+        cache.Add(0x300000ULL, 0x10000);
+        cache.RemoveOverlapping(0x1F8000ULL, 0x10000); // overlaps only the middle range
+        EXPECT_TRUE(cache.Count() == 2 && cache.Contains(0x100000ULL, 0x10000) && cache.Contains(0x300000ULL, 0x10000) &&
+                    !cache.Contains(0x200000ULL, 0x10000), "Released range must forget only overlapping refusals");
+        cache.RemoveOverlapping(0x110000ULL, 0x1F0000); // touches neither (half-open ranges)
+        EXPECT_EQ(cache.Count(), static_cast<size_t>(2), "Adjacent ranges do not overlap");
     }
     // A real refused range: second call comes from the cache, both refuse, counters move
     {

@@ -441,6 +441,15 @@ struct ReplayControlCommand {
     int32_t focusSlot      = 0; // 0 = Ball, 1..22 = Player (slot + 1)
 };
 
+// Positions some time before the replay cursor, for the tactical pitch trails and heading arrows
+struct MotionSample {
+    bool    valid = false;
+    uint32_t matchTick = 0;
+    Vec3    ball{};
+    Vec3    pos[22]{};
+    uint8_t onPitch[22]{};
+};
+
 struct ReplaySyncResult {
     bool         hasEvent    = false;
     VarEvent     event{};
@@ -653,6 +662,12 @@ public:
     std::vector<VarEvent> GetRecentEvents(size_t maxCount = 32) const;
     MatchVarStats GetStats() const;
     ReplaySyncResult SyncToReplayCursor(int32_t cursorPhase, float cursorTime60Hz, float eventToleranceTicks = 210.0f) const;
+    // out[k] = the frame (k + 1) * kMotionStepFrames simulation frames before the frame nearest to the cursor
+    // (same match phase, within 3 frames of that target, never across a gap). Real time, whatever the match
+    // length. Used for 1.5 s trails and the heading of every player.
+    static constexpr int      kMotionSamples    = 10;
+    static constexpr uint32_t kMotionStepFrames = 9; // 0.15 s
+    void SampleMotionHistory(int32_t phase, float time60Hz, MotionSample (&out)[kMotionSamples]) const;
     std::vector<ReplayMarker> GetReplayWindowMarkers(int32_t winPhase, float winStartTime, float winEndTime) const;
 
     // Native ReplayController command queue (HUD -> ManualReplayController::SyncToReplayManager)
@@ -742,12 +757,15 @@ private:
 
     std::vector<PlaySnapshot> snapshots_;
     // Phase and time of each ring slot, so the replay cursor search walks 8-byte keys instead of whole snapshots.
-    // Interpolation limits: frames more than 3 ticks apart are not neighbours (dropped frames tolerated), and a
-    // move above 3 m between two consecutive frames is a teleport (restart, substitution), never blended.
-    static constexpr float kMaxInterpolationGap60Hz = 3.0f;
+    // Interpolation limits: frames more than 3 simulation frames apart are not neighbours (dropped frames
+    // tolerated), and a move above 3 m between two consecutive frames is a teleport (restart, substitution).
+    static constexpr uint32_t kMaxInterpolationFrameGap = 3;
     static constexpr float kMaxInterpolationStepSq  = 9.0f;
     void InterpolateSnapshotLocked(size_t idx, size_t age, float cursorTime60Hz, PlaySnapshot& out) const;
-    struct SnapKey { int32_t phase; float time60Hz; };
+    // time60Hz is the match clock, which runs faster than real time with shorter match lengths (2.3 ticks per
+    // simulation frame measured in a user log). Neighbours, gaps and speeds use matchTick, the 60 Hz simulation
+    // frame counter (MatchInfo + 0x1198), so they hold for any match length.
+    struct SnapKey { int32_t phase; float time60Hz; uint32_t tick; };
     std::vector<SnapKey> snapKeys_;
     size_t snapHead_ = 0;
     size_t snapCount_ = 0;

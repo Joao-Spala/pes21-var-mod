@@ -42,9 +42,11 @@ bool Install();
 bool IsInstalled();
 uint64_t RepairedReleases(); // releases the native code would have left half done (crash at 0x1403FE31D)
 uint64_t RefusedReleases();  // inconsistent ranges kept mapped instead of partially released
-// dlmalloc retries a segment it could not release on every trim pass (release_unused_segments 0x1403FE2C3
-// puts the chunk back and tries again next time). A refused range is remembered and refused again in O(1)
-// instead of walking its pages with VirtualQuery each time. Refusing is always safe (dlmalloc keeps the chunk).
+// The engine trims in a loop (0x1403FBF00: mspace_trim again while it released anything) and every pass runs
+// release_unused_segments (0x1403FE140), which retries each free segment it could not release before. A refused
+// range is remembered and refused again in O(1) instead of walking its pages each time. Refusing is always safe:
+// every caller keeps or leaks the range on -1, none treats it as fatal (0x1403FC717, 0x1403FC77A, 0x1403FD410,
+// 0x1403FE2C3, 0x1403FE6D3, 0x1403FE7D8). A later successful release forgets the overlapping cached ranges.
 struct Stats {
     uint64_t calls = 0;        // win32munmap calls handled
     uint64_t released = 0;     // ranges released
@@ -53,6 +55,7 @@ struct Stats {
     uint64_t microseconds = 0; // total time spent inside the replacement
 };
 Stats TakeStats();           // returns the counters since the previous call and resets them
+uint64_t PendingCalls();     // calls counted since the last TakeStats (no reset)
 void ClearRefusedCache();    // forget refused ranges (new match: allocations may have changed)
 // Pure cache used by the replacement, exposed for tests
 class RefusedRangeCache {
@@ -60,6 +63,7 @@ public:
     static constexpr size_t kCapacity = 64;
     bool Contains(uintptr_t base, size_t size) const;
     void Add(uintptr_t base, size_t size); // oldest entry is replaced when full
+    void RemoveOverlapping(uintptr_t base, size_t size);
     void Clear();
     size_t Count() const { return count_; }
 private:

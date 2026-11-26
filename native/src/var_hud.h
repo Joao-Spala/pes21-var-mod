@@ -242,6 +242,9 @@ private:
     // Active timeline marker sync state
     int      selectedMarkerIndex_   = -1;
     bool     manualMarkerLock_      = false;
+public:
+    bool IsMarkerManuallySelected() const { return manualMarkerLock_; }
+private:
     bool     restoreMarkerAfterLive_ = false; // context was switched to the stopped-for foul
     bool     detectedOffenderUnknown_ = false; // roles inverted with no known opponent: offender to be picked
     float    lastTrackedCursorTime_ = -1000.0f;

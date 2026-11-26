@@ -2,6 +2,7 @@
 
 #include "aob_scanner.h"
 #include "game_structs.h"
+#include "heap_guard.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_dx11.h"
@@ -44,6 +45,22 @@ uint64_t PresentQpc() {
     LARGE_INTEGER t;
     QueryPerformanceCounter(&t);
     return static_cast<uint64_t>(t.QuadPart);
+}
+
+// While the engine is releasing heap segments (post-match loading, menus), report the cost every 10 s instead
+// of only at the next match start, so a slow loading shows up in the log at the time it happens
+void MaybeLogPeriodicPerf() {
+    static uint64_t s_lastMs = 0;
+    const uint64_t now = GetTickCount64();
+    if (s_lastMs == 0) s_lastMs = now;
+    if (now - s_lastMs < 10000) return;
+    s_lastMs = now;
+    if (HeapGuard::PendingCalls() == 0) return;
+    const HeapGuard::Stats hs = HeapGuard::TakeStats();
+    VAR_LOG_INF("Perf last 10 s: heap release %llu call(s) (%llu released, %llu refused, %llu refused from cache) in %llu us",
+                static_cast<unsigned long long>(hs.calls), static_cast<unsigned long long>(hs.released),
+                static_cast<unsigned long long>(hs.refused), static_cast<unsigned long long>(hs.cacheHits),
+                static_cast<unsigned long long>(hs.microseconds));
 }
 
 void AccountPresentWork(uint64_t t0) {
@@ -324,6 +341,7 @@ HRESULT __fastcall Detour_GrSwapChainPresent(void* grSwapChain, UINT syncInterva
     }
     ++g_presentDepth;
     const uint64_t workStart = PresentQpc();
+    MaybeLogPeriodicPerf();
 
     if (IsValidPtr(grSwapChain) && !g_stopRequested.load(std::memory_order_acquire)) {
         IDXGISwapChain* swapChain = *reinterpret_cast<IDXGISwapChain* const*>(
