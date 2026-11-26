@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.4.8
+
+- **Instalador genérico**: a detecção automática procura qualquer pasta da biblioteca Steam que tenha o próprio Sider, em vez de um nome de pasta fixo. As pastas de patch continuam tendo prioridade sobre o Sider da pasta do jogo.
+- **Documentação**: README, notas e comentários falam em patches que usam o Sider, sem citar um patch específico.
+- Sem mudanças no comportamento do VAR em partida.
+
 ## v4.4.7
 
 Verificação tripla de estabilidade: auditoria de crash e travamento em todo o código nativo, auditoria de cada escrita na memória do jogo conferida no executável, gate de release (DLL, Lua, `sider.ini`, logs e pacote) e a suíte inteira rodada com AddressSanitizer e UndefinedBehaviorSanitizer (20 de 20, sem erro de memória).

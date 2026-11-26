@@ -7,7 +7,7 @@
 **Árbitro de vídeo para as partidas offline do eFootball PES 2021**<br>
 **Video assistant referee for eFootball PES 2021 offline matches**
 
-![Version](https://img.shields.io/badge/Version-v4.4.7-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.4.8-38BDF8?style=for-the-badge)
 ![Native](https://img.shields.io/badge/Native-C%2B%2B20_%2B_DX11_%2B_ImGui-84CC16?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Languages](https://img.shields.io/badge/Languages-PT--BR_%7C_English-2EA043?style=for-the-badge)
@@ -40,7 +40,7 @@ Somente partidas offline. Nenhum arquivo do jogo é alterado e nada de rede, DRM
 
 ### Instalação
 
-1. Baixe o **`PES2021_VAR_Mod_v4.4.7.zip`** em [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
+1. Baixe o **`PES2021_VAR_Mod_v4.4.8.zip`** em [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
 2. Feche o jogo e rode o **`VAR_Mod_Gerenciar.bat`**. No menu, escolha **`1 - Instalar ou atualizar`**.
 3. Abra o jogo pelo **Sider** (num patch, pelo atalho do próprio patch).
 
@@ -142,7 +142,7 @@ Offline matches only. No game file is modified and nothing related to network, D
 
 ### Installation
 
-1. Download **`PES2021_VAR_Mod_v4.4.7.zip`** from [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) and extract it anywhere.
+1. Download **`PES2021_VAR_Mod_v4.4.8.zip`** from [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) and extract it anywhere.
 2. Close the game and run **`VAR_Mod_Gerenciar.bat`**. In the menu, pick **`1 - Instalar ou atualizar`** (install or update).
 3. Launch the game through **Sider** (with a patch, through the patch launcher).
 
