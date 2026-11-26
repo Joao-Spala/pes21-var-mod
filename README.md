@@ -19,15 +19,15 @@
 
 ---
 
-## The call you could never challenge
+## What it is
 
-Everyone who plays PES has been there. Your striker goes down in the box, the referee waves play on, the replay shows the defender's boot on the ankle and there is nothing left but to accept it. Or the opposite: a yellow for the wrong player, a penalty that never happened, a tackle from behind that went unpunished.
+**VAR for PES 2021** adds a manual video review to offline matches. Pause, open the replay, pick a play and decide. The decision is applied inside the PES engine, so the restart, the card and the sending off follow as if the referee had made that call from the start.
 
-**VAR for PES 2021** puts the final word in your hands. Pause, open the replay, pick the play and decide. It is not an overlay pretending to referee. The decision goes **into the PES engine itself**, which changes the restart, gives or removes the card and sends off or brings back the player as if the referee had called it that way from the start.
+It is a Sider module (native x64 DLL plus Lua) for the Steam version of the game.
 
-## Three plays, three answers
+## What you can do
 
-| When this happens | The VAR does this |
+| Situation | What the VAR does |
 | --- | --- |
 | **The penalty that was not given.** Your striker was brought down and play went on. | Go back to the play in the replay and pick **Award penalty**. The match goes to the spot, with the card you choose. |
 | **The unfair call.** The referee gave a foul and a yellow on a clean tackle. | Pick **Overturn foul**. The foul disappears, the card is removed and possession goes back to the right team. |
@@ -71,7 +71,7 @@ The panel finds the moments that matter by itself. It follows the match 60 times
 | **Remember** | Cards and fouls follow the player of the play, not the slot, even after a substitution. A decision about a stoppage that has already passed is never applied out of time. |
 | **Respect** | Never a third yellow or a second red. No game file is modified. The panel takes the same share of the screen from 720p to 4K, ultrawide and 4:3, in Compact, Default and Large sizes. |
 
-## Honest limits
+## Limitations
 
 - It only works on **Steam PES 2021 `v1.7.2.0`**. Other executable versions use other addresses and are not supported.
 - **Offline matches only**: Exhibition, Master League, Become a Legend and Cups. Nothing related to network, DRM or online modes is touched.

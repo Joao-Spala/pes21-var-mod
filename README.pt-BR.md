@@ -19,15 +19,15 @@
 
 ---
 
-## O lance que você não podia contestar
+## O que é
 
-Todo mundo que joga PES já viveu isso. O atacante cai na área, o árbitro manda seguir, o replay mostra a chuteira do zagueiro no tornozelo e não resta nada além de aceitar. Ou o contrário: um amarelo para o jogador errado, um pênalti que não existiu, um carrinho por trás que passou batido.
+O **VAR para PES 2021** adiciona uma revisão manual de vídeo às partidas offline. Você pausa, abre o replay, escolhe o lance e decide. A decisão é aplicada dentro da engine do PES, então a cobrança, o cartão e a expulsão seguem como se o árbitro tivesse tomado aquela decisão desde o começo.
 
-O **VAR para PES 2021** coloca a última palavra nas suas mãos. Você pausa, abre o replay, escolhe o lance e decide. Não é uma tela por cima do jogo fingindo arbitrar. A decisão entra **na própria engine** do PES, que muda a cobrança, dá ou tira o cartão e expulsa ou devolve o jogador como se o árbitro tivesse decidido assim desde o começo.
+É um módulo do Sider (DLL nativa x64 e Lua) para a versão Steam do jogo.
 
-## Três lances, três respostas
+## O que você pode fazer
 
-| Quando acontece isto | O VAR faz isto |
+| Situação | O que o VAR faz |
 | --- | --- |
 | **O pênalti que não foi marcado.** Seu atacante foi derrubado e o jogo seguiu. | Volte ao lance no replay e escolha **Marcar pênalti**. A partida vai para a marca da cal, com o cartão que você decidir. |
 | **A marcação injusta.** O árbitro deu falta e amarelo num lance limpo. | Escolha **Anular falta**. A falta some, o cartão é retirado e a posse volta para o time certo. |
@@ -71,7 +71,7 @@ O painel encontra sozinho os momentos que importam. Ele acompanha a partida 60 v
 | **Lembrar** | Cartões e faltas seguem o jogador do lance, não a posição, mesmo depois de uma substituição. Uma decisão sobre uma parada que já passou nunca é aplicada fora de hora. |
 | **Respeitar** | Nunca terceiro amarelo nem segundo vermelho. Nenhum arquivo do jogo é alterado. O painel ocupa a mesma fração da tela de 720p a 4K, em ultrawide e 4:3, nos tamanhos Compacto, Padrão e Grande. |
 
-## Limites honestos
+## Limitações
 
 - Funciona só no **PES 2021 `v1.7.2.0` da Steam**. Outras versões do executável têm outros endereços e não são suportadas.
 - **Só partidas offline**: Exibição, Master Liga, Rumo ao Estrelato e Copas. Nada de rede, DRM ou modo online é tocado.
