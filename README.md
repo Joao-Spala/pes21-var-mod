@@ -37,15 +37,12 @@ O **VAR para PES 2021** coloca a última palavra nas suas mãos. Você pausa, ab
 
 ```mermaid
 flowchart LR
-    A["Lance polêmico"] --> B["Pause e abra o<br/>Replay Manual"]
-    B --> C["O painel VAR abre<br/>com os lances marcados"]
-    C --> D["Escolha o lance<br/>e a decisão"]
-    D --> E["Pool de decisões"]
-    E --> F["Saia do replay"]
-    F --> G["A engine aplica<br/>tudo de uma vez"]
+    A["Lance<br/>polêmico"] --> B["Pause e abra o<br/>Replay Manual"]
+    B --> C["Escolha o lance e<br/>confirme a decisão"]
+    C --> D["Saia do replay e<br/>a engine aplica"]
 ```
 
-O painel encontra sozinho os momentos que importam. Ele acompanha a partida 60 vezes por segundo e marca na barra do replay carrinhos, botes, trancos, quedas e simulações, além das faltas, cartões e vantagens do árbitro. Cada marcador já chega com infrator, vítima, local e zona (dentro ou fora da área). Você confere, ajusta o que quiser e aperta **Confirmar decisão**.
+O painel encontra sozinho os momentos que importam. Ele acompanha a partida 60 vezes por segundo e marca na barra do replay carrinhos, botes, trancos, quedas e simulações, além das faltas, cartões e vantagens do árbitro. Cada marcador já chega com infrator, vítima, local e zona (dentro ou fora da área). Você confere, ajusta o que quiser e aperta **Confirmar decisão**. A decisão vai para o **pool de decisões** e, ao sair do replay, a engine aplica tudo de uma vez.
 
 ### O painel
 
@@ -163,15 +160,12 @@ Everyone who plays PES has been there. Your striker goes down in the box, the re
 
 ```mermaid
 flowchart LR
-    A["Controversial play"] --> B["Pause and open<br/>the Manual Replay"]
-    B --> C["The VAR panel opens<br/>with the plays marked"]
-    C --> D["Pick the play<br/>and the decision"]
-    D --> E["Decision pool"]
-    E --> F["Leave the replay"]
-    F --> G["The engine applies<br/>everything at once"]
+    A["Controversial<br/>play"] --> B["Pause and open<br/>the Manual Replay"]
+    B --> C["Pick the play and<br/>confirm the decision"]
+    C --> D["Leave the replay and<br/>the engine applies it"]
 ```
 
-The panel finds the moments that matter by itself. It follows the match 60 times per second and marks slide tackles, standing tackles, shoulder charges, falls and simulation on the replay bar, along with the referee's fouls, cards and advantages. Every marker arrives with offender, fouled player, spot and zone (inside or outside the box). Check it, adjust anything and press **Confirm decision**.
+The panel finds the moments that matter by itself. It follows the match 60 times per second and marks slide tackles, standing tackles, shoulder charges, falls and simulation on the replay bar, along with the referee's fouls, cards and advantages. Every marker arrives with offender, fouled player, spot and zone (inside or outside the box). Check it, adjust anything and press **Confirm decision**. The decision goes into the **decision pool** and, when you leave the replay, the engine applies everything at once.
 
 ### The panel
 
