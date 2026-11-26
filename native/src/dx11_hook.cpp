@@ -268,6 +268,11 @@ void RenderOverlayOnSwapChainLocked(IDXGISwapChain* swapChain, bool alreadyPolle
         ImGui_ImplDX11_NewFrame();
 
         ImGuiIO& io = ImGui::GetIO();
+        // The atlas pixels live on the GPU once uploaded: drop the CPU copy (2.5 MB at 1080p, 10 MB at 4K). The
+        // font input stays, so a texture recreation (device reset, new resolution) rebuilds the pixels by itself.
+        if (io.Fonts->TexID && (io.Fonts->TexPixelsAlpha8 || io.Fonts->TexPixelsRGBA32)) {
+            io.Fonts->ClearTexData();
+        }
         if (!io.Fonts->IsBuilt()) {
             // Device objects could not be created this frame (device removed / out of video memory):
             // ImGui::NewFrame would assert on the missing font atlas. Skip and retry next frame.

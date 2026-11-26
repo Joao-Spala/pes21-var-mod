@@ -8,6 +8,8 @@ I18N("REVISÃO", "REVIEW")
 I18N("CARTÕES", "CARDS")
 I18N("OPÇÕES", "OPTIONS")
 I18N("Recolher painel", "Collapse panel")
+I18N("Recolher", "Collapse")
+I18N("IMPEDIMENTO", "OFFSIDE LINE")
 I18N("Abrir painel", "Open panel")
 
 // ---- Generic fallback when the game roster cannot be read

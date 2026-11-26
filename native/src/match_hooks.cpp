@@ -2266,7 +2266,8 @@ void OnFsmState(int32_t fsmState, uint8_t* replayMgr, uint32_t matchTick) {
 }
 
 void OnSimTick(uint8_t* matchInfo, int32_t matchStatus) {
-    const RingInfo r = Read(false);
+    // The recording-rate probe only feeds two log lines: no ring reads (2 VirtualQuery per tick) after that
+    const RingInfo r = (g_rateLogsLeft > 0) ? Read(false) : RingInfo{};
     if (r.ok) {
         if (g_rateWindowStartTick == 0) {
             g_rateWindowStartTick = g_mainTickCount;
@@ -2414,7 +2415,7 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
         // 60Hz physical incident detection + 60Hz spatial snapshot during InPlay: one snapshot per simulation
         // frame, the same rate the replay records, so the tactical pitch follows the replay frame by frame
         // Only when the simulation frame advanced: the tick hook can run again on the same frame (a pause with the
-        // ball in play keeps InPlay), and identical copies would push the reviewed play out of the 90 s history
+        // ball in play keeps InPlay), and identical copies would push the reviewed play out of the 30 s history
         if (matchStatus == static_cast<int32_t>(MatchStatus::InPlay) &&
             (!g_hasSnapshotTick || matchTick != g_lastSnapshotTick || time60Hz != g_lastSnapshotTime)) {
             g_lastSnapshotTick = matchTick;

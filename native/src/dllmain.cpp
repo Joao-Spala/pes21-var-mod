@@ -158,6 +158,13 @@ static void LogPerfPeriod(const char* period) {
                 static_cast<unsigned long long>(ps.microseconds), static_cast<unsigned long long>(ps.maxMicroseconds));
 }
 
+// The C++ runtime's demangler is only reached by the fatal "terminate" handler to pretty-print a type name.
+// Providing this stub keeps its 128 KB object out of the DLL; the handler then prints the raw name.
+extern "C" char* __cxa_demangle(const char*, char*, size_t*, int* status) {
+    if (status) *status = -2;
+    return nullptr;
+}
+
 __declspec(dllexport) void __cdecl var_on_match_start() {
     if (!g_initialized.load(std::memory_order_acquire)) return;
     if (var_mod::Dx11Hook::IsInitFinished() && !var_mod::MatchHooks::IsInstalled()) {

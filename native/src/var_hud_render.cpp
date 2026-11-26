@@ -87,6 +87,9 @@ constexpr ImU32 Red        = IM_COL32(236, 76, 84, 255);
 constexpr ImU32 Green      = IM_COL32(52, 199, 112, 255);
 constexpr ImU32 Orange     = IM_COL32(248, 150, 64, 255);
 constexpr ImU32 Suspect    = IM_COL32(255, 214, 102, 255);
+// Roles of the play: colours no kit and no UI state uses (red is a common kit, blue is the UI focus colour)
+constexpr ImU32 RoleOffender = IM_COL32(255, 138, 48, 255);
+constexpr ImU32 RoleFouled   = IM_COL32(64, 214, 232, 255);
 constexpr ImU32 Neutral    = IM_COL32(176, 186, 202, 255);
 // Pitch
 // Tactical pitch: dark, cool and low-saturation, so team colours (including green kits) and numbers pop
@@ -677,10 +680,13 @@ void PlayerChip(ImDrawList* dl, ImVec2 c, float r, const TeamDisplayInfo& t) {
 
 void PanelShadow(ImVec2 a, ImVec2 b, float radius) {
     ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    // Each layer is a ring from just inside the panel edge out to its spread: the panel (opaque) hides the inner
+    // half, so the result matches the old stacked fills while the GPU blends only a band around the panel
     for (int i = 1; i <= 6; ++i) {
         const float g = Uf(1.6f) * static_cast<float>(i);
-        bg->AddRectFilled(ImVec2(a.x - g, a.y - g + Uf(2.0f)), ImVec2(b.x + g, b.y + g + Uf(3.0f)),
-                          IM_COL32(0, 0, 0, 22 - i * 3), radius + g);
+        const float h = g * 0.5f;
+        bg->AddRect(ImVec2(a.x - h, a.y - h + Uf(2.0f)), ImVec2(b.x + h, b.y + h + Uf(3.0f)),
+                    IM_COL32(0, 0, 0, 22 - i * 3), radius + h, 0, g);
     }
 }
 
@@ -1039,10 +1045,10 @@ void RenderIncidentCard(ImDrawList* dl, float contentW, VarState& state) {
     char zone[64], meters[24];
     if (inBox) {
         FormatMeters(meters, sizeof(meters), std::fabs(boxDist));
-        std::snprintf(zone, sizeof(zone), "%s \xC2\xB7 %s", Tr("DENTRO DA ÁREA"), meters);
+        std::snprintf(zone, sizeof(zone), "%s %s", meters, Tr("DENTRO DA ÁREA")); // the distance says what it measures
     } else if (boxDist < 30.0f) {
         FormatMeters(meters, sizeof(meters), boxDist);
-        std::snprintf(zone, sizeof(zone), "%s \xC2\xB7 %s", Tr("FORA DA ÁREA"), meters);
+        std::snprintf(zone, sizeof(zone), "%s %s", meters, Tr("FORA DA ÁREA"));
     } else {
         std::snprintf(zone, sizeof(zone), "%s", Tr("MEIO-CAMPO"));
     }
@@ -1088,9 +1094,9 @@ void RenderIncidentCard(ImDrawList* dl, float contentW, VarState& state) {
             Text(dl, Txt::Body, ImVec2(x0, ny), C::Text3, Tr("Não definido"));
         }
     };
-    person(namesL, Tr("INFRATOR"), C::Red, offSlot);
+    person(namesL, Tr("INFRATOR"), C::RoleOffender, offSlot);
     IconChevron(dl, ImVec2(namesL + colW + arrowW * 0.5f, y2 + LineH(Txt::Caption) + U(4) + nameH * 0.5f), U(10), Dir::Right, C::Text3);
-    person(namesL + colW + arrowW, Tr("VÍTIMA"), C::Accent, vicSlot);
+    person(namesL + colW + arrowW, Tr("VÍTIMA"), C::RoleFouled, vicSlot);
 
     ImGui::SetCursorScreenPos(p);
     ImGui::Dummy(ImVec2(contentW, h));
@@ -1211,11 +1217,18 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
         float ox = 0.0f;
         if (VarHudController::ComputeSecondLastDefenderX(sync.snapshot, defTeam, tel.teamAttackDir[defTeam], ox)) {
             DrawDashedLine(dl, toScreen(ox, -d.halfWidth), toScreen(ox, d.halfWidth), C::Offside, lineTh, U(5), U(4));
+            // Label beside the line, just under the team chips row (the zoom chip owns the bottom corner)
+            const ImVec2 lt = toScreen(ox, -d.halfWidth);
+            const char* offTxt = Tr("IMPEDIMENTO");
+            const float otw = TrackedW(offTxt);
+            const float olx = std::clamp(lt.x + U(4), pos.x + U(4), end.x - U(4) - otw);
+            const float oly = std::max(lt.y, pos.y) + U(8) + U(20) + U(6);
+            Tracked(dl, ImVec2(olx, oly), C::Offside, offTxt);
         }
     }
 
     // Restart spot under the players: it marks the ground, the people stay readable on top of it
-    if (IsNonZeroVec(spot)) {
+    if (IsNonZeroVec(spot) && g_controller.Page() == HudPage::Configure) { // the restart spot of the decision being edited
         const ImVec2 sp = toScreen(spot.x, spot.z);
         const float cr = Uf(5.5f);
         const float t = std::max(1.5f, Uf(1.8f));
@@ -1244,8 +1257,9 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     if (sync.hasSnapshot) {
         const PlaySnapshot& sn = sync.snapshot;
         const bool focusPlay = IsValidSlot(activeOff) || IsValidSlot(activeVic);
-        const float rBase = vp.isZoomed ? Uf(8.2f) : Uf(5.8f);
-        const float rHero = vp.isZoomed ? Uf(9.6f) : Uf(7.0f);
+        // Minimum sizes in pixels: below them a shirt number is not readable (720p, 4:3, 800x600)
+        const float rBase = std::max(vp.isZoomed ? Uf(8.2f) : Uf(5.8f), vp.isZoomed ? 7.5f : 5.5f);
+        const float rHero = std::max(vp.isZoomed ? Uf(9.6f) : Uf(7.0f), vp.isZoomed ? 8.5f : 6.5f);
         auto isHero = [&](int s) { return s == activeOff || s == activeVic; };
         // Shirt numbers come from the baked font closest in size above the target, so they are never blurred by a
         // strong downscale at small UI scales
@@ -1296,11 +1310,15 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
         // 1. Trails (1.5 s): the two players of the play (solid, kit colour) and the ball (dotted white, so a
         // white kit's trail never reads as the ball's)
         auto trail = [&](int s, ImU32 col, float width) {
+            // The whole trail moves with the token when it was spread apart, so its shape stays the real one
+            const ImVec2 real = toScreen(sn.playerPos[s].x, sn.playerPos[s].z);
+            const ImVec2 shift(tokenPos[s].x - real.x, tokenPos[s].y - real.y);
             ImVec2 prev = tokenPos[s];
             for (int k = 0; k < VarState::kMotionSamples; ++k) {
                 const MotionSample& m = s_motion[k];
                 if (!m.valid || !m.onPitch[s]) break;
-                const ImVec2 p = toScreen(m.pos[s].x, m.pos[s].z);
+                const ImVec2 w = toScreen(m.pos[s].x, m.pos[s].z);
+                const ImVec2 p(w.x + shift.x, w.y + shift.y);
                 const float fade = 1.0f - static_cast<float>(k) / static_cast<float>(VarState::kMotionSamples);
                 dl->AddLine(prev, p, WithAlpha(col, 0.85f * fade), std::max(1.0f, width * (0.45f + 0.55f * fade)));
                 prev = p;
@@ -1371,8 +1389,8 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
             dl->AddCircle(pp, rHero + Uf(4.2f), ring, 0, std::max(1.6f, Uf(2.2f)));
             PitchToken(dl, numFontHero, pp, rHero, teams[SlotToTeam(slot)], players[slot].shirtNumber, 1.0f);
         };
-        hero(activeVic, C::Accent);
-        hero(activeOff, C::Red);
+        hero(activeVic, C::RoleFouled);
+        hero(activeOff, C::RoleOffender);
 
         // 5. Ball: soft glow, white body, dark rim
         dl->AddCircleFilled(bp, br + Uf(4.0f), IM_COL32(255, 255, 255, 40), 0);
@@ -1430,8 +1448,8 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                 placed = true;
             };
             const bool vicBelow = !bothOn || sn.playerPos[activeVic].z >= sn.playerPos[activeOff].z;
-            tag(activeOff, Tr("INFRATOR"), C::Red, !vicBelow);
-            tag(activeVic, Tr("VÍTIMA"), C::Accent, vicBelow);
+            tag(activeOff, Tr("INFRATOR"), C::RoleOffender, !vicBelow);
+            tag(activeVic, Tr("VÍTIMA"), C::RoleFouled, vicBelow);
         }
     } else {
         // No recorded frame for this moment: the live ball only
@@ -1441,7 +1459,7 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     }
 
     // Team chips (which team defends each goal) on the full pitch
-    if (!vp.isZoomed) {
+    {   // also in the zoomed view: which goal belongs to whom
         const int leftDef = (tel.teamAttackDir[0] < 0.0f) ? 0 : 1;
         auto chip = [&](bool left, int teamIdx) {
             const char* sn = g_controller.TeamShortName(teamIdx);
@@ -1462,7 +1480,7 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     Tracked(dl, ImVec2(zoomP.x + U(8), zoomP.y + (zoomH - LineH(Txt::Caption)) * 0.5f), overZoom ? C::Text : C::Text2, zoomTxt);
 
     dl->PopClipRect();
-    MaskOuterCorners(dl, pos, end, U(kRadCard), C::PanelSolid);
+    MaskOuterCorners(dl, pos, end, U(kRadCard), C::Panel); // the window background behind the card
     dl->AddRect(pos, end, radarHovered ? C::StrokeHi : C::Stroke, U(kRadCard), 0, 1.0f);
 }
 
@@ -2367,7 +2385,7 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& poo
         using H = Hint;
         if (page == HudPage::Main) {
             const Hint hs[] = { { H::AxisV, BindAction::Up, 0, "Navegar" }, { H::AxisH, BindAction::Left, 0, "Lance" },
-                                { H::Action, BindAction::PlayPause, 0, "Reproduzir" }, { H::Action, BindAction::ToggleFocus, 0, "Recolher painel" } };
+                                { H::Action, BindAction::PlayPause, 0, "Reproduzir" }, { H::Action, BindAction::ToggleFocus, 0, "Recolher" } };
             HintBar(dl, contentW, hs, 4);
         } else if (page == HudPage::Squad) {
             const Hint hs[] = { { H::AxisV, BindAction::Up, 0, "Navegar" }, { H::AxisH, BindAction::Left, 0, "Time" },
@@ -2456,7 +2474,7 @@ bool VarHudRenderer::EnsureFonts(float viewportW, float viewportH) {
     if (n > 0 && n < MAX_PATH) WideCharToMultiByte(CP_UTF8, 0, winDirW, -1, winDir, sizeof(winDir), nullptr, nullptr);
     else std::snprintf(winDir, sizeof(winDir), "C:\\Windows");
 
-    static const ImWchar kRanges[] = { 0x0020, 0x024F, 0x2013, 0x2014, 0x2022, 0x2022, 0x2026, 0x2026, 0 };
+    static const ImWchar kRanges[] = { 0x0020, 0x017F, 0x0218, 0x021B, 0x2013, 0x2014, 0x2022, 0x2022, 0x2026, 0x2026, 0 };
     // Legibility floor for small screens (720p, 4:3, 800x600): the UI scale keeps the panel's share of the screen,
     // but text below these sizes stops being readable. Only small scales are affected.
     auto load = [&](const char* file, float px, float minPx) -> ImFont* {
@@ -2466,7 +2484,7 @@ bool VarHudRenderer::EnsureFonts(float viewportW, float viewportH) {
         MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH * 2);
         if (GetFileAttributesW(wpath) == INVALID_FILE_ATTRIBUTES) return nullptr;
         ImFontConfig cfg;
-        cfg.OversampleH = 2;
+        cfg.OversampleH = 1;
         cfg.OversampleV = 1;
         cfg.PixelSnapH = true;
         return io.Fonts->AddFontFromFileTTF(path, std::floor(std::max(px * s, minPx) + 0.5f), &cfg, kRanges);
