@@ -2132,7 +2132,14 @@ void TestCompositeVerdictPoolAndRcuOffsets() {
     EXPECT_EQ(pool.Count(), static_cast<size_t>(2), "Second play must replace first play, keeping count == 2");
     EXPECT_EQ(pool.playDecision.action, VarAction::RetroactivePenalty, "Play decision must update to Penalty");
     EXPECT_TRUE(pool.FindCardForSlot(10) != nullptr, "Independent card decision must remain intact on play replacement");
-    EXPECT_TRUE(ctrl.PoolNoticeMessage() != nullptr, "Replacing an existing play must surface pool notice");
+    // Same play re-decided (free kick -> penalty on the same moment) is an update of that play's decision:
+    // no "another play was replaced" notice, and the confirmation toast says "atualizada"
+    EXPECT_TRUE(ctrl.PoolNoticeMessage() == nullptr, "Re-deciding the same play must not claim another play was replaced");
+    {
+        uint64_t age = 0;
+        const char* toast = ctrl.ConfirmToast(GetTickCount64(), age);
+        EXPECT_TRUE(toast && std::strstr(toast, "atualizada") != nullptr, "Same play re-decided must toast 'atualizada'");
+    }
 
     // 4. Individual item removal & per-slot deduplication
     VarVerdict c2{};
@@ -2599,8 +2606,38 @@ void TestFinalReviewRegressions() {
     EXPECT_EQ(static_cast<int>(evs.front().offenderRedsAfter), 1, "Second yellow shows as sent off");
     st.ResetMatch();
 
+    // A play decision made in an earlier stoppage is dropped; its cards and old-call overturns stay
+    {
+        st.ResetMatch();
+        VarVerdict fk{};
+        fk.action = VarAction::RetroactiveFreeKick;
+        fk.offenderSlot = 3;
+        fk.armStoppage = 4;
+        st.AddToVerdictPool(fk);
+        VarVerdict card{};
+        card.action = VarAction::EditCard;
+        card.directCardEdit = true;
+        card.offenderSlot = 7;
+        card.directYellows = 1;
+        st.AddToVerdictPool(card);
+        EXPECT_TRUE(!st.DropStalePlayDecision(4), "Same stoppage keeps the play");
+        EXPECT_TRUE(st.DropStalePlayDecision(5), "Later stoppage drops the play");
+        const VerdictPool sp = st.PeekVerdictPool();
+        EXPECT_TRUE(!sp.hasPlayDecision && sp.CardCount() == 1, "Cards stay after the play is dropped");
+        st.ResetMatch();
+        VarVerdict oldCancel{};
+        oldCancel.action = VarAction::OverturnCancel;
+        oldCancel.sourceEventId = 9;
+        oldCancel.armStoppage = 1;
+        st.AddToVerdictPool(oldCancel);
+        EXPECT_TRUE(!st.DropStalePlayDecision(3) && st.PeekVerdictPool().hasPlayDecision,
+                    "Overturn of an old call only revokes a card and is kept");
+        st.ResetMatch();
+    }
+
     // Arming is refused while the VAR is off
     st.SetEnabled(false);
+    EXPECT_TRUE(!st.AddToVerdictPoolEx(d1, nullptr, nullptr), "Refused decision must report false");
     st.AddToVerdictPool(d1);
     EXPECT_TRUE(st.PeekVerdictPool().Empty(), "No decision can be armed with the VAR off");
     st.SetEnabled(true);

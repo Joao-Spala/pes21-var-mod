@@ -32,6 +32,7 @@ std::atomic<bool> g_resetPending{ false };
 // VarState data revision captured this frame (render thread only). Keys per-frame caches so a new
 // snapshot, incident, verdict or match reset always invalidates them.
 uint32_t g_frameDataRevision = 0;
+HudPage g_pageAtFrameStart = HudPage::Main; // page before this frame's mouse clicks
 uint64_t g_frameNamesRevision = 0; // roster + teams revisions of this frame (names in summaries)
 bool g_scrollToSelection = false;
 int g_lastScalePreset = 1;
@@ -329,7 +330,8 @@ void VarBadge(ImDrawList* dl, ImVec2 p, float h, float* outW = nullptr) {
 // ============================================================================
 bool IsArrowVk(uint8_t vk) { return vk == VK_UP || vk == VK_DOWN || vk == VK_LEFT || vk == VK_RIGHT; }
 
-float Keycap(ImDrawList* dl, ImVec2 p, float h, uint8_t vk, ImU32 textCol = C::Text2, bool draw = true) {
+float Keycap(ImDrawList* dl, ImVec2 p, float h, uint8_t vk, ImU32 textCol = C::Text2, bool draw = true,
+             float maxW = 0.0f) {
     if (vk == 0) return 0.0f;
     const float pad = U(6);
     char name[32];
@@ -337,6 +339,7 @@ float Keycap(ImDrawList* dl, ImVec2 p, float h, uint8_t vk, ImU32 textCol = C::T
     if (!IsArrowVk(vk)) {
         InputManager::FormatKeyName(vk, name, sizeof(name));
         w = std::max(h, Measure(Txt::Caption, name) + pad * 2.0f);
+        if (maxW > 0.0f && w > maxW) w = maxW;
     }
     if (!draw) return w;
     dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), IM_COL32(255, 255, 255, 14), U(kRadChip));
@@ -346,7 +349,9 @@ float Keycap(ImDrawList* dl, ImVec2 p, float h, uint8_t vk, ImU32 textCol = C::T
         const Dir d = (vk == VK_UP) ? Dir::Up : (vk == VK_DOWN) ? Dir::Down : (vk == VK_LEFT) ? Dir::Left : Dir::Right;
         IconTriangle(dl, c, h * 0.42f, d, textCol);
     } else {
-        Text(dl, Txt::Caption, ImVec2(p.x + (w - Measure(Txt::Caption, name)) * 0.5f, p.y + (h - LineH(Txt::Caption)) * 0.5f), textCol, name);
+        const float tw = std::min(Measure(Txt::Caption, name), w - pad * 2.0f);
+        TextFit(dl, Txt::Caption, ImVec2(p.x + (w - tw) * 0.5f, p.y + (h - LineH(Txt::Caption)) * 0.5f), w - pad * 2.0f,
+                textCol, name);
     }
     return w;
 }
@@ -1189,7 +1194,7 @@ void RenderReviewPage(ImDrawList* dl, float contentW, float radarH, const HudCon
         std::snprintf(id, sizeof(id), "##opt_%d", i);
         bool hov = false;
         if (RowBase(dl, id, rp, ImVec2(contentW, rowH), i == sel, &hov)) g_controller.SelectMainOption(i, state);
-        if (hov && mouseMoved) g_controller.SetSelectedIndex(i);
+        if (hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(i);
         float rightW = 0.0f;
         if (i == sel) {
             const float gh = U(20);
@@ -1226,7 +1231,7 @@ void RenderSquadPage(ImDrawList* dl, float contentW, float maxPanelH, const Verd
         std::snprintf(id, sizeof(id), "##sq_t%d", t);
         bool hov = false;
         if (HitArea(id, a, ImVec2(segW, segH), &hov)) g_controller.SelectSquadTeam(t);
-        if (hov && mouseMoved) g_controller.SetSelectedIndex(0);
+        if (hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(0);
         const bool active = (team == t);
         dl->AddRectFilled(a, b, active ? C::Selected : hov ? C::SurfaceHi : C::Surface, U(kRadCtl));
         if (active && sel == 0) dl->AddRect(a, b, C::Accent, U(kRadCtl), 0, std::max(1.2f, Uf(1.5f)));
@@ -1259,7 +1264,7 @@ void RenderSquadPage(ImDrawList* dl, float contentW, float maxPanelH, const Verd
             std::snprintf(id, sizeof(id), "##sq_p%d", slot);
             bool hov = false;
             if (RowBase(cdl, id, rp, ImVec2(innerW, rowH), isSel, &hov, false)) g_controller.SelectSquadPlayer(slot);
-            if (hov && mouseMoved) g_controller.SetSelectedIndex(rowIdx);
+            if (hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(rowIdx);
             if (!isSel && !hov && (i % 2 == 0)) cdl->AddRectFilled(rp, ImVec2(rp.x + innerW, rp.y + rowH), IM_COL32(255, 255, 255, 6), U(kRadCtl));
 
             const bool off = !pl.onPitch;
@@ -1321,7 +1326,7 @@ void RenderSquadPage(ImDrawList* dl, float contentW, float maxPanelH, const Verd
     const ImVec2 bp = ImGui::GetCursorScreenPos();
     bool hov = false;
     if (RowBase(dl, "##sq_back", bp, ImVec2(contentW, U(36)), sel == 12, &hov)) g_controller.SelectTab(HudPage::Main);
-    if (hov && mouseMoved) g_controller.SetSelectedIndex(12);
+    if (hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(12);
     IconChevron(dl, ImVec2(bp.x + U(18), bp.y + U(18)), U(10), Dir::Left, C::Text2);
     Text(dl, Txt::Body, ImVec2(bp.x + U(32), bp.y + (U(36) - LineH(Txt::Body)) * 0.5f), C::Text2, Tr("Voltar"));
     ImGui::SetCursorScreenPos(bp);
@@ -1339,7 +1344,7 @@ void RenderOptionsPage(ImDrawList* dl, float contentW, const HudConfig& cfg, boo
         char id[24];
         std::snprintf(id, sizeof(id), "##cfg_%d", idx);
         const bool clicked = RowBase(dl, id, rp, ImVec2(contentW, rowH), sel == idx, hov);
-        if (*hov && mouseMoved) g_controller.SetSelectedIndex(idx);
+        if (*hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(idx);
         if (clicked && idx != kSettingsRowLanguage && idx != 3 && idx != 4) g_controller.TriggerSettingsRow(idx, +1, state);
         return rp;
     };
@@ -1363,7 +1368,7 @@ void RenderOptionsPage(ImDrawList* dl, float contentW, const HudConfig& cfg, boo
         char id[24];
         std::snprintf(id, sizeof(id), "##cfgs_%d", idx);
         RowBase(dl, id, rp, ImVec2(contentW, rowH), sel == idx, &hov, true, false);
-        if (hov && mouseMoved) g_controller.SetSelectedIndex(idx);
+        if (hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(idx);
         label(rp, pt, contentW - valueW - U(80));
         const int delta = ValueSelector(dl, id, rp, ImVec2(contentW, rowH), valueW, value, C::Text, sel == idx);
         if (delta != 0) g_controller.TriggerSettingsRow(idx, delta, state);
@@ -1484,8 +1489,8 @@ void RenderControlsPage(ImDrawList* dl, float contentW, float maxPanelH, bool mo
                 float gw = 0.0f;
                 if (c < 2) {
                     const uint8_t vk = cfg.bindings.keys[static_cast<size_t>(a)][static_cast<size_t>(c)];
-                    gw = Keycap(cdl, ImVec2(0, 0), gh, vk, C::Text, false);
-                    if (gw > 0.0f) Keycap(cdl, ImVec2(cx + (cellW - gw) * 0.5f, rp.y + (rowH - gh) * 0.5f), gh, vk, C::Text);
+                    gw = Keycap(cdl, ImVec2(0, 0), gh, vk, C::Text, false, cellW - U(4));
+                    if (gw > 0.0f) Keycap(cdl, ImVec2(cx + (cellW - gw) * 0.5f, rp.y + (rowH - gh) * 0.5f), gh, vk, C::Text, true, cellW - U(4));
                 } else if (!InputBindings::IsPadRemappable(act)) {
                     gw = 0.0f; // gamepad only opens / collapses the panel
                 } else {
@@ -1585,8 +1590,12 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
         updatingExistingInPool = (pool.FindSameKey(probe) != nullptr);
     } else {
         updatingExistingInPool = pool.hasPlayDecision && pool.playDecision.action != VarAction::None;
-        const bool samePlay = g_controller.DraftSourceEventId() != 0 &&
-                              pool.playDecision.sourceEventId == g_controller.DraftSourceEventId();
+        const bool samePlay = (g_controller.DraftSourceEventId() != 0 &&
+                               pool.playDecision.sourceEventId == g_controller.DraftSourceEventId()) ||
+                              (g_controller.DraftSourceEventId() == 0 && pool.playDecision.sourceEventId == 0 &&
+                               pool.playDecision.armStoppage == g_controller.Telemetry().stoppageCount &&
+                               pool.playDecision.playPhase == g_controller.Telemetry().replayCursorPhase &&
+                               std::fabs(pool.playDecision.playTime60Hz - g_controller.Telemetry().replayCursorTime) <= 180.0f);
         // Cancel of the stopped-for foul and a foul on another play live together (nothing is replaced)
         const VarAction da = g_controller.DraftAction();
         auto carriesFoul = [](VarAction a) {
@@ -1627,7 +1636,7 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
             const float bh = U(46);
             bool hov = false;
             if (HitArea(id, bp, ImVec2(contentW, bh), &hov)) g_controller.TriggerConfigField(ConfigField::Confirm, 1, state);
-            if (hov && mouseMoved) g_controller.SetSelectedIndex(i);
+            if (hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(i);
             dl->AddRectFilled(bp, ImVec2(bp.x + contentW, bp.y + bh), hov ? C::AccentHi : C::Accent, U(kRadCtl));
             if (isSel) dl->AddRect(ImVec2(bp.x - U(3), bp.y - U(3)), ImVec2(bp.x + contentW + U(3), bp.y + bh + U(3)),
                                    WithAlpha(C::Accent, 0.55f), U(kRadCtl) + U(3), 0, std::max(1.5f, Uf(2.0f)));
@@ -1646,7 +1655,7 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
         if (f == ConfigField::Back) {
             bool hov = false;
             if (RowBase(dl, id, rp, ImVec2(contentW, U(36)), isSel, &hov, false)) g_controller.TriggerConfigField(ConfigField::Back, 1, state);
-            if (hov && mouseMoved) g_controller.SetSelectedIndex(i);
+            if (hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(i);
             const char* lbl = Tr("Voltar");
             const float lw = Measure(Txt::Body, lbl);
             Text(dl, Txt::Body, ImVec2(rp.x + (contentW - lw) * 0.5f, rp.y + (U(36) - LineH(Txt::Body)) * 0.5f), isSel ? C::Text : C::Text2, lbl);
@@ -1657,7 +1666,7 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
 
         bool hov = false;
         RowBase(dl, id, rp, ImVec2(contentW, rowH), isSel, &hov, true, false);
-        if (hov && mouseMoved) g_controller.SetSelectedIndex(i);
+        if (hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(i);
         const char* lbl = "";
         const char* value = "";
         ImU32 valueCol = C::Text;
@@ -1730,7 +1739,15 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
         const char* text   = "";
     };
     std::array<PoolRow, kMaxCardPoolEntries + 1> rows{};
-    std::array<std::string, kMaxCardPoolEntries + 1> rowTexts{}; // current-language summaries
+    // Current-language summaries, rebuilt only when the pool, the language or the names change
+    static std::array<std::string, kMaxCardPoolEntries + 1> rowTexts{};
+    static uint64_t s_rowsKey = ~0ULL;
+    const uint64_t rowsKey = (static_cast<uint64_t>(pool.sequence) << 24) ^ (static_cast<uint64_t>(total) << 16) ^
+                             (static_cast<uint64_t>(pool.CardCount()) << 8) ^
+                             (static_cast<uint64_t>(i18n::GetLanguage() == Language::English ? 1 : 0) << 7) ^
+                             (pool.hasPlayDecision ? 0x40ULL : 0ULL) ^ (g_frameNamesRevision * 0x9E3779B97F4A7C15ULL);
+    const bool rebuildRows = (rowsKey != s_rowsKey);
+    s_rowsKey = rowsKey;
     size_t rowCount = 0;
 
     if (pool.hasPlayDecision) {
@@ -1740,7 +1757,7 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
                                  pv.action == VarAction::RestartGoalKick ||
                                  pv.action == VarAction::RestartThrowIn);
         const ImU32 col = (pv.targetCard == CardKind::Red) ? C::Red : isOverturn ? C::Yellow : C::Accent;
-        rowTexts[rowCount] = g_controller.FormatSummaryOf(pv);
+        if (rebuildRows) rowTexts[rowCount] = g_controller.FormatSummaryOf(pv);
         rows[rowCount] = PoolRow{ true, 0U, pool.playOrder, col, Tr("LANCE"), rowTexts[rowCount].c_str() };
         ++rowCount;
     }
@@ -1752,7 +1769,7 @@ void RenderDecisionPool(ImDrawList* dl, float contentW, const VerdictPool& pool,
         const bool hasRed = (cv.targetCard == CardKind::Red) || (cv.directCardEdit && cv.directReds > 0);
         const bool hasYel = (cv.targetCard == CardKind::Yellow) || (cv.directCardEdit && cv.directYellows > 0 && cv.directReds == 0);
         const ImU32 col = hasRed ? C::Red : hasYel ? C::Yellow : C::Neutral;
-        rowTexts[rowCount] = g_controller.FormatSummaryOf(cv);
+        if (rebuildRows) rowTexts[rowCount] = g_controller.FormatSummaryOf(cv);
         // A cancel kept next to a foul on another play only removes its card and marks the call as cancelled
         const char* tag = (cv.action == VarAction::OverturnCancel) ? Tr("ANULAÇÃO") : Tr("CARTÃO");
         rows[rowCount] = PoolRow{ false, cv.sequence, ce.order, col, tag, rowTexts[rowCount].c_str() };
@@ -2008,6 +2025,14 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& poo
         const size_t poolCount = pool.Count();
         if (poolCount > 0) {
             RenderDecisionPool(dl, contentW, pool, cfg, state);
+        } else if (const char* notice = g_controller.PoolNoticeMessage()) {
+            // With an empty pool its card is not drawn: show the notice on its own (e.g. a refused confirm)
+            const ImVec2 np = ImGui::GetCursorScreenPos();
+            const float nh = LineH(Txt::Small) + U(14);
+            dl->AddRectFilled(np, ImVec2(np.x + contentW, np.y + nh), IM_COL32(48, 38, 12, 235), U(kRadCtl));
+            dl->AddRectFilled(ImVec2(np.x, np.y + U(5)), ImVec2(np.x + U(3), np.y + nh - U(5)), C::Yellow, U(2));
+            TextFit(dl, Txt::Small, ImVec2(np.x + U(12), np.y + U(7)), contentW - U(20), C::Text, notice);
+            ImGui::Dummy(ImVec2(contentW, nh + U(8)));
         }
 
         // Pitch height: true pitch aspect, capped so the panel always fits the screen alongside the Pool.
@@ -2243,6 +2268,7 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
     if (!actions.empty()) {
         state.CaptureHudRenderSnapshot(s_renderSnap);
     }
+    g_pageAtFrameStart = g_controller.Page();
 
     state.SetInManualReplay(g_controller.IsInManualReplay());
     state.SetPanelFocused(g_controller.IsFocused());

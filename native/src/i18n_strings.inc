@@ -127,6 +127,9 @@ I18N("Decisão substituída no pool de decisões", "Decision replaced in the dec
 I18N("Cartão incorporado à decisão do lance", "Card merged into the play's decision")
 I18N("ANULAÇÃO", "OVERTURN")
 I18N("Escolha o jogador antes de confirmar", "Pick the player before confirming")
+I18N("Decisão não enviada: VAR desligado", "Decision not sent: VAR is off")
+I18N("LANCE NÃO APLICADO  ·  O jogo já tinha seguido, só os cartões continuam no pool", "PLAY NOT APPLIED  ·  The game had moved on, only the cards stay in the pool")
+I18N("DECISÃO AGUARDANDO  ·  Estado da partida indisponível", "DECISION WAITING  ·  Match state unavailable")
 I18N("Voltar", "Back")
 
 // ---- Verdict summaries (stored when armed)

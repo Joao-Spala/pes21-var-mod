@@ -1252,16 +1252,16 @@ void VarState::RemoveCardEntriesForEvent(uint32_t eventId) {
     hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
 }
 
-void VarState::AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPlay, bool* outEvictedCard) {
+bool VarState::AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPlay, bool* outEvictedCard) {
     if (outReplacedPlay) *outReplacedPlay = false;
     if (outEvictedCard) *outEvictedCard = false;
 
     // A "None" decision has nothing to execute and would keep the pool armed forever
-    if (verdict.action == VarAction::None) return;
-    if (verdict.action == VarAction::EditCard && !IsValidSlot(verdict.offenderSlot)) return;
+    if (verdict.action == VarAction::None) return false;
+    if (verdict.action == VarAction::EditCard && !IsValidSlot(verdict.offenderSlot)) return false;
     std::lock_guard<std::mutex> lock(mutex_);
     // Under the lock: SetEnabled(false) stores the flag and then cancels the pool under this same lock
-    if (!enabled_.load(std::memory_order_acquire) || !offlineAllowed_.load(std::memory_order_acquire)) return;
+    if (!enabled_.load(std::memory_order_acquire) || !offlineAllowed_.load(std::memory_order_acquire)) return false;
     VarVerdict stored = verdict;
     stored.armed = true;
     stored.sequence = verdictSeq_++;
@@ -1350,7 +1350,7 @@ void VarState::AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPl
             slotFor->order = cancel.sequence;
             slotFor->verdict = cancel;
             hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
-            return;
+            return true;
         }
         if (outReplacedPlay &&
             verdictPool_.hasPlayDecision &&
@@ -1374,6 +1374,7 @@ void VarState::AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPl
     }
 
     hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+    return true;
 }
 
 void VarState::SetPlayDecisionSummary(const char* summary) {
@@ -1493,6 +1494,24 @@ bool VarState::ConsumeVerdict(VarVerdict& outVerdict) {
         return false;
     }
 
+    hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+    return true;
+}
+
+bool VarState::DropStalePlayDecision(uint32_t currentStoppage) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!verdictPool_.hasPlayDecision) return false;
+    const VarVerdict& pv = verdictPool_.playDecision;
+    if (pv.armStoppage == currentStoppage) return false;
+    if (pv.action == VarAction::OverturnCancel && !pv.targetsLiveSetPlay) return false;
+    if (pv.action == VarAction::OverturnCancel) {
+        // The live set play it cancelled is gone: keep only its card revocation
+        verdictPool_.playDecision.targetsLiveSetPlay = false;
+        return true;
+    }
+    verdictPool_.hasPlayDecision = false;
+    verdictPool_.playOrder = 0;
+    verdictPool_.playDecision = VarVerdict{};
     hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
     return true;
 }

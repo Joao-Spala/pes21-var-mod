@@ -277,6 +277,12 @@ struct VarVerdict {
     bool     targetsLiveSetPlay = false; // overturn of the foul the match is stopped for (restart allowed)
     bool     fromLiveFoul       = false; // any decision made on the foul the match is stopped for
     int8_t   liveSetPlayKind    = -1;    // SetPlayInfo kind of that stoppage when armed (identifies it later)
+    // Stoppage counter when armed (LiveTelemetry::stoppageCount) and the replay moment of the play: a play
+    // decision belongs to the stoppage it was made in; after the game moved on (restart, goal, half-time)
+    // it is never applied to a later stoppage.
+    uint32_t armStoppage        = 0;
+    int32_t  playPhase          = -1;
+    float    playTime60Hz       = 0.0f;
     // Real card counts of the offender after execution (read back from the game), -1 = unknown
     int8_t   ledgerYellows      = -1;
     int8_t   ledgerReds         = -1;
@@ -491,6 +497,7 @@ struct LiveTelemetry {
     float    replayTimelineNorm     = 0.0f;
 
     int32_t activeSetPlayKind   = 0;
+    uint32_t stoppageCount      = 0; // ball in play <-> out of play switches in this match (sim thread)
     int32_t activeBenefitedTeam = 0;
     uint8_t activeFoulValid     = 0;
     int32_t activeFoulKind      = 0;
@@ -650,7 +657,8 @@ public:
     void RemoveCardFromPool(int32_t slot);          // every card entry targeting this player
     void RemoveCardPoolEntry(uint32_t sequence);    // one entry, by its unique sequence
     // Same as AddToVerdictPool, also reports when a full pool evicted its oldest card edit
-    void AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPlay, bool* outEvictedCard);
+    // Returns false when the decision was refused (VAR off, offline mode blocked, nothing to execute)
+    bool AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPlay, bool* outEvictedCard);
     void CancelVerdict();
     VarVerdict PeekVerdict() const;
     VerdictPool PeekVerdictPool() const;
@@ -662,6 +670,9 @@ public:
     // Puts back a consumed pool that wrote nothing, only into the same match and only if the user has not
     // armed anything since (a newer pool always wins). Returns true when restored.
     bool RequeueVerdictPool(const VerdictPool& pool, uint32_t matchGeneration);
+    // Removes a pending play decision armed in an earlier stoppage (cards of the pool stay). Returns true
+    // when one was removed. Overturns of an already taken call are kept (they only revoke a card).
+    bool DropStalePlayDecision(uint32_t currentStoppage);
     void UpdateEventAfterVerdict(const VarVerdict& applied);
     void IncrementInterventions();
     void SetPostApplyBanner(const char* text, uint64_t durationMs = 4500, BannerStyle style = BannerStyle::Applied);

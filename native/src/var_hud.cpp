@@ -783,6 +783,10 @@ void VarHudController::SyncDirectPresetFromPlayer(int32_t slot) {
 }
 
 void VarHudController::SetDraftCustomSpot(const Vec3& worldPos) {
+    if (page_ == HudPage::Configure &&
+        std::find(configFields_.begin(), configFields_.end(), ConfigField::Spot) == configFields_.end()) {
+        return; // cancel / card decisions have no spot: a click on the radar must not change the restart
+    }
     const Vec3 clamped = PitchGeometry::ClampToPitch(tel_.pitchDims, worldPos, 0.5f);
     draftSpotPos_ = clamped;
     draftSpotPreset_ = 3;
@@ -1317,7 +1321,8 @@ void VarHudController::SelectMainOption(int index, VarState& state) {
         detectedSpotPos_ = liveFoulEvent_.pos;
         restoreMarkerAfterLive_ = true;
     }
-    const bool targetsLive = (opt.action == VarAction::OverturnCancel) && (opt.useLiveFoul || IsActiveEventTheLiveFoul());
+    const bool targetsLive = (opt.action == VarAction::OverturnCancel) &&
+                             ((opt.useLiveFoul && hasLiveFoul_) || IsActiveEventTheLiveFoul());
     PreFillDraft(opt.action, opt.presetCard, opt.invertRoles);
     if (!opt.invertRoles && draftSourceEventId_ != 0 &&
         (opt.action == VarAction::ConvertToPenalty || opt.action == VarAction::ConvertToFreeKick ||
@@ -1364,6 +1369,9 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     if (needsOffender && !IsValidSlot(draftOffenderSlot_)) {
         poolNoticeMsg_ = "Escolha o jogador antes de confirmar";
         poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
+        for (size_t i = 0; i < configFields_.size(); ++i) {
+            if (configFields_[i] == ConfigField::Offender) { selectedIndex_ = static_cast<int>(i); break; }
+        }
         return;
     }
     VarVerdict v{};
@@ -1399,6 +1407,9 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     v.targetsLiveSetPlay = (draftAction_ == VarAction::OverturnCancel) && draftTargetsLive_;
     v.fromLiveFoul = draftFromLiveFoul_ && !draftDirectCardMode_;
     v.liveSetPlayKind = v.targetsLiveSetPlay ? static_cast<int8_t>(tel_.activeSetPlayKind) : static_cast<int8_t>(-1);
+    v.armStoppage = tel_.stoppageCount;
+    v.playPhase = tel_.replayCursorPhase;
+    v.playTime60Hz = tel_.replayCursorTime;
     // A slot of the source event means the player who held it then. A slot the user picked means whoever
     // holds it now (the squad lists show the current players).
     auto currentRoster = [&](int32_t slot) -> int8_t {
@@ -1430,10 +1441,19 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     bool replacedPlay = false;
     const VerdictPool before = state.PeekVerdictPool();
     // Re-confirming the decision of the same play updates it (the button says "Atualizar decisão")
-    const bool samePlayAgain = before.hasPlayDecision && v.action != VarAction::EditCard && v.sourceEventId != 0 &&
-                               before.playDecision.sourceEventId == v.sourceEventId;
+    const bool samePlayAgain = before.hasPlayDecision && v.action != VarAction::EditCard &&
+        ((v.sourceEventId != 0 && before.playDecision.sourceEventId == v.sourceEventId) ||
+         (v.sourceEventId == 0 && before.playDecision.sourceEventId == 0 &&
+          before.playDecision.armStoppage == v.armStoppage &&
+          before.playDecision.playPhase == v.playPhase &&
+          std::fabs(before.playDecision.playTime60Hz - v.playTime60Hz) <= 180.0f));
     bool evictedCard = false;
-    state.AddToVerdictPoolEx(v, &replacedPlay, &evictedCard);
+    if (!state.AddToVerdictPoolEx(v, &replacedPlay, &evictedCard)) {
+        poolNoticeMsg_ = "Decisão não enviada: VAR desligado";
+        poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
+        toastMsg_ = nullptr;
+        return;
+    }
     if (samePlayAgain) replacedPlay = false;
     const VerdictPool after = state.PeekVerdictPool();
     const bool droppedEventCard = (v.action != VarAction::EditCard) && (after.CardCount() < before.CardCount());
@@ -1615,12 +1635,11 @@ void VarHudController::HandleAction(NavAction action, VarState& state) {
         state.CancelVerdict();
         return;
     }
-    if (action == NavAction::PrevIncident) {
-        StepReplayMarker(-1, state);
-        return;
-    }
-    if (action == NavAction::NextIncident) {
-        StepReplayMarker(+1, state);
+    if (action == NavAction::PrevIncident || action == NavAction::NextIncident) {
+        // With a decision open the draft belongs to the current play: switching plays would confirm a
+        // decision about one play while showing another
+        if (page_ == HudPage::Configure) return;
+        StepReplayMarker(action == NavAction::PrevIncident ? -1 : +1, state);
         return;
     }
     if (action == NavAction::TogglePlayPause) {

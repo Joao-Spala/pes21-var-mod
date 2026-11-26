@@ -1,5 +1,23 @@
 # Changelog
 
+## v4.4.4
+
+Nova verificação tripla: simulação passo a passo de oito combinações de decisões, auditoria da máquina de estados do painel, revisão das mudanças da v4.4.3 contra o executável (o buffer duplo do TeamInfo foi confirmado em todos os pontos) e uma rodada de convergência.
+
+- **Decisão nunca aplicada fora de hora**: uma falta ou reinício decidido numa parada só vale para aquela parada. Se o jogo seguir (cobrança, gol, intervalo) antes de a decisão rodar, ela é descartada com aviso e só os cartões do pacote continuam. Antes, uma decisão adiada podia virar uma falta no segundo tempo, com o local espelhado, ou trocar a saída de bola depois de um gol.
+- **Saída de bola nunca é trocada** por uma decisão do VAR.
+- **Segundo amarelo e vermelho direto**: um jogador com vermelho direto ainda pode receber o amarelo da falta, sem terceiro amarelo nem segundo vermelho. O histórico mostra o cartão realmente dado, e o segundo amarelo usa o aviso vermelho.
+- **Painel**:
+  - confirmar sem jogador mostra o aviso na própria tela de decisão e leva ao campo Jogador;
+  - clicar no campinho não muda mais o reinício de uma anulação;
+  - `[` e `]` não trocam o lance com uma decisão aberta;
+  - o mouse não troca mais a seleção da página recém-aberta;
+  - redecidir o mesmo lance aparece como "Atualizar" e não como "Substituir";
+  - uma decisão recusada avisa em vez de dizer que foi enviada;
+  - as teclas longas cabem na página de controles;
+  - os textos do pool não são mais refeitos a cada frame.
+- **Robustez**: a validação do buffer do time acontece antes de consumir o pacote, que continua armado até poder ser aplicado. O reenfileiramento tem limite.
+
 ## v4.4.3
 
 Verificação tripla em rodadas sucessivas: quatro auditorias por novos ângulos (fluxo de decisão de ponta a ponta, contrato com a memória do jogo conferido no binário, concorrência e ciclo de vida, interface e idiomas), depois reauditorias independentes e revisões do diff até não sobrar defeito confirmado.
