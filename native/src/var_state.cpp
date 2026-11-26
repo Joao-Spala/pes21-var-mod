@@ -609,11 +609,10 @@ void VarState::PushDetectedIncident(const DetectedIncident& inc) {
         const bool sameHalf = IsPhaseCompatible(prev.matchPhase, inc.matchPhase);
         const float dt = std::fabs(inc.time60Hz - prev.time60Hz);
         if (sameHalf && dt <= 72.0f) {
+            // Same play only when it is the same pair of players: a different duel 3 m away is another incident
             const bool samePair =
                 (prev.offenderSlot == inc.offenderSlot && prev.victimSlot == inc.victimSlot) ||
-                (prev.offenderSlot == inc.victimSlot && prev.victimSlot == inc.offenderSlot) ||
-                (prev.offenderSlot == inc.offenderSlot) ||
-                (DistSq2D(prev.pos, inc.pos) <= 20.0f);
+                (prev.offenderSlot == inc.victimSlot && prev.victimSlot == inc.offenderSlot);
             if (samePair) {
                 const bool upgrade = (inc.priority > prev.priority) ||
                                      (inc.priority == prev.priority && inc.contactDistM < prev.contactDistM);
@@ -626,6 +625,7 @@ void VarState::PushDetectedIncident(const DetectedIncident& inc) {
                     prev.pos          = inc.pos;
                     prev.contactDistM = inc.contactDistM;
                     prev.insideBox    = prev.insideBox || inc.insideBox;
+                    prev.nearFoul     = prev.nearFoul || inc.nearFoul;
                     // Keep first high-severity impact timestamp unless upgrading from a weak contact
                     if (oldPriority < 55 || inc.priority >= oldPriority + 8) {
                         prev.time60Hz   = inc.time60Hz;
@@ -633,8 +633,9 @@ void VarState::PushDetectedIncident(const DetectedIncident& inc) {
                         prev.matchPhase = inc.matchPhase;
                     }
                     ++dataRevision_;
-                } else if (!prev.insideBox && inc.insideBox) {
-                    prev.insideBox = true; // marker label/colour changes (box incident) -> invalidate HUD cache
+                } else if ((!prev.insideBox && inc.insideBox) || (!prev.nearFoul && inc.nearFoul)) {
+                    prev.insideBox = prev.insideBox || inc.insideBox; // marker label/colour changes -> invalidate HUD cache
+                    prev.nearFoul  = prev.nearFoul || inc.nearFoul;
                     ++dataRevision_;
                 }
                 return;
@@ -879,6 +880,7 @@ void VarState::FormatIncidentLabel(IncidentKind kind, bool insideBox, char* outB
         case IncidentKind::StandTackle:  std::snprintf(outBuf, outSize, insideBox ? "DIVIDIDA NA ÁREA" : "DIVIDIDA"); break;
         case IncidentKind::BodyCharge:   std::snprintf(outBuf, outSize, insideBox ? "TRANCO NA ÁREA" : "TRANCO"); break;
         case IncidentKind::CloseContact: std::snprintf(outBuf, outSize, insideBox ? "DISPUTA NA ÁREA" : "DISPUTA DE BOLA"); break;
+        case IncidentKind::Dive:         std::snprintf(outBuf, outSize, insideBox ? "SIMULAÇÃO NA ÁREA?" : "SIMULAÇÃO?"); break;
         case IncidentKind::None:
         default:                         std::snprintf(outBuf, outSize, "LANCE"); break;
     }
@@ -957,7 +959,10 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         // If near an official event (<= 1.5s), enrich missing victimSlot on the official marker instead of duplicating
         bool mergedIntoOfficial = false;
         for (auto& om : markers) {
-            if (std::fabs(om.time60Hz - inc.time60Hz) <= 90.0f) {
+            const bool samePlayers = (!IsValidSlot(om.offenderSlot) && !IsValidSlot(om.victimSlot)) ||
+                                     om.offenderSlot == inc.offenderSlot || om.victimSlot == inc.victimSlot ||
+                                     om.offenderSlot == inc.victimSlot || om.victimSlot == inc.offenderSlot;
+            if (std::fabs(om.time60Hz - inc.time60Hz) <= 90.0f && samePlayers) {
                 if (!IsValidSlot(om.victimSlot) && IsValidSlot(inc.victimSlot) && inc.victimSlot != om.offenderSlot) {
                     om.victimSlot = inc.victimSlot;
                 }
@@ -985,9 +990,13 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         m.pos             = inc.pos;
         m.contactDistM    = inc.contactDistM;
         m.signedBoxDistM  = boxDist;
+        m.nearFoul        = inc.nearFoul;
         FormatIncidentLabel(m.kind, boxDist < 0.0f, m.label, sizeof(m.label));
 
-        if (!detected.empty() && std::fabs(m.time60Hz - detected.back().time60Hz) <= 72.0f) {
+        const bool samePairAsLast = !detected.empty() &&
+            ((detected.back().offenderSlot == m.offenderSlot && detected.back().victimSlot == m.victimSlot) ||
+             (detected.back().offenderSlot == m.victimSlot && detected.back().victimSlot == m.offenderSlot));
+        if (samePairAsLast && std::fabs(m.time60Hz - detected.back().time60Hz) <= 72.0f) {
             if (m.priority > detected.back().priority ||
                 (m.priority == detected.back().priority && m.contactDistM < detected.back().contactDistM)) {
                 detected.back() = m;
@@ -1591,20 +1600,26 @@ void VarState::ComputeClosestContact(PlaySnapshot& snap) {
 
 bool VarState::DetectPhysicalIncident(const PlaySnapshot& snap, const PitchDims& dims,
                                       const float teamAttackDir[2], DetectedIncident& outInc) {
+    // Mirrors the engine's own contact observer (ObserverFallDownOrStagger 0x140A1AF50): an incident is a player whose
+    // action is a contact reaction (16 stagger / 17 fall, or flag bit13), and the opponent the engine recorded as the
+    // cause at PlayerAction + 0x3D. The causer's action names the incident. A dive (15) or the simulation flag is a
+    // simulation, never a foul. A tackle with nobody going down is only a challenge (low priority, neutral colour).
     outInc = DetectedIncident{};
     int32_t bestPriority = 0;
 
-    auto considerCandidate = [&](IncidentKind kind, int32_t prio, int32_t offSlot, int32_t vicSlot, float distSq) {
-        if (!IsValidSlot(offSlot) || !IsValidSlot(vicSlot) || SlotToTeam(offSlot) == SlotToTeam(vicSlot)) return;
+    auto opponents = [](int32_t a, int32_t b) {
+        return IsValidSlot(a) && IsValidSlot(b) && SlotToTeam(a) != SlotToTeam(b);
+    };
+    auto considerCandidate = [&](IncidentKind kind, int32_t prio, int32_t offSlot, int32_t vicSlot, bool nearFoul) {
+        if (!opponents(offSlot, vicSlot)) return;
         const Vec3 spot{
             0.35f * snap.playerPos[offSlot].x + 0.65f * snap.playerPos[vicSlot].x,
             0.0f,
             0.35f * snap.playerPos[offSlot].z + 0.65f * snap.playerPos[vicSlot].z
         };
-        const int32_t offTeam = SlotToTeam(offSlot);
-        const bool inBox = PitchGeometry::IsInsideDefendingBox(dims, spot, teamAttackDir[offTeam]);
+        const bool inBox = PitchGeometry::IsInsideDefendingBox(dims, spot, teamAttackDir[SlotToTeam(offSlot)]);
         const int32_t adjPrio = prio + (inBox ? 6 : 0);
-        const float distM = std::sqrt(std::max(0.0f, distSq));
+        const float distM = std::sqrt(std::max(0.0f, DistSq2D(snap.playerPos[offSlot], snap.playerPos[vicSlot])));
         if (adjPrio > bestPriority || (adjPrio == bestPriority && distM < outInc.contactDistM)) {
             bestPriority        = adjPrio;
             outInc.matchPhase   = snap.matchPhase;
@@ -1617,92 +1632,75 @@ bool VarState::DetectPhysicalIncident(const PlaySnapshot& snap, const PitchDims&
             outInc.pos          = spot;
             outInc.contactDistM = distM;
             outInc.insideBox    = inBox;
+            outInc.nearFoul     = nearFoul;
         }
     };
-
-    auto findBestOpponent = [&](int32_t actorSlot, float maxDistSq, bool preferAggressor) -> std::pair<int32_t, float> {
-        const int32_t actorTeam = SlotToTeam(actorSlot);
-        const int32_t oppStart = (actorTeam == 0) ? 11 : 0;
-        const int32_t oppEnd   = oppStart + 11;
-        int32_t bestSlot = -1;
-        float bestScore = 999999.0f;
-        float bestRealDistSq = 999999.0f;
-
-        for (int s = oppStart; s < oppEnd; ++s) {
+    auto nearestOpponent = [&](int32_t actor, float maxDist, bool requireChallenger) -> int32_t {
+        const int32_t oppStart = (SlotToTeam(actor) == 0) ? 11 : 0;
+        int32_t best = -1;
+        float bestD2 = maxDist * maxDist;
+        for (int s = oppStart; s < oppStart + 11; ++s) {
             if (!snap.playerOnPitch[s]) continue;
-            const float d2 = DistSq2D(snap.playerPos[actorSlot], snap.playerPos[s]);
-            if (d2 > maxDistSq) continue;
-
-            float score = d2;
-            const uint8_t aid = snap.playerActionId[s];
-            if (preferAggressor) {
-                if (aid == PlayerActionId::SlideTackle) score -= 2.2f;
-                else if (aid == PlayerActionId::StandTackleA || aid == PlayerActionId::StandTackleB ||
-                         aid == PlayerActionId::BodyChargeA  || aid == PlayerActionId::BodyChargeB) score -= 1.2f;
-                if (snap.playerActionHit[s] != 0) score -= 1.0f;
-            } else {
-                if (aid == PlayerActionId::VictimFall) score -= 2.4f;
-                if (s == snap.ballOwnerSlot || s == snap.recentBallOwnerSlot) score -= 1.5f;
+            if (requireChallenger) {
+                const int8_t a = snap.playerActionId[s];
+                if (!PlayerActionId::IsSlide(a) && a != PlayerActionId::Tackle && a != PlayerActionId::Jostle) continue;
             }
-            if (score < bestScore) {
-                bestScore = score;
-                bestSlot = s;
-                bestRealDistSq = d2;
-            }
+            const float d2 = DistSq2D(snap.playerPos[actor], snap.playerPos[s]);
+            if (d2 <= bestD2) { bestD2 = d2; best = s; }
         }
-        return { bestSlot, bestRealDistSq };
+        return best;
+    };
+    auto kindFromCauser = [&](int32_t causer, IncidentKind& kind, int32_t& prio) {
+        const int8_t a = snap.playerActionId[causer];
+        if (PlayerActionId::IsSlide(a))        { kind = IncidentKind::SlideTackle; prio = 82; }
+        else if (a == PlayerActionId::Tackle)  { kind = IncidentKind::StandTackle; prio = 74; }
+        else if (a == PlayerActionId::Jostle)  { kind = IncidentKind::BodyCharge;  prio = 66; }
+        else                                   { kind = IncidentKind::VictimFall;  prio = 64; }
     };
 
-    for (int s = 0; s < 22; ++s) {
-        if (!snap.playerOnPitch[s]) continue;
-        const uint8_t aid = snap.playerActionId[s];
-        const bool hasHit = (snap.playerActionHit[s] != 0);
+    for (int v = 0; v < 22; ++v) {
+        if (!snap.playerOnPitch[v]) continue;
+        const int8_t aid = snap.playerActionId[v];
+        const uint32_t flags = snap.playerActionFlags[v];
 
-        if (aid == PlayerActionId::SlideTackle) {
-            auto [vic, d2] = findBestOpponent(s, 3.2f * 3.2f, false);
-            if (IsValidSlot(vic)) {
-                const bool vicFell = (snap.playerActionId[vic] == PlayerActionId::VictimFall);
-                if (d2 <= 2.75f * 2.75f || vicFell || hasHit) {
-                    const int32_t prio = (vicFell || hasHit) ? 80 : 74;
-                    considerCandidate(IncidentKind::SlideTackle, prio, s, vic, d2);
-                }
+        // Simulation: the player went down by himself
+        if (aid == PlayerActionId::Dive || (flags & PlayerActionId::FlagSimulation) != 0) {
+            int32_t opp = snap.playerCauser[v];
+            if (!opponents(v, opp)) opp = nearestOpponent(v, 2.5f, false);
+            if (opponents(v, opp)) considerCandidate(IncidentKind::Dive, 48, opp, v, false);
+            continue;
+        }
+
+        // Contact reaction: the engine tells who caused it
+        if (PlayerActionId::IsContactReaction(aid, flags)) {
+            int32_t causer = snap.playerCauser[v];
+            int32_t penalty = 0;
+            if (!opponents(v, causer) || !snap.playerOnPitch[causer]) {
+                // No recorded causer: only an opponent actively challenging right next to him counts
+                causer = nearestOpponent(v, 2.2f, true);
+                penalty = 8;
             }
-        } else if (aid == PlayerActionId::VictimFall) {
-            auto [off, d2] = findBestOpponent(s, 3.0f * 3.0f, true);
-            if (IsValidSlot(off)) {
-                const uint8_t oAid = snap.playerActionId[off];
-                const bool aggAct = (oAid == PlayerActionId::SlideTackle ||
-                                     oAid == PlayerActionId::StandTackleA || oAid == PlayerActionId::StandTackleB ||
-                                     oAid == PlayerActionId::BodyChargeA  || oAid == PlayerActionId::BodyChargeB ||
-                                     snap.playerActionHit[off] != 0);
-                if (d2 <= 2.65f * 2.65f || aggAct) {
-                    const IncidentKind k = (oAid == PlayerActionId::SlideTackle)
-                        ? IncidentKind::SlideTackle : IncidentKind::VictimFall;
-                    const int32_t prio = aggAct ? 78 : 70;
-                    considerCandidate(k, prio, off, s, d2);
-                }
+            if (opponents(v, causer)) {
+                IncidentKind kind{};
+                int32_t prio = 0;
+                kindFromCauser(causer, kind, prio);
+                considerCandidate(kind, prio - penalty, causer, v, true);
             }
-        } else if (aid == PlayerActionId::StandTackleA || aid == PlayerActionId::StandTackleB) {
-            const float lim = hasHit ? (2.45f * 2.45f) : (2.05f * 2.05f);
-            auto [vic, d2] = findBestOpponent(s, lim, false);
-            if (IsValidSlot(vic)) {
-                const int32_t prio = hasHit ? 65 : 57;
-                considerCandidate(IncidentKind::StandTackle, prio, s, vic, d2);
-            }
-        } else if (aid == PlayerActionId::BodyChargeA || aid == PlayerActionId::BodyChargeB || hasHit) {
-            const float lim = hasHit ? (2.15f * 2.15f) : (1.85f * 1.85f);
-            auto [opp, d2] = findBestOpponent(s, lim, false);
-            if (IsValidSlot(opp)) {
-                int32_t off = s;
-                int32_t vic = opp;
-                // If the actor was actually the ball carrier who took a hit, swap so carrier is victim
-                if ((s == snap.ballOwnerSlot || s == snap.recentBallOwnerSlot) &&
-                    opp != snap.ballOwnerSlot && opp != snap.recentBallOwnerSlot) {
-                    off = opp;
-                    vic = s;
-                }
-                const int32_t prio = hasHit ? 60 : 52;
-                considerCandidate(IncidentKind::BodyCharge, prio, off, vic, d2);
+        }
+    }
+
+    // Challenges with nobody going down: a slide or standing tackle on the ball carrier (never a goalkeeper action,
+    // never a block). Low priority: shown as a neutral marker so the user can still jump to it.
+    if (bestPriority == 0) {
+        const int32_t carrier = IsValidSlot(snap.ballOwnerSlot) ? snap.ballOwnerSlot : snap.recentBallOwnerSlot;
+        if (IsValidSlot(carrier) && snap.playerOnPitch[carrier]) {
+            for (int s = 0; s < 22; ++s) {
+                if (!snap.playerOnPitch[s] || !opponents(s, carrier)) continue;
+                const int8_t a = snap.playerActionId[s];
+                if (!PlayerActionId::IsSlide(a) && a != PlayerActionId::Tackle) continue;
+                if (DistSq2D(snap.playerPos[s], snap.playerPos[carrier]) > 2.5f * 2.5f) continue;
+                considerCandidate(PlayerActionId::IsSlide(a) ? IncidentKind::SlideTackle : IncidentKind::StandTackle,
+                                  PlayerActionId::IsSlide(a) ? 40 : 34, s, carrier, false);
             }
         }
     }

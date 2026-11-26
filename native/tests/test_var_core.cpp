@@ -213,6 +213,13 @@ void TestRealPes2021BinaryAobs() {
                     "FoulSnapshotPool unchecked call site must call FoulSnapshotPool::Find");
     }
 
+    // TeamTactics + 0x254 is a SIGNED BYTE side sign (movsbl), not a float: 0F BE 98 54 02 00 00 at 0x140438475
+    {
+        const auto* mp = reinterpret_cast<const uint8_t*>(bufBase + static_cast<uintptr_t>(0x140438475ULL - textVaBase));
+        EXPECT_TRUE(mp[0] == 0x0F && mp[1] == 0xBE && *reinterpret_cast<const uint32_t*>(mp + 3) == Offsets::TeamTactics_SideSign,
+                    "Engine must read TeamTactics side sign as a signed byte (movsbl +0x254)");
+    }
+
     // Vanishing spray reset: the three calls must land on the accessor, the reset and the commit
     {
         auto callTarget = [&](uintptr_t bufSite, uint64_t siteVa) -> uint64_t {
@@ -1079,7 +1086,7 @@ void TestV4EngineAndDataExtraction() {
     p.FormatBroadcastName(bname, sizeof(bname));
     EXPECT_EQ(std::strcmp(bname, "GABIGOL"), 0, "FormatBroadcastName without shirt number wrong");
 
-    // 5. Physical incident detection (Slide Tackle 13, Victim Fall 15) + 1.2s clustering + official merge
+    // 5. Physical incident detection (victim contact reaction + engine causer) + clustering + official merge
     auto& st = VarState::Instance();
     st.ResetMatch();
     PitchDims dims{};
@@ -1098,8 +1105,12 @@ void TestV4EngineAndDataExtraction() {
     snap.playerPos[14] = Vec3{ 42.3f, 0.0f, 3.2f };  // Away defender sliding in!
     snap.ballOwnerSlot = 9;
     snap.recentBallOwnerSlot = 9;
-    snap.playerActionId[14] = PlayerActionId::SlideTackle;
-    snap.playerActionHit[14] = 1;
+    // Engine model: the victim plays a contact reaction (17 fall) and PlayerAction + 0x3D names the causer (14),
+    // whose own action is a slide tackle (11)
+    std::memset(snap.playerCauser, -1, sizeof(snap.playerCauser));
+    snap.playerActionId[14] = PlayerActionId::Sliding;
+    snap.playerActionId[9]  = PlayerActionId::FallDown;
+    snap.playerCauser[9]    = 14;
     VarState::ComputeClosestContact(snap);
 
     DetectedIncident inc{};
@@ -2240,6 +2251,48 @@ void TestCompositeVerdictPoolAndRcuOffsets() {
         EXPECT_EQ(p9.CardCount(), static_cast<size_t>(1), "Only the event edit is removed");
         EXPECT_TRUE(p9.FindCardForSlot(9) && p9.FindCardForSlot(9)->verdict.directCardEdit, "Direct edit must survive");
         st.CancelVerdict();
+    }
+
+    // 10. Incident classification follows the engine's own signals
+    {
+        PitchDims d{};
+        const float sides[2] = { -1.0f, +1.0f };
+        PlaySnapshot s{};
+        s.time60Hz = 100.0f;
+        std::memset(s.playerCauser, -1, sizeof(s.playerCauser));
+        for (int i = 0; i < 22; ++i) {
+            s.playerOnPitch[i] = 1;
+            s.playerPos[i] = Vec3{ -30.0f + 2.5f * static_cast<float>(i), 0.0f, 20.0f };
+        }
+        s.playerPos[3]  = Vec3{ 0.0f, 0.0f, 0.0f };
+        s.playerPos[15] = Vec3{ 0.8f, 0.0f, 0.3f };
+        s.ballOwnerSlot = 3;
+        s.recentBallOwnerSlot = 3;
+
+        // a) standing tackle (13) and nobody goes down: a challenge, never a near foul, never "carrinho"
+        s.playerActionId[15] = PlayerActionId::Tackle;
+        DetectedIncident r{};
+        EXPECT_TRUE(VarState::DetectPhysicalIncident(s, d, sides, r), "Standing tackle on the carrier is a challenge");
+        EXPECT_EQ(r.kind, IncidentKind::StandTackle, "Action 13 is a standing tackle, not a slide");
+        EXPECT_TRUE(!r.nearFoul, "No contact reaction: not a near foul");
+
+        // b) the carrier falls (17) and the engine names the tackler as causer: near foul
+        s.playerActionId[3] = PlayerActionId::FallDown;
+        s.playerCauser[3] = 15;
+        EXPECT_TRUE(VarState::DetectPhysicalIncident(s, d, sides, r), "Contact with fall must be detected");
+        EXPECT_TRUE(r.nearFoul && r.offenderSlot == 15 && r.victimSlot == 3, "Causer from PlayerAction + 0x3D is the offender");
+
+        // c) dive (15): simulation, the carrier is the "victim" of nothing
+        s.playerActionId[3] = PlayerActionId::Dive;
+        s.playerActionId[15] = 0;
+        EXPECT_TRUE(VarState::DetectPhysicalIncident(s, d, sides, r), "Dive must be flagged");
+        EXPECT_EQ(r.kind, IncidentKind::Dive, "Action 15 is a simulation");
+        EXPECT_TRUE(!r.nearFoul, "A dive is never a near foul");
+
+        // d) goalkeeper action next to an attacker: no incident
+        s.playerActionId[3] = 0;
+        s.playerActionId[15] = 56; // keeper catch
+        EXPECT_TRUE(!VarState::DetectPhysicalIncident(s, d, sides, r), "Goalkeeper actions never create incidents");
     }
 
     // 8. UTF-8 safe truncation never leaves half a multi-byte character

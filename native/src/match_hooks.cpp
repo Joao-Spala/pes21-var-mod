@@ -214,15 +214,75 @@ PitchDims ReadPitchDims(uint8_t* gmatch) {
     return PitchDims::FromRaw(raw);
 }
 
-float ReadTeamAttackDir(uint8_t* gmatch, int32_t teamIdx) {
-    if (!IsValidPtr(gmatch) || (teamIdx != 0 && teamIdx != 1)) {
-        return (teamIdx == 0) ? -1.0f : 1.0f;
-    }
+// ---------------------------------------------------------------------------------------------------------------
+// Own-goal side of each team (+1: defends the goal at +x). Feeds every spot computation (penalty spot, goal kick,
+// corner, inside / outside the box) and the 2D pitch.
+//  - The engine keeps a signed side byte at TeamTactics + 0x254 that flips at half time.
+//  - Its sign convention is calibrated at every kick-off, when each team stands entirely in its own half:
+//    convention = sign(team centroid x) * engine byte. ownSide = convention * engine byte from then on.
+//  - Before the first calibration (mod loaded mid-match) the goalkeeper (first slot of the team) decides, when he is
+//    clearly in one half.
+// ---------------------------------------------------------------------------------------------------------------
+int8_t g_sideConvention = 0; // 0 = not calibrated yet, else +1 / -1
+
+int8_t ReadEngineSideByte(uint8_t* gmatch, int32_t teamIdx) {
+    if (!IsValidPtr(gmatch) || (teamIdx != 0 && teamIdx != 1)) return 0;
     const uint8_t* tactics = *reinterpret_cast<const uint8_t* const*>(
         gmatch + Offsets::GMATCH_TeamTacticsBase + static_cast<size_t>(teamIdx) * Offsets::GMATCH_EntryStride);
-    if (!IsValidPtr(tactics)) return (teamIdx == 0) ? -1.0f : 1.0f;
-    const float dir = *reinterpret_cast<const float*>(tactics + Offsets::TeamTactics_AttackDir);
-    return (dir >= 0.0f) ? 1.0f : -1.0f;
+    if (!IsValidPtr(tactics) || !IsMemoryRangeReadable(tactics + Offsets::TeamTactics_SideSign, 1)) return 0;
+    return *reinterpret_cast<const int8_t*>(tactics + Offsets::TeamTactics_SideSign);
+}
+
+bool ReadPlayerPos(uint8_t* gmatch, int32_t slot, Vec3& out) {
+    if (!IsValidPtr(gmatch) || !IsValidSlot(slot)) return false;
+    const uint8_t* spatial = *reinterpret_cast<const uint8_t* const*>(
+        gmatch + Offsets::GMATCH_PlayerSpatialBase + static_cast<size_t>(slot) * Offsets::GMATCH_EntryStride);
+    if (!IsValidPtr(spatial) || !IsMemoryRangeReadable(spatial + Offsets::PlayerSpatial_PosVec3, sizeof(Vec3))) return false;
+    std::memcpy(&out, spatial + Offsets::PlayerSpatial_PosVec3, sizeof(Vec3));
+    return true;
+}
+
+float ReadTeamAttackDir(uint8_t* gmatch, int32_t teamIdx) {
+    const float fallback = (teamIdx == 0) ? -1.0f : 1.0f;
+    if (teamIdx != 0 && teamIdx != 1) return fallback;
+    const int8_t b = ReadEngineSideByte(gmatch, teamIdx);
+    if (g_sideConvention != 0 && b != 0) {
+        return (g_sideConvention * b > 0) ? 1.0f : -1.0f;
+    }
+    Vec3 gk{};
+    if (ReadPlayerPos(gmatch, teamIdx * 11, gk) && std::fabs(gk.x) > 20.0f) {
+        return (gk.x > 0.0f) ? 1.0f : -1.0f;
+    }
+    return fallback;
+}
+
+// Called every MainTick: calibrates the engine byte convention at kick-off (SetPlayReady with a kick-off set play)
+void CalibrateSidesAtKickoff(uint8_t* gmatch, uint8_t* matchInfo, int32_t matchStatus) {
+    if (matchStatus != static_cast<int32_t>(MatchStatus::SetPlayReady)) return;
+    const int32_t kind = *reinterpret_cast<const int32_t*>(matchInfo + Offsets::MatchInfo_SetPlayInfo);
+    if (kind != 1) return; // set play kind 1 = kick-off (category 3 builders)
+    float sumX[2] = { 0.0f, 0.0f };
+    int n[2] = { 0, 0 };
+    for (int s = 0; s < 22; ++s) {
+        if (*reinterpret_cast<const uint8_t*>(matchInfo + Offsets::MatchInfo_PlayerOnPitch + s) == 0) continue;
+        Vec3 p{};
+        if (!ReadPlayerPos(gmatch, s, p)) continue;
+        sumX[SlotToTeam(s)] += p.x;
+        ++n[SlotToTeam(s)];
+    }
+    if (n[0] < 7 || n[1] < 7) return;
+    const float c0 = sumX[0] / n[0], c1 = sumX[1] / n[1];
+    if (std::fabs(c0) < 3.0f || std::fabs(c1) < 3.0f || (c0 > 0.0f) == (c1 > 0.0f)) return; // not lined up yet
+    const int8_t b0 = ReadEngineSideByte(gmatch, 0), b1 = ReadEngineSideByte(gmatch, 1);
+    if (b0 == 0 || b1 == 0) return;
+    const int8_t conv0 = static_cast<int8_t>(((c0 > 0.0f) ? 1 : -1) * (b0 > 0 ? 1 : -1));
+    const int8_t conv1 = static_cast<int8_t>(((c1 > 0.0f) ? 1 : -1) * (b1 > 0 ? 1 : -1));
+    if (conv0 != conv1) return;
+    if (g_sideConvention != conv0) {
+        g_sideConvention = conv0;
+        VAR_LOG_INF("Team sides calibrated at kick-off: convention=%d home own goal x%s away own goal x%s",
+                    conv0, c0 > 0.0f ? "+" : "-", c1 > 0.0f ? "+" : "-");
+    }
 }
 
 uint8_t* GetTeamInfo(uint8_t* gmatch, int32_t teamIdx) {
@@ -722,27 +782,25 @@ void SampleInPlayFrame(uint8_t* gmatch, uint8_t* matchInfo, int32_t matchPhase, 
         g_recentBallOwnerSlot = -1;
     }
 
-    // 2. Quick 60Hz scan of PlayerAction flags (22 pointer derefs, < 0.3 us)
-    uint8_t actionIds[22] = {};
-    uint8_t actionHits[22] = {};
+    // 2. Quick 60Hz scan of PlayerAction (22 pointer derefs, < 0.3 us): engine action id, flags and contact causer
+    int8_t actionIds[22] = {};
+    uint32_t actionFlags[22] = {};
+    int8_t causers[22];
+    std::memset(causers, -1, sizeof(causers));
     bool anyPhysicalAction = false;
     for (int slot = 0; slot < 22; ++slot) {
         if (!*reinterpret_cast<const uint8_t*>(matchInfo + Offsets::MatchInfo_PlayerOnPitch + slot)) continue;
         const uint8_t* act = *reinterpret_cast<const uint8_t* const*>(
             gmatch + Offsets::GMATCH_PlayerActionBase + static_cast<size_t>(slot) * Offsets::GMATCH_EntryStride);
         if (!IsValidPtr(act)) continue;
-        const uint8_t aid = act[Offsets::PlayerAction_ActionId];
+        const int8_t aid = *reinterpret_cast<const int8_t*>(act + Offsets::PlayerAction_ActionId);
         const uint32_t flags = *reinterpret_cast<const uint32_t*>(act + Offsets::PlayerAction_ActionFlags);
-        const uint8_t hit = (flags & PlayerActionId::FlagPhysicalHit) ? 1 : 0;
         actionIds[slot] = aid;
-        actionHits[slot] = hit;
-        if (hit ||
-            aid == PlayerActionId::SlideTackle ||
-            aid == PlayerActionId::VictimFall ||
-            aid == PlayerActionId::StandTackleA ||
-            aid == PlayerActionId::StandTackleB ||
-            aid == PlayerActionId::BodyChargeA ||
-            aid == PlayerActionId::BodyChargeB) {
+        actionFlags[slot] = flags;
+        causers[slot] = *reinterpret_cast<const int8_t*>(act + Offsets::PlayerAction_Causer);
+        if (PlayerActionId::IsSlide(aid) || aid == PlayerActionId::Tackle || aid == PlayerActionId::Jostle ||
+            aid == PlayerActionId::Dive || PlayerActionId::IsContactReaction(aid, flags) ||
+            (flags & PlayerActionId::FlagSimulation) != 0) {
             anyPhysicalAction = true;
         }
     }
@@ -767,8 +825,9 @@ void SampleInPlayFrame(uint8_t* gmatch, uint8_t* matchInfo, int32_t matchPhase, 
 
     for (int slot = 0; slot < 22; ++slot) {
         snap.playerOnPitch[slot]   = *reinterpret_cast<const uint8_t*>(matchInfo + Offsets::MatchInfo_PlayerOnPitch + slot);
-        snap.playerActionId[slot]  = actionIds[slot];
-        snap.playerActionHit[slot] = actionHits[slot];
+        snap.playerActionId[slot]    = actionIds[slot];
+        snap.playerActionFlags[slot] = actionFlags[slot];
+        snap.playerCauser[slot]      = causers[slot];
         uint8_t* spatial = *reinterpret_cast<uint8_t**>(
             gmatch + Offsets::GMATCH_PlayerSpatialBase + static_cast<size_t>(slot) * Offsets::GMATCH_EntryStride);
         if (IsValidPtr(spatial)) {
@@ -1439,7 +1498,9 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
                 req.foulValid = true;
                 break;
             case VarAction::OverturnCancel:
-                if (inSetPlayReady) {
+                // A restart only for the foul the match is stopped for. Overturning an older (already taken) call
+                // only revokes its card: replacing the pending set play with an old spot would be wrong.
+                if (inSetPlayReady && pv->targetsLiveSetPlay) {
                     const auto curSp = *reinterpret_cast<const RawSetPlayInfo*>(matchInfo + Offsets::MatchInfo_SetPlayInfo);
                     const bool wasPenalty = (curSp.setPlayKind == static_cast<int32_t>(SetPlayKind::PenaltyKick)) ||
                                             PitchGeometry::IsInsideDefendingBox(dims, pv->spotPos, offenderAttackDir);
@@ -1471,6 +1532,18 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
         if (!req.foulValid) {
             req.offenderSlot = -1;
             req.victimSlot = -1;
+        }
+        // SilentRestart builders exist only for kinds 1..6 (0x14045333C): any other kind would build no queue
+        if (req.kind == ExecRequestKind::InjectSetPlay &&
+            (static_cast<int32_t>(req.spKind) < 1 || static_cast<int32_t>(req.spKind) > 6)) {
+            VAR_LOG_ERR("VAR request with invalid set play kind %d dropped", static_cast<int32_t>(req.spKind));
+            req.kind = ExecRequestKind::None;
+        }
+        if (pv->action == VarAction::OverturnCancel && req.kind == ExecRequestKind::None) {
+            std::snprintf(g_exec.bannerText, sizeof(g_exec.bannerText), "%s",
+                          (pv->origCard == CardKind::Yellow || pv->origCard == CardKind::Red)
+                              ? "ANULAÇÃO REGISTRADA  ·  A cobrança já tinha sido feita, o cartão foi retirado"
+                              : "ANULAÇÃO REGISTRADA  ·  A cobrança já tinha sido feita");
         }
         g_exec.hasPlayLedger = true;
         g_exec.playVerdict = *pv;
@@ -1594,6 +1667,177 @@ void ExecOnJudgeFinalize(uint8_t* fsm) {
     }
 }
 
+// ============================================================================
+// Replay ring diagnostics (read-only)
+// ============================================================================
+// Evidence for a future "keep the pre-foul play in the manual replay" feature. Nothing here writes game memory.
+// Layout (re_notes/06_replay_ring_buffer.md): replay system *(0x143703558), active buffer pointer +0x6A8, active slot
+// index +0x698; buffer +0x10 u16 write index, +0x12 u16 capacity, +0x14 u32 match tick of the last write, +0x40 frames
+// (stride 0x1FB0, float time at +0, u16 at +0x24C == 0x7FFF marks an invalid frame).
+namespace ReplayDiag {
+constexpr uintptr_t Sys_ActiveSlot   = 0x698;
+constexpr uintptr_t Sys_ActiveBuffer = 0x6A8;
+constexpr uintptr_t Buf_WriteIndex   = 0x10;
+constexpr uintptr_t Buf_Capacity     = 0x12;
+constexpr uintptr_t Buf_LastTick     = 0x14;
+constexpr uintptr_t Buf_Frames       = 0x40;
+constexpr uintptr_t Frame_Valid      = 0x24C;
+
+struct RingInfo {
+    bool     ok = false;
+    uint32_t slot = 0;
+    uint16_t writeIdx = 0;
+    uint16_t cap = 0;
+    uint32_t lastTick = 0;
+    uint32_t validFrames = 0;
+    float    oldestTime = 0.0f;
+    float    newestTime = 0.0f;
+};
+
+uint8_t* ActiveBuffer(uint32_t* outSlot) {
+    if (!g_replaySingletonPtrAddr) return nullptr;
+    const uint8_t* sys = *reinterpret_cast<const uint8_t* const*>(g_replaySingletonPtrAddr);
+    if (!IsValidPtr(sys) || !IsMemoryRangeReadable(sys + Sys_ActiveSlot, 0x18)) return nullptr;
+    if (outSlot) *outSlot = *reinterpret_cast<const uint32_t*>(sys + Sys_ActiveSlot);
+    uint8_t* buf = *reinterpret_cast<uint8_t* const*>(sys + Sys_ActiveBuffer);
+    if (!IsValidPtr(buf) || !IsMemoryRangeReadable(buf, 0x50)) return nullptr;
+    return buf;
+}
+
+RingInfo Read(bool scanFrames) {
+    RingInfo r{};
+    uint8_t* buf = ActiveBuffer(&r.slot);
+    if (!buf) return r;
+    r.writeIdx = *reinterpret_cast<const uint16_t*>(buf + Buf_WriteIndex);
+    r.cap = *reinterpret_cast<const uint16_t*>(buf + Buf_Capacity);
+    r.lastTick = *reinterpret_cast<const uint32_t*>(buf + Buf_LastTick);
+    r.ok = (r.cap > 0 && r.cap <= 8192);
+    if (!r.ok || !scanFrames) return r;
+    const uint8_t* frames = *reinterpret_cast<const uint8_t* const*>(buf + Buf_Frames);
+    if (!IsValidPtr(frames) || !IsMemoryRangeReadable(frames, static_cast<size_t>(r.cap) * Offsets::ReplayRing_FrameStride)) {
+        r.ok = false;
+        return r;
+    }
+    bool first = true;
+    for (uint32_t i = 0; i < r.cap; ++i) {
+        const uint8_t* f = frames + static_cast<size_t>(i) * Offsets::ReplayRing_FrameStride;
+        if (*reinterpret_cast<const uint16_t*>(f + Frame_Valid) == 0x7FFF) continue;
+        const float t = *reinterpret_cast<const float*>(f);
+        ++r.validFrames;
+        if (first || t < r.oldestTime) r.oldestTime = t;
+        if (first || t > r.newestTime) r.newestTime = t;
+        first = false;
+    }
+    return r;
+}
+
+void Log(const char* when, const RingInfo& r) {
+    if (!r.ok) {
+        VAR_LOG_INF("ReplayDiag %s: ring unavailable", when);
+        return;
+    }
+    VAR_LOG_INF("ReplayDiag %s: slot=%u writeIdx=%u cap=%u lastTick=%u valid=%u time=[%.1f .. %.1f] span=%.1f",
+                when, r.slot, r.writeIdx, r.cap, r.lastTick, r.validFrames, r.oldestTime, r.newestTime,
+                r.newestTime - r.oldestTime);
+}
+
+// Sim-thread tracking: write-index advance rate and the ring right before / after each stoppage
+uint16_t g_prevWriteIdx = 0;
+uint64_t g_advanceCount = 0;
+uint64_t g_rateWindowStartTick = 0;
+int      g_rateLogsLeft = 2;
+int32_t  g_prevMatchStatus = -1;
+uint8_t  g_prevClearFlag = 0;
+int      g_stoppageLogsLeft = 6;
+bool     g_loggedManualEntry = false;
+int32_t  g_prevFsmState = -1;
+int      g_autoReplayLogsLeft = 4;
+uint32_t g_lastStoppageTick = 0;
+
+void ResetForMatch() {
+    g_prevWriteIdx = 0;
+    g_advanceCount = 0;
+    g_rateWindowStartTick = 0;
+    g_rateLogsLeft = 2;
+    g_prevMatchStatus = -1;
+    g_prevClearFlag = 0;
+    g_stoppageLogsLeft = 6;
+    g_loggedManualEntry = false;
+    g_prevFsmState = -1;
+    g_autoReplayLogsLeft = 4;
+    g_lastStoppageTick = 0;
+}
+
+// Native automatic foul replay (state 0x1D): which window it plays, relative to the stoppage tick
+void OnFsmState(int32_t fsmState, uint8_t* replayMgr, uint32_t matchTick) {
+    if (fsmState == g_prevFsmState) return;
+    if (fsmState == 0x1D && g_autoReplayLogsLeft > 0 && IsValidPtr(replayMgr) &&
+        IsMemoryRangeReadable(replayMgr, Offsets::ReplayMgr_CursorPhase + 4)) {
+        --g_autoReplayLogsLeft;
+        VAR_LOG_INF("ReplayDiag auto replay 0x1D: window=[%.1f p%d .. %.1f p%d] cursor=%.1f stoppageTick=%u nowTick=%u",
+                    *reinterpret_cast<const float*>(replayMgr + Offsets::ReplayMgr_WindowStartTime),
+                    *reinterpret_cast<const int32_t*>(replayMgr + Offsets::ReplayMgr_WindowStartPhase),
+                    *reinterpret_cast<const float*>(replayMgr + Offsets::ReplayMgr_WindowEndTime),
+                    *reinterpret_cast<const int32_t*>(replayMgr + Offsets::ReplayMgr_WindowEndPhase),
+                    *reinterpret_cast<const float*>(replayMgr + Offsets::ReplayMgr_CursorTime),
+                    g_lastStoppageTick, matchTick);
+    }
+    g_prevFsmState = fsmState;
+}
+
+void OnSimTick(uint8_t* matchInfo, int32_t matchStatus) {
+    const RingInfo r = Read(false);
+    if (r.ok) {
+        if (g_rateWindowStartTick == 0) {
+            g_rateWindowStartTick = g_mainTickCount;
+            g_prevWriteIdx = r.writeIdx;
+        } else if (r.writeIdx != g_prevWriteIdx) {
+            g_advanceCount += static_cast<uint16_t>((r.writeIdx + r.cap - g_prevWriteIdx) % r.cap);
+            g_prevWriteIdx = r.writeIdx;
+        }
+        if (g_rateLogsLeft > 0 && g_mainTickCount - g_rateWindowStartTick >= 600) {
+            --g_rateLogsLeft;
+            VAR_LOG_INF("ReplayDiag rate: %llu frames recorded in 600 sim ticks (cap=%u slot=%u)",
+                        static_cast<unsigned long long>(g_advanceCount), r.cap, r.slot);
+            g_advanceCount = 0;
+            g_rateWindowStartTick = g_mainTickCount;
+        }
+    }
+    // MatchInfo + 0x11B8: when set, the controller tick clears the active ring (0x14042E9F0 -> 0x140A8F310)
+    const uint8_t clearFlag = *reinterpret_cast<const uint8_t*>(matchInfo + 0x11B8);
+    if (clearFlag != g_prevClearFlag) {
+        if (g_stoppageLogsLeft > 0) {
+            VAR_LOG_INF("ReplayDiag MatchInfo+0x11B8 %u -> %u (status=%d)", g_prevClearFlag, clearFlag, matchStatus);
+        }
+        g_prevClearFlag = clearFlag;
+    }
+    if (g_prevMatchStatus == static_cast<int32_t>(MatchStatus::InPlay) && matchStatus != g_prevMatchStatus) {
+        g_lastStoppageTick = *reinterpret_cast<const uint32_t*>(matchInfo + Offsets::MatchInfo_MatchTick);
+    }
+    if (g_prevMatchStatus == static_cast<int32_t>(MatchStatus::InPlay) && matchStatus != g_prevMatchStatus &&
+        g_stoppageLogsLeft > 0) {
+        --g_stoppageLogsLeft;
+        Log("at stoppage", Read(true));
+    }
+    g_prevMatchStatus = matchStatus;
+}
+
+// Replay thread: what the manual replay actually plays
+void OnManualReplayController(uint8_t* ctrl) {
+    if (g_loggedManualEntry) return;
+    g_loggedManualEntry = true;
+    const uint8_t* player = ctrl + Offsets::ReplayCtrl_PlayerOffset;
+    const uint32_t playerSlot = IsMemoryRangeReadable(player, 0x10) ? *reinterpret_cast<const uint32_t*>(player + 4) : 0xFFFFFFFFU;
+    VAR_LOG_INF("ReplayDiag manual replay: player slot=%u cur=%u cap=%u win=[%u .. %u]",
+                playerSlot,
+                static_cast<unsigned>(*reinterpret_cast<const uint16_t*>(ctrl + Offsets::ReplayCtrl_CurFrame)),
+                static_cast<unsigned>(*reinterpret_cast<const uint16_t*>(ctrl + Offsets::ReplayCtrl_RingCap)),
+                static_cast<unsigned>(*reinterpret_cast<const uint16_t*>(ctrl + Offsets::ReplayCtrl_WinStartFrame)),
+                static_cast<unsigned>(*reinterpret_cast<const uint16_t*>(ctrl + Offsets::ReplayCtrl_WinEndFrame)));
+    Log("in manual replay", Read(true));
+}
+} // namespace ReplayDiag
+
 void ResetSimTrackersOnSimThread() {
     g_lastSnapshotTick = 0;
     g_lastSeenMatchTick = 0;
@@ -1612,6 +1856,7 @@ void ResetSimTrackersOnSimThread() {
     g_verifiedMatchInfoWriteBuf = nullptr;
     ExecResetToIdle();
     g_loggedDeferredOnPitch = false;
+    ReplayDiag::ResetForMatch();
     g_verifiedReplayRingBufPtr.store(nullptr, std::memory_order_release);
     g_syncedTeamRosterTable = nullptr;
     g_syncedTeamKitIds[0] = 0xFFFFFFFFU;
@@ -1689,6 +1934,8 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
             ev.matchTick = matchTick;
             ev.setPlayKind = SetPlayKind::FreeKick;
             ev.wasAdvantage = true;
+            // Advantage is played by the team in possession
+            if (IsValidSlot(g_recentBallOwnerSlot)) ev.benefitedTeam = SlotToTeam(g_recentBallOwnerSlot);
             uint8_t* ball = *reinterpret_cast<uint8_t**>(gmatch + Offsets::GMATCH_Ball);
             if (IsValidPtr(ball)) {
                 std::memcpy(&ev.pos, ball + Offsets::Ball_PosVec3, sizeof(Vec3));
@@ -1696,6 +1943,10 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
             VarState::Instance().PushEvent(ev);
         }
         g_lastAdvActive = advNow;
+
+        CalibrateSidesAtKickoff(gmatch, matchInfo, matchStatus);
+        ReplayDiag::OnSimTick(matchInfo, matchStatus);
+        ReplayDiag::OnFsmState(fsmState, replayMgr, matchTick);
 
         const uint8_t curReplayMode = IsValidPtr(replayMgr) ? *reinterpret_cast<const uint8_t*>(replayMgr + Offsets::ReplayMgr_Mode) : 0;
         const uint8_t curManualFlag = IsValidPtr(replayMgr) ? *reinterpret_cast<const uint8_t*>(replayMgr + Offsets::ReplayMgr_ManualScreenFlag) : 0;
@@ -1905,6 +2156,7 @@ void __fastcall Detour_ReplayCtrlSync(void* replayCtrl) {
         VarState::Instance().IsOfflineAllowed() &&
         ctrl[Offsets::ReplayCtrl_Mode] == 0x0A) { // 0x0A = Interactive Manual Replay
 
+        ReplayDiag::OnManualReplayController(ctrl);
         ReplayControlCommand cmd{};
         if (VarState::Instance().ConsumeReplayCommand(cmd)) {
             uint8_t* player = ctrl + Offsets::ReplayCtrl_PlayerOffset;

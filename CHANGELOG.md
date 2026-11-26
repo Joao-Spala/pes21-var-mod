@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.4.0
+
+Pesquisa e evidências em `re_notes/06_replay_cutscene_and_classification.md`.
+
+- **Lados do campo corrigidos**: o mod lia a direção de ataque como número decimal quando a engine guarda um byte com sinal. O lado nunca invertia no segundo tempo, e por isso marca de pênalti, tiro de meta, escanteio, "dentro ou fora da área" e o campinho podiam ficar no lado errado, a ponto de um pênalti a favor sair no próprio gol. Agora o lado vem do byte da engine, calibrado em cada saída de bola pelas posições dos jogadores.
+- **Classificação de lances refeita**: a tabela de ações estava trocada (o bote em pé virava "carrinho" e defesa de goleiro virava "tranco"). Agora o lance segue o próprio observador de contato da engine: a vítima entra em queda ou desequilíbrio e a engine informa quem causou. Carrinho, bote e disputa de corpo saem da ação do causador.
+- **Quase falta com marcação amarela**: contato que derrubou um jogador, com o causador identificado e sem apito.
+- **Simulação**: mergulho aparece como "Simulação?". Ações de goleiro e bloqueios não geram mais lance, e lances diferentes não são mais fundidos só por estarem perto.
+- **Anular a falta ou o pênalti marcado em qualquer contexto**: com a partida parada por falta, o menu sempre oferece anular essa marcação, mesmo com o cursor em outro lance. Assim dá para marcar uma falta num lance anterior e anular a atual no mesmo pool.
+- **Anular depois da cobrança** só retira o cartão e avisa isso, sem trocar a bola parada atual por uma antiga.
+- **Proteções**: tipos de reinício que travariam a máquina de estados são recusados, e a vantagem registra o time certo.
+- **Diagnóstico do replay** (só leitura) no `var_core.log`, base para guardar o lance anterior à falta no replay manual numa próxima versão.
+
 ## v4.3.0
 
 Novo motor de execução das decisões, montado sobre o fluxo nativo da engine (detalhes em `re_notes/05_native_decision_pipeline.md`).

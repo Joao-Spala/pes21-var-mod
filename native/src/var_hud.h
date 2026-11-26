@@ -48,6 +48,7 @@ struct HudMenuOption {
     bool        keepDecision = false;
     bool        openSquad    = false;
     bool        invertRoles  = false;
+    bool        useLiveFoul  = false; // acts on the foul / penalty the match is currently stopped for
 };
 
 // Pure geometric viewport for the 2D Broadcast Pitch Radar (supports full pitch + auto penalty-box zoom)
@@ -237,6 +238,11 @@ private:
 
     bool     hasActiveEvent_ = false;
     VarEvent activeEvent_{};
+    // The official foul / penalty the match is stopped for right now (independent of the replay cursor)
+    bool     hasLiveFoul_ = false;
+    VarEvent liveFoulEvent_{};
+    bool     draftTargetsLive_ = false;
+    bool     IsActiveEventTheLiveFoul() const;
 
     bool         hasDetectedContact_   = false;
     int32_t      detectedOffenderSlot_ = -1;

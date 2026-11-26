@@ -532,14 +532,15 @@ void SectionCaption(ImDrawList* dl, const char* ptText, float topGap) {
 }
 
 ImU32 MarkerColor(const ReplayMarker& m) {
+    // A contact that put a player down with an identified opponent and no whistle: near foul (yellow)
+    if (!m.isOfficialEvent && m.nearFoul) return C::Yellow;
     switch (m.kind) {
         case IncidentKind::Penalty:
         case IncidentKind::RedCard:    return C::Red;
         case IncidentKind::Foul:
         case IncidentKind::YellowCard:
         case IncidentKind::Advantage:  return C::Yellow;
-        case IncidentKind::SlideTackle:
-        case IncidentKind::VictimFall: return C::Orange;
+        case IncidentKind::Dive:       return C::Orange;
         default:                       return C::Neutral;
     }
 }

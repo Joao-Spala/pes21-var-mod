@@ -344,6 +344,36 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
     }
     lastTrackedCursorTime_ = tel.replayCursorTime;
 
+    // Official foul / penalty the match is stopped for, whatever the replay cursor shows
+    hasLiveFoul_ = tel.activeFoulValid &&
+                   tel.activeFoulKind >= static_cast<int32_t>(FoulKind::StandardFoul) &&
+                   (tel.matchStatus == static_cast<int32_t>(MatchStatus::OutOfPlay) ||
+                    tel.matchStatus == static_cast<int32_t>(MatchStatus::SetPlayReady));
+    if (hasLiveFoul_) {
+        liveFoulEvent_ = VarEvent{};
+        liveFoulEvent_.matchPhase = tel.matchPhase;
+        liveFoulEvent_.time60Hz = tel.time60Hz;
+        liveFoulEvent_.setPlayKind = static_cast<SetPlayKind>(tel.activeSetPlayKind);
+        liveFoulEvent_.benefitedTeam = tel.activeBenefitedTeam;
+        liveFoulEvent_.offenderSlot = tel.activeOffenderSlot;
+        liveFoulEvent_.victimSlot = tel.activeVictimSlot;
+        liveFoulEvent_.cardKind = (tel.activeFoulCard == 3) ? CardKind::Yellow
+                                : (tel.activeFoulCard == 4) ? CardKind::Red
+                                : CardKind::Simple;
+        liveFoulEvent_.type = (liveFoulEvent_.setPlayKind == SetPlayKind::PenaltyKick) ? VarEventType::Penalty : VarEventType::Foul;
+        liveFoulEvent_.pos = tel.liveBallPos;
+        // Link to the recorded official event of that offender (newest first) so cards / ledger match
+        for (const VarEvent& ev : history_) {
+            if (!ev.reviewedByVar && ev.offenderSlot == liveFoulEvent_.offenderSlot &&
+                (ev.type == VarEventType::Foul || ev.type == VarEventType::Penalty)) {
+                liveFoulEvent_.id = ev.id;
+                liveFoulEvent_.pos = ev.pos;
+                liveFoulEvent_.victimSlot = IsValidSlot(ev.victimSlot) ? ev.victimSlot : liveFoulEvent_.victimSlot;
+                break;
+            }
+        }
+    }
+
     // Update active official event & live contact when not manually locked to a chosen marker
     if (!manualMarkerLock_ && page_ != HudPage::Configure) {
         if (sync.hasEvent) {
@@ -637,10 +667,28 @@ void VarHudController::RebuildMainOptions() {
         mainOptions_.push_back({ "Anular marcação", "Retira o cartão e devolve a posse", VarAction::OverturnCancel, CardKind::None, false, false, false });
     }
 
+    // The foul / penalty the match is stopped for can always be overturned, even while the cursor is on an
+    // earlier play (review an earlier incident, mark it, and cancel the current call in the same pool)
+    if (hasLiveFoul_ && !IsActiveEventTheLiveFoul()) {
+        const bool livePen = (liveFoulEvent_.type == VarEventType::Penalty);
+        HudMenuOption o{ livePen ? "Anular pênalti marcado" : "Anular falta marcada",
+                         livePen ? "Cancela o pênalti da parada atual" : "Cancela a falta da parada atual",
+                         VarAction::OverturnCancel, CardKind::None, false, false, false };
+        o.useLiveFoul = true;
+        mainOptions_.push_back(o);
+    }
+
     if (page_ == HudPage::Main && selectedIndex_ >= static_cast<int>(mainOptions_.size())) {
         selectedIndex_ = static_cast<int>(mainOptions_.size()) - 1;
     }
     if (selectedIndex_ < 0) selectedIndex_ = 0;
+}
+
+bool VarHudController::IsActiveEventTheLiveFoul() const {
+    if (!hasLiveFoul_ || !hasActiveEvent_) return false;
+    if (activeEvent_.type != liveFoulEvent_.type || activeEvent_.offenderSlot != liveFoulEvent_.offenderSlot) return false;
+    // Built from the live FoulInfo (no recorded id yet) or the same recorded event
+    return activeEvent_.id == 0 || liveFoulEvent_.id == 0 || activeEvent_.id == liveFoulEvent_.id;
 }
 
 void VarHudController::RebuildConfigFields() {
@@ -1174,7 +1222,18 @@ void VarHudController::SelectMainOption(int index, VarState& state) {
         selectedIndex_ = 1;
         return;
     }
+    if (opt.useLiveFoul && hasLiveFoul_) {
+        // Act on the stopped-for foul, not on the play under the replay cursor
+        hasActiveEvent_ = true;
+        activeEvent_ = liveFoulEvent_;
+        hasDetectedContact_ = IsValidSlot(liveFoulEvent_.offenderSlot);
+        detectedOffenderSlot_ = liveFoulEvent_.offenderSlot;
+        detectedVictimSlot_ = IsValidSlot(liveFoulEvent_.victimSlot) ? liveFoulEvent_.victimSlot : -1;
+        detectedSpotPos_ = liveFoulEvent_.pos;
+    }
+    const bool targetsLive = (opt.action == VarAction::OverturnCancel) && (opt.useLiveFoul || IsActiveEventTheLiveFoul());
     PreFillDraft(opt.action, opt.presetCard, opt.invertRoles);
+    draftTargetsLive_ = targetsLive;
     returnPage_ = HudPage::Main;
     page_ = HudPage::Configure;
     selectedIndex_ = (opt.action == VarAction::OverturnCancel)
@@ -1223,6 +1282,7 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     }
     v.spotPos = draftSpotPos_;
     v.customSpot = draftCustomSpot_;
+    v.targetsLiveSetPlay = (draftAction_ == VarAction::OverturnCancel) && draftTargetsLive_;
 
     const std::string sum = FormatVerdictSummary();
     std::snprintf(v.summary, sizeof(v.summary), "%s", sum.c_str());

@@ -35,6 +35,7 @@ enum class IncidentKind : int32_t {
     Foul         = 8,
     RedCard      = 9,
     Penalty      = 10,
+    Dive         = 11, // simulation (dive / simulation flag), never a foul by the offender
 };
 
 enum class VarAction : int32_t {
@@ -193,8 +194,9 @@ struct PlaySnapshot {
     Vec3     ballPos{};
     Vec3     playerPos[22]{};
     uint8_t  playerOnPitch[22]{};
-    uint8_t  playerActionId[22]{};  // Fox Engine PlayerAction + 0x01 (13=Slide, 11/12=Stand, 15=Fall, 56/61=Charge)
-    uint8_t  playerActionHit[22]{}; // 1 when PlayerAction + 0x08 bit 17 is set
+    int8_t   playerActionId[22]{};    // PlayerAction + 0x01 (PlayerActionId: 11/12 slide, 13 tackle, 16/17 contact reaction)
+    uint32_t playerActionFlags[22]{}; // PlayerAction + 0x08
+    int8_t   playerCauser[22]{};      // PlayerAction + 0x3D: who caused this player's contact reaction (-1 / 0xFF none)
     int32_t  closestA            = -1;
     int32_t  closestB            = -1;
     float    closestDistSq       = 999999.0f;
@@ -213,6 +215,7 @@ struct DetectedIncident {
     Vec3         pos{};
     float        contactDistM = 99.0f;
     bool         insideBox    = false;
+    bool         nearFoul     = false; // the victim went down from a contact with an identified opponent
 };
 
 struct PlayerSlotInfo {
@@ -260,6 +263,7 @@ struct VarVerdict {
     uint8_t  directReds       = 0;
     Vec3     spotPos{};
     bool     customSpot       = false; // True when user manually adjusted spot on radar/presets
+    bool     targetsLiveSetPlay = false; // overturn of the foul the match is stopped for (restart allowed)
     char     summary[128]     = {};
 };
 
@@ -432,6 +436,7 @@ struct ReplayMarker {
     Vec3         pos{};
     float        contactDistM    = 99.0f;
     float        signedBoxDistM  = 99.0f;
+    bool         nearFoul        = false;
     char         label[48]       = {};
 };
 

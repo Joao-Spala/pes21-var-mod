@@ -70,16 +70,30 @@ enum class CardKind : int32_t {
     Red     = 4,
 };
 
-// Native Fox Engine PlayerAction action IDs (verified in 0x140A6EBB0, 0x140A6EAE0, 0x1405B9400)
+// PlayerAction + 0x01 is the engine ANIME_* enum, read as a SIGNED byte (movsbl). Names from the pointer table at
+// 0x1434B3470 (index 11 -> "ANIME_SLIDING", 13 -> "ANIME_TACKLE"), categories from 0x142651590: bit7 only for 11/12
+// (0x140A6EAE0), bit6 only for 13 (0x140A6EBB0), bit13 for 15/16/17, bit9 for 56..61 (goalkeeper).
 namespace PlayerActionId {
-    constexpr uint8_t StandTackleA = 11; // 0x0B
-    constexpr uint8_t StandTackleB = 12; // 0x0C
-    constexpr uint8_t SlideTackle  = 13; // 0x0D
-    constexpr uint8_t VictimFall   = 15; // 0x0F (Judge foul evaluation trigger)
-    constexpr uint8_t BodyChargeA  = 56; // 0x38
-    constexpr uint8_t BodyChargeB  = 61; // 0x3D
+    constexpr int8_t Sliding     = 11; // slide tackle
+    constexpr int8_t SlidingKeep = 12; // slide tackle (sustained)
+    constexpr int8_t Tackle      = 13; // standing tackle (includes shoulder-charge motions)
+    constexpr int8_t Block       = 14; // shot / cross block (ObserverBlock 0x140A1ADA0)
+    constexpr int8_t Dive        = 15; // dive: excluded by the Judge contact filter 0x14050E050 (simulation)
+    constexpr int8_t Stagger     = 16; // contact reaction
+    constexpr int8_t FallDown    = 17; // contact reaction (fall)
+    constexpr int8_t Jostle      = 72; // body-to-body duel
+    constexpr int8_t KeeperFirst = 55; // goalkeeper actions 55..71 never produce an outfield incident
+    constexpr int8_t KeeperLast  = 71;
 
-    constexpr uint32_t FlagPhysicalHit = (1U << 17); // ObserverTackle 0x140A1B120
+    // PlayerAction + 0x08
+    constexpr uint32_t FlagFallOrStagger = (1U << 13); // ObserverFallDownOrStagger trigger (0x140A6E9F0)
+    constexpr uint32_t FlagSimulation    = (1U << 29); // read by the Judge as simulation (0x1405B7E80)
+
+    inline bool IsSlide(int8_t a) { return a == Sliding || a == SlidingKeep; }
+    inline bool IsKeeper(int8_t a) { return a >= KeeperFirst && a <= KeeperLast; }
+    inline bool IsContactReaction(int8_t a, uint32_t flags) {
+        return a == Stagger || a == FallDown || (a != Dive && (flags & FlagFallOrStagger) != 0);
+    }
 } // namespace PlayerActionId
 
 // Exact binary layout of SetPlayInfo (0x30 bytes)
@@ -138,7 +152,9 @@ namespace Offsets {
     constexpr uintptr_t Ball_PosVec3             = 0x88;
 
     // TeamTactics
-    constexpr uintptr_t TeamTactics_AttackDir    = 0x254; // float (+1.0f or -1.0f)
+    // int8 side sign (+1 / -1), read with movsbl by the engine (0x140438475, 0x140439F82, 0x14043AB5D). It flips at
+    // half time. NOT a float: reading 4 bytes as a float takes the sign from +0x257 and never flips.
+    constexpr uintptr_t TeamTactics_SideSign     = 0x254;
 
     // TeamInfo (0x140A3B500, 0x140A3B550)
     constexpr uintptr_t TeamInfo_ActiveRosterIdx    = 0x04;  // int32_t[11] (0..39, live substitutions)
@@ -147,7 +163,8 @@ namespace Offsets {
 
     // PlayerAction (0x140A6EAE0, 0x140A6EBB0, 0x1405B9400, 0x140A1B120)
     constexpr uintptr_t PlayerAction_ActionId    = 0x01; // uint8_t
-    constexpr uintptr_t PlayerAction_ActionFlags = 0x08; // uint32_t (bit 17 = hit)
+    constexpr uintptr_t PlayerAction_ActionFlags = 0x08; // uint32_t (bit 13 fall/stagger, bit 29 simulation)
+    constexpr uintptr_t PlayerAction_Causer      = 0x3D; // int8 slot of the player who caused the contact (0x140A1AF50)
 
     // PlayerSpatial
     constexpr uintptr_t PlayerSpatial_PosVec3    = 0x55C;
@@ -484,9 +501,10 @@ struct PitchDims {
 
 namespace PitchGeometry {
 
-// attackDirOfOffenderTeam: float from TeamTactics(offenderTeam) + 0x254 (+1.0f or -1.0f).
-// Verified against 0x140A73470: offenderTeam's own defending penalty box has (attackDir * x > 0.0f)
-// and abs(x) > box18X && abs(z) < box18Z.
+// The "attackDir" arguments below are the side of the goal the team DEFENDS (own goal side): +1 when the team
+// defends the goal at +x. The team's own penalty box is (x * side > box18X), its goal kicks and the corners it
+// concedes are at that end. MatchHooks::ReadTeamAttackDir returns exactly this value (calibrated at each
+// kick-off from where the players stand, see match_hooks.cpp).
 inline bool IsInsideDefendingBox(const PitchDims& d, const Vec3& pos, float offenderAttackDir) {
     const float dirSign = (offenderAttackDir >= 0.0f) ? 1.0f : -1.0f;
     return (pos.x * dirSign > d.box18X) && (std::fabs(pos.z) < d.box18Z);
