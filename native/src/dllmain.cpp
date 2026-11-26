@@ -143,6 +143,7 @@ __declspec(dllexport) void __cdecl var_set_sider_overlay_open(int isOpen) {
 }
 
 __declspec(dllexport) void __cdecl var_on_match_start() {
+    if (!g_initialized.load(std::memory_order_acquire)) return;
     if (var_mod::Dx11Hook::IsInitFinished() && !var_mod::MatchHooks::IsInstalled()) {
         var_mod::MatchHooks::Install();
     }
@@ -153,6 +154,7 @@ __declspec(dllexport) void __cdecl var_on_match_start() {
 }
 
 __declspec(dllexport) void __cdecl var_on_match_end() {
+    if (!g_initialized.load(std::memory_order_acquire)) return;
     var_mod::MatchHooks::OnMatchReset();
     var_mod::VarState::Instance().CancelVerdict();
     var_mod::VarState::Instance().ClearReplayFocusAndGrace();
@@ -218,10 +220,10 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved) {
         g_selfModule = hinstDLL;
         DisableThreadLibraryCalls(hinstDLL);
     } else if (fdwReason == DLL_PROCESS_DETACH) {
-        // Never join threads or unpatch game code under the loader lock: another thread may be inside a
-        // detour. var_init pins the module, so this only runs at process exit. Just persist the log.
+        // Never join threads, unpatch game code or take locks under the loader lock: another thread may have
+        // been killed inside a detour or while holding the log mutex. var_init pins the module, so this only
+        // runs at process exit. Info and above are already flushed line by line.
         var_mod::SetHooksProcessTerminating();
-        var_mod::Logger::Flush();
     }
     return TRUE;
 }

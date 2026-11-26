@@ -1,6 +1,6 @@
-# PES 2021 - VAR Mod v4.4.1 (PT-BR & EN)
+# PES 2021 - VAR Mod v4.4.2 (PT-BR & EN)
 
-![Version](https://img.shields.io/badge/Version-v4.4.1-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.4.2-38BDF8?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Idiomas](https://img.shields.io/badge/Idiomas-PT--BR_%7C_English-2EA043?style=for-the-badge)
 ![Sider Compatible](https://img.shields.io/badge/Sider_7.3_%2F_BMPES_16.3-100%25_Compatible-F59E0B?style=for-the-badge)
@@ -24,7 +24,7 @@
 
 ### Instalação
 
-1. Baixe o **`PES2021_VAR_Mod_v4.4.1.zip`** na página de [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
+1. Baixe o **`PES2021_VAR_Mod_v4.4.2.zip`** na página de [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
 2. Feche o jogo e rode o **`VAR_Mod_Gerenciar.bat`**. No menu, escolha **`1 - Instalar ou atualizar`**.
    - O instalador acha a pasta do Sider ou do BMPES (ou pede o caminho), copia os arquivos, ativa `luajit.ext.enabled = 1` e registra `lua.module = "var_mod.lua"` no `sider.ini`. Antes de mexer no `sider.ini`, ele cria um backup datado.
 3. Abra o jogo pelo **Sider** (no BMPES, pelo atalho do próprio patch). A DLL só carrega na primeira partida (ou ao abrir o menu do Sider), então a abertura do jogo não fica mais lenta.
@@ -99,7 +99,7 @@ Video assistant referee (**VAR**) for **eFootball PES 2021 (`v1.7.2.0`, Steam)**
 
 ### Installation
 
-1. Download **`PES2021_VAR_Mod_v4.4.1.zip`** from the [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) page and extract it anywhere.
+1. Download **`PES2021_VAR_Mod_v4.4.2.zip`** from the [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) page and extract it anywhere.
 2. Close the game and run **`VAR_Mod_Gerenciar.bat`**. In the menu, pick **`1 - Instalar ou atualizar`** (install or update).
    - The installer finds your Sider or BMPES folder (or asks for the path), copies the files, enables `luajit.ext.enabled = 1` and registers `lua.module = "var_mod.lua"` in `sider.ini`. It makes a timestamped backup of `sider.ini` first.
 3. Launch the game through **Sider** (for BMPES, through the patch launcher). The DLL only loads on the first match (or when the Sider menu is opened), so game startup is not slowed down.

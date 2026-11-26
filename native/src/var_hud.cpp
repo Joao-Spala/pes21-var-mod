@@ -239,6 +239,16 @@ bool VarHudController::ComputeSecondLastDefenderX(const PlaySnapshot& snap, int3
     return true;
 }
 
+namespace {
+// A recorded foul and the live FoulInfo describe the same stoppage only when they are close in match time
+// (the clock barely moves between the whistle and the set piece). 2 game minutes at 60 Hz.
+constexpr float kSameStoppageWindow60Hz = 7200.0f;
+} // namespace
+
+bool VarHudController::IsSameStoppage(const VarEvent& a, const VarEvent& b) {
+    return a.matchPhase == b.matchPhase && std::fabs(a.time60Hz - b.time60Hz) <= kSameStoppageWindow60Hz;
+}
+
 void VarHudController::ApplySelectedMarkerToContext(const ReplayMarker& m) {
     hasDetectedContact_   = IsValidSlot(m.offenderSlot);
     detectedOffenderSlot_ = m.offenderSlot;
@@ -365,9 +375,12 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
         // Link to the recorded official event of that offender (newest first) so cards / ledger match
         for (const VarEvent& ev : history_) {
             if (!ev.reviewedByVar && ev.offenderSlot == liveFoulEvent_.offenderSlot &&
-                (ev.type == VarEventType::Foul || ev.type == VarEventType::Penalty)) {
+                ev.type == liveFoulEvent_.type && IsSameStoppage(ev, liveFoulEvent_)) {
                 liveFoulEvent_.id = ev.id;
                 liveFoulEvent_.pos = ev.pos;
+                liveFoulEvent_.offenderRosterIdx = ev.offenderRosterIdx;
+                liveFoulEvent_.victimRosterIdx = (ev.victimSlot == liveFoulEvent_.victimSlot || !IsValidSlot(liveFoulEvent_.victimSlot))
+                    ? ev.victimRosterIdx : static_cast<int8_t>(-1);
                 liveFoulEvent_.victimSlot = IsValidSlot(ev.victimSlot) ? ev.victimSlot : liveFoulEvent_.victimSlot;
                 break;
             }
@@ -461,6 +474,16 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
             returnPage_ = HudPage::Main;
             selectedIndex_ = 0;
         }
+    }
+
+    // Back on the main page after acting on the stopped-for foul: return to the play the user had chosen
+    if (restoreMarkerAfterLive_ && page_ != HudPage::Configure) {
+        restoreMarkerAfterLive_ = false;
+        if (manualMarkerLock_ && selectedMarkerIndex_ >= 0 &&
+            selectedMarkerIndex_ < static_cast<int>(replayMarkers_.size())) {
+            ApplySelectedMarkerToContext(replayMarkers_[selectedMarkerIndex_]);
+        }
+        RebuildMainOptions();
     }
 
     if (!focused_ || mainOptions_.empty() || (!manualMarkerLock_ && page_ == HudPage::Main)) {
@@ -687,8 +710,9 @@ void VarHudController::RebuildMainOptions() {
 bool VarHudController::IsActiveEventTheLiveFoul() const {
     if (!hasLiveFoul_ || !hasActiveEvent_) return false;
     if (activeEvent_.type != liveFoulEvent_.type || activeEvent_.offenderSlot != liveFoulEvent_.offenderSlot) return false;
-    // Built from the live FoulInfo (no recorded id yet) or the same recorded event
-    return activeEvent_.id == 0 || liveFoulEvent_.id == 0 || activeEvent_.id == liveFoulEvent_.id;
+    // Same recorded event, or (when one side has no recorded id yet) the same stoppage in time
+    if (activeEvent_.id != 0 && liveFoulEvent_.id != 0) return activeEvent_.id == liveFoulEvent_.id;
+    return IsSameStoppage(activeEvent_, liveFoulEvent_);
 }
 
 void VarHudController::RebuildConfigFields() {
@@ -821,6 +845,10 @@ void VarHudController::PreFillDraft(VarAction action, CardKind presetCard, bool 
         ? activeEvent_.offenderSlot
         : -1;
     draftSourceEventId_ = hasActiveEvent_ ? activeEvent_.id : 0;
+    draftEventOffSlot_   = hasActiveEvent_ ? activeEvent_.offenderSlot : -1;
+    draftEventVicSlot_   = hasActiveEvent_ ? activeEvent_.victimSlot : -1;
+    draftEventOffRoster_ = hasActiveEvent_ ? activeEvent_.offenderRosterIdx : -1;
+    draftEventVicRoster_ = hasActiveEvent_ ? activeEvent_.victimRosterIdx : -1;
     draftDirectCardMode_ = (action == VarAction::EditCard && !hasActiveEvent_);
     draftSpotPreset_ = 0;
     draftCustomSpot_ = false;
@@ -873,12 +901,9 @@ void VarHudController::PreFillDraft(VarAction action, CardKind presetCard, bool 
             draftBenefitedTeam_ = SlotToTeam(offSlot);
         }
         draftCard_ = CardKind::None;
-    } else if (invertRoles && hasActiveEvent_) {
-        draftBenefitedTeam_ = 1 - activeEvent_.benefitedTeam;
-    } else if (hasActiveEvent_ &&
-               (action == VarAction::ConvertToPenalty || action == VarAction::ConvertToFreeKick || action == VarAction::EditCard)) {
-        draftBenefitedTeam_ = activeEvent_.benefitedTeam;
     } else {
+        // The side that gets the kick is always the opponent of the FINAL offender. Deriving it from the
+        // recorded event broke after Tab (roles swapped) or "invert": offender and beneficiary on one side.
         draftBenefitedTeam_ = 1 - SlotToTeam(offSlot);
     }
 
@@ -890,6 +915,9 @@ void VarHudController::PreFillDirectCardForSlot(int32_t slot) {
     draftAction_ = VarAction::EditCard;
     draftOrigCard_ = CardKind::None;
     draftOrigOffenderSlot_ = -1;
+    draftEventOffSlot_ = draftEventVicSlot_ = -1;
+    draftEventOffRoster_ = draftEventVicRoster_ = -1;
+    draftFromLiveFoul_ = false;
     draftSourceEventId_ = 0;
     draftDirectCardMode_ = true;
     draftOffenderSlot_ = std::clamp(slot, 0, 21);
@@ -1208,7 +1236,13 @@ void VarHudController::SelectMainOption(int index, VarState& state) {
         // Card edits and decisions about other events stay in the pool.
         if (hasActiveEvent_) {
             const VerdictPool pool = state.PeekVerdictPool();
-            if (pool.hasPlayDecision && pool.playDecision.sourceEventId == activeEvent_.id) {
+            // Id 0 is shared by every retroactive decision and by the live FoulInfo context: match it only
+            // when both refer to the stopped-for foul, never a decision about another play.
+            const bool samePlay = pool.hasPlayDecision &&
+                ((activeEvent_.id != 0 && pool.playDecision.sourceEventId == activeEvent_.id) ||
+                 (activeEvent_.id == 0 && pool.playDecision.sourceEventId == 0 &&
+                  pool.playDecision.fromLiveFoul && IsActiveEventTheLiveFoul()));
+            if (samePlay) {
                 state.RemovePlayFromPool();
             }
             state.RemoveCardEntriesForEvent(activeEvent_.id);
@@ -1230,10 +1264,12 @@ void VarHudController::SelectMainOption(int index, VarState& state) {
         detectedOffenderSlot_ = liveFoulEvent_.offenderSlot;
         detectedVictimSlot_ = IsValidSlot(liveFoulEvent_.victimSlot) ? liveFoulEvent_.victimSlot : -1;
         detectedSpotPos_ = liveFoulEvent_.pos;
+        restoreMarkerAfterLive_ = true;
     }
     const bool targetsLive = (opt.action == VarAction::OverturnCancel) && (opt.useLiveFoul || IsActiveEventTheLiveFoul());
     PreFillDraft(opt.action, opt.presetCard, opt.invertRoles);
     draftTargetsLive_ = targetsLive;
+    draftFromLiveFoul_ = (opt.useLiveFoul && hasLiveFoul_) || IsActiveEventTheLiveFoul();
     returnPage_ = HudPage::Main;
     page_ = HudPage::Configure;
     selectedIndex_ = (opt.action == VarAction::OverturnCancel)
@@ -1283,6 +1319,20 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     v.spotPos = draftSpotPos_;
     v.customSpot = draftCustomSpot_;
     v.targetsLiveSetPlay = (draftAction_ == VarAction::OverturnCancel) && draftTargetsLive_;
+    v.fromLiveFoul = draftFromLiveFoul_ && !draftDirectCardMode_;
+    // A slot of the source event means the player who held it then. A slot the user picked means whoever
+    // holds it now (the squad lists show the current players).
+    if (!draftDirectCardMode_) {
+        auto rosterOf = [&](int32_t slot) -> int8_t {
+            if (!IsValidSlot(slot)) return -1;
+            if (slot == draftEventOffSlot_) return draftEventOffRoster_;
+            if (slot == draftEventVicSlot_) return draftEventVicRoster_;
+            return -1;
+        };
+        v.origOffenderRosterIdx = rosterOf(v.origOffenderSlot);
+        v.offenderRosterIdx = rosterOf(v.offenderSlot);
+        v.victimRosterIdx = rosterOf(v.victimSlot);
+    }
 
     const std::string sum = FormatVerdictSummary();
     std::snprintf(v.summary, sizeof(v.summary), "%s", sum.c_str());

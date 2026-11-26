@@ -198,6 +198,9 @@ public:
     static const char* ActionLabel(VarAction a);
     static const char* ScalePresetLabel(int preset);
 
+    // Recorded foul and live FoulInfo describe the same stoppage (same half, close in match time)
+    static bool IsSameStoppage(const VarEvent& a, const VarEvent& b);
+
 private:
     void RebuildMainOptions();
     void RebuildConfigFields();
@@ -232,6 +235,7 @@ private:
     // Active timeline marker sync state
     int      selectedMarkerIndex_   = -1;
     bool     manualMarkerLock_      = false;
+    bool     restoreMarkerAfterLive_ = false; // context was switched to the stopped-for foul
     float    lastTrackedCursorTime_ = -1000.0f;
     uint64_t seekLockUntilMs_       = 0;
     int      radarZoomOverride_     = -1; // -1 = Auto, 0 = Full Pitch, 1 = Box Zoom
@@ -242,6 +246,7 @@ private:
     bool     hasLiveFoul_ = false;
     VarEvent liveFoulEvent_{};
     bool     draftTargetsLive_ = false;
+    bool     draftFromLiveFoul_ = false;
     bool     IsActiveEventTheLiveFoul() const;
 
     bool         hasDetectedContact_   = false;
@@ -273,6 +278,11 @@ private:
     bool      draftDirectCardMode_   = false;
     int       draftDirectCardPreset_ = 0; // 0=0A/0V, 1=1A/0V, 2=2A/1V, 3=0A/1V
     int32_t   draftOrigOffenderSlot_ = -1;
+    // Source event slots and who held them then (roster index), captured with the draft
+    int32_t   draftEventOffSlot_     = -1;
+    int32_t   draftEventVicSlot_     = -1;
+    int8_t    draftEventOffRoster_   = -1;
+    int8_t    draftEventVicRoster_   = -1;
     int32_t   draftOffenderSlot_     = 0;
     int32_t   draftVictimSlot_       = 11;
     int32_t   draftBenefitedTeam_    = 1;

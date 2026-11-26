@@ -180,6 +180,10 @@ struct VarEvent {
     CardKind     cardKind             = CardKind::None;
     uint8_t      offenderYellowsAfter = 0;
     uint8_t      offenderRedsAfter    = 0;
+    // Roster index (TeamInfo + 0x04[slot % 11], 0..39) of who held the slot when the event happened.
+    // A slot changes owner on substitution: cards and fouls must follow the player, not the slot.
+    int8_t       offenderRosterIdx    = -1;
+    int8_t       victimRosterIdx      = -1;
 
     Vec3         pos{};
     bool         wasAdvantage         = false;
@@ -255,6 +259,11 @@ struct VarVerdict {
     int32_t  origOffenderSlot = -1; // Original offender of source event (supports mistaken identity)
     int32_t  offenderSlot     = -1; // 0..21
     int32_t  victimSlot       = -1; // 0..21
+    // Roster index of the player meant by each slot (-1 = whoever holds the slot now). Set from the source
+    // event when the slot is the event's, so a substitution in between never moves a card to the substitute.
+    int8_t   origOffenderRosterIdx = -1;
+    int8_t   offenderRosterIdx     = -1;
+    int8_t   victimRosterIdx       = -1;
     int32_t  benefitedTeam    = 0;  // 0 = Home, 1 = Away
     CardKind origCard         = CardKind::None;
     CardKind targetCard       = CardKind::None;
@@ -264,6 +273,7 @@ struct VarVerdict {
     Vec3     spotPos{};
     bool     customSpot       = false; // True when user manually adjusted spot on radar/presets
     bool     targetsLiveSetPlay = false; // overturn of the foul the match is stopped for (restart allowed)
+    bool     fromLiveFoul       = false; // any decision made on the foul the match is stopped for
     char     summary[128]     = {};
 };
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## v4.4.2
+
+Revisão profunda final com quatro auditorias independentes (motor de execução, estado e painel, render e infraestrutura, módulo Lua e instalador). Cada achado foi conferido no código e no binário antes da correção.
+
+- **Cartões seguem o jogador, não a posição**: depois de uma substituição, revisar um lance antigo tirava ou dava o cartão para o reserva que entrou na mesma posição. Agora cada lance guarda quem estava na posição naquele momento, e cartões e faltas vão para esse jogador. Um jogador substituído nunca vira infrator nem vítima de uma falta nova.
+- **Cartão da falta nunca fica pela metade**: se o batedor cobrava a falta no mesmo instante em que a decisão era aplicada, o cartão original podia sair sem o novo entrar. Agora o mod confirma se a engine registrou a falta e, se não registrou, aplica o cartão novo direto.
+- **Reinício coerente**: falta com a bola rolando que perde o infrator, ou que ficou sem cartão depois de uma expulsão no mesmo pacote, reinicia sem cutscene de outra falta e sem cobrança rápida que deixaria o expulso em campo.
+- **Inverter papéis (Tab) e depois converter** não deixa mais infrator e time beneficiado do mesmo lado.
+- **"Manter decisão"** não apaga mais uma decisão de outro lance.
+- **"Anular falta marcada"** só se liga à parada atual, nunca a uma falta antiga do mesmo jogador. Depois dela o painel volta ao lance que estava selecionado.
+- **Editar o cartão de um lance que já tem decisão** ajusta essa decisão em vez de reverter o cartão original duas vezes.
+- **Linha do tempo**: o rótulo "CARTÃO VERMELHO" sai quando o VAR retira o vermelho.
+- **Anular falta sem infrator identificado** usa o lado certo do campo, e uma falta injetada sem infrator não é registrada de novo como lance do árbitro.
+- **Nova partida sem aviso do Sider** (revanche, sequências de liga e copa) também limpa o pool, o histórico e o painel.
+- **Estabilidade do render**: os asserts do ImGui não encerram mais o jogo, um frame que não pode ser desenhado libera o bloqueio de controle, os ponteiros da partida são revalidados a cada frame e o encerramento do processo não depende mais de travas.
+- **Instalador**: recusa instalar ou desinstalar com o PES aberto, copia a DLL antes do Lua, preserva a codificação do `sider.ini` (BOM e quebras de linha), aceita pastas com colchetes, garante `lua.enabled = 1` e prioriza o Sider do BMPES na detecção.
+- **Tecla 7 no overlay do Sider**: segurar a tecla não liga e desliga mais várias vezes.
+
 ## v4.4.1
 
 Análise do dump completo do travamento ao avançar depois do fim da partida. Evidências em `re_notes/07_engine_heap_segment_release.md`.

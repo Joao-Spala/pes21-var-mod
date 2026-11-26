@@ -1255,7 +1255,23 @@ void VarState::AddToVerdictPoolEx(const VarVerdict& verdict, bool* outReplacedPl
     stored.sequence = verdictSeq_++;
     verdictPool_.sequence = stored.sequence;
 
-    if (stored.action == VarAction::EditCard) {
+    const VarAction pa = verdictPool_.playDecision.action;
+    const bool playCarriesFoul = verdictPool_.hasPlayDecision &&
+        (pa == VarAction::ConvertToPenalty || pa == VarAction::ConvertToFreeKick ||
+         pa == VarAction::RetroactivePenalty || pa == VarAction::RetroactiveFreeKick);
+    if (stored.action == VarAction::EditCard && !stored.directCardEdit && stored.sourceEventId != 0 &&
+        playCarriesFoul && verdictPool_.playDecision.sourceEventId == stored.sourceEventId) {
+        // The play decision on this event already reverts its original card: the edit only changes the card
+        // that decision gives, so the original card is never reverted twice.
+        verdictPool_.playDecision.targetCard = stored.targetCard;
+        if (IsValidSlot(stored.offenderSlot)) {
+            verdictPool_.playDecision.offenderSlot = stored.offenderSlot;
+            verdictPool_.playDecision.offenderRosterIdx = stored.offenderRosterIdx;
+            // The kick always goes to the opponent of the offender
+            verdictPool_.playDecision.benefitedTeam = 1 - SlotToTeam(stored.offenderSlot);
+        }
+        // playOrder is kept: the revocation of the original card must stay before later direct edits
+    } else if (stored.action == VarAction::EditCard) {
         // Replace the entry with the same key (same player for direct edits, same official event for
         // event edits), so one event edited twice with different players never applies both.
         for (auto& e : verdictPool_.cardEntries) {
@@ -1470,6 +1486,8 @@ void VarState::UpdateEventAfterVerdict(const VarVerdict& applied) {
         const size_t idx = (eventHead_ + kMaxEvents - 1 - i) % kMaxEvents;
         if (events_[idx].id == applied.sourceEventId) {
             auto& ev = events_[idx];
+            const CardKind cardBefore = ev.cardKind;
+            const int32_t offenderBefore = ev.offenderSlot;
             ev.reviewedByVar = true;
             if (applied.action == VarAction::OverturnCancel) {
                 ev.type = VarEventType::NoFoul;
@@ -1495,25 +1513,54 @@ void VarState::UpdateEventAfterVerdict(const VarVerdict& applied) {
                 ev.benefitedTeam = applied.benefitedTeam;
                 std::snprintf(ev.varNote, sizeof(ev.varNote), "Reinício: lateral");
             } else if (applied.action == VarAction::EditCard) {
-                if (IsValidSlot(applied.offenderSlot)) ev.offenderSlot = applied.offenderSlot;
+                if (IsValidSlot(applied.offenderSlot)) {
+                    ev.offenderSlot = applied.offenderSlot;
+                    ev.offenderRosterIdx = applied.offenderRosterIdx;
+                }
                 ev.cardKind = applied.targetCard;
                 std::snprintf(ev.varNote, sizeof(ev.varNote), "Cartão ajustado");
             } else if (applied.action == VarAction::ConvertToPenalty || applied.action == VarAction::RetroactivePenalty) {
                 ev.type = VarEventType::Penalty;
                 ev.setPlayKind = SetPlayKind::PenaltyKick;
                 ev.benefitedTeam = applied.benefitedTeam;
-                if (IsValidSlot(applied.offenderSlot)) ev.offenderSlot = applied.offenderSlot;
-                if (IsValidSlot(applied.victimSlot)) ev.victimSlot = applied.victimSlot;
+                if (IsValidSlot(applied.offenderSlot)) {
+                    ev.offenderSlot = applied.offenderSlot;
+                    ev.offenderRosterIdx = applied.offenderRosterIdx;
+                }
+                if (IsValidSlot(applied.victimSlot)) {
+                    ev.victimSlot = applied.victimSlot;
+                    ev.victimRosterIdx = applied.victimRosterIdx;
+                }
                 ev.cardKind = applied.targetCard;
                 std::snprintf(ev.varNote, sizeof(ev.varNote), "Pênalti pelo VAR");
             } else if (applied.action == VarAction::ConvertToFreeKick || applied.action == VarAction::RetroactiveFreeKick) {
                 ev.type = VarEventType::Foul;
                 ev.setPlayKind = SetPlayKind::FreeKick;
                 ev.benefitedTeam = applied.benefitedTeam;
-                if (IsValidSlot(applied.offenderSlot)) ev.offenderSlot = applied.offenderSlot;
-                if (IsValidSlot(applied.victimSlot)) ev.victimSlot = applied.victimSlot;
+                if (IsValidSlot(applied.offenderSlot)) {
+                    ev.offenderSlot = applied.offenderSlot;
+                    ev.offenderRosterIdx = applied.offenderRosterIdx;
+                }
+                if (IsValidSlot(applied.victimSlot)) {
+                    ev.victimSlot = applied.victimSlot;
+                    ev.victimRosterIdx = applied.victimRosterIdx;
+                }
                 ev.cardKind = applied.targetCard;
                 std::snprintf(ev.varNote, sizeof(ev.varNote), "Falta pelo VAR");
+            }
+            // Keep the "after" card counts in line with the new card, otherwise the timeline keeps showing
+            // CARTÃO VERMELHO for a red the VAR removed.
+            if (ev.cardKind != cardBefore || ev.offenderSlot != offenderBefore) {
+                int yellows = ev.offenderYellowsAfter;
+                if (ev.offenderSlot != offenderBefore) {
+                    yellows = (ev.cardKind == CardKind::Yellow) ? 1 : 0; // other player: history unknown here
+                } else {
+                    if (cardBefore == CardKind::Yellow && yellows > 0) --yellows;
+                    if (ev.cardKind == CardKind::Yellow) ++yellows;
+                }
+                ev.offenderYellowsAfter = static_cast<uint8_t>(std::clamp(yellows, 0, 2));
+                ev.offenderRedsAfter = (ev.cardKind == CardKind::Red ||
+                                        (ev.cardKind == CardKind::Yellow && ev.offenderYellowsAfter >= 2)) ? 1 : 0;
             }
             ++dataRevision_;
             break;

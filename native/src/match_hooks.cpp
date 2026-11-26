@@ -4,6 +4,7 @@
 #include "game_structs.h"
 #include "inline_hook.h"
 #include "logger.h"
+#include "var_hud.h"
 #include "var_state.h"
 
 #include <windows.h>
@@ -300,6 +301,29 @@ int32_t ReadActiveRosterIndex(uint8_t* gmatch, int32_t slot) {
         teamInfo + Offsets::TeamInfo_ActiveRosterIdx + static_cast<size_t>(slot % 11) * 4);
     if (idx < 0 || idx >= static_cast<int32_t>(Offsets::MatchRoster_MaxPlayers)) return -1;
     return idx;
+}
+
+uint8_t* GetPlayerRecord(uint8_t* gmatch, int32_t slot);
+
+// Record of a specific player: `rosterIdx` (0..39) is who held `slot` when the incident happened. The record
+// of a substituted player stays in TeamInfo, so his cards are still written to him and never to the
+// substitute now holding the slot. -1 = whoever holds the slot now.
+uint8_t* GetPlayerRecordFor(uint8_t* gmatch, int32_t slot, int32_t rosterIdx) {
+    if (rosterIdx < 0 || rosterIdx >= static_cast<int32_t>(Offsets::MatchRoster_MaxPlayers)) {
+        return GetPlayerRecord(gmatch, slot);
+    }
+    if (!IsValidPtr(gmatch) || !IsValidSlot(slot)) return nullptr;
+    uint8_t* teamInfo = GetTeamInfo(gmatch, SlotToTeam(slot));
+    if (!teamInfo) return nullptr;
+    uint8_t* rec = teamInfo + Offsets::TeamInfo_PlayerRecordsBase +
+                   static_cast<size_t>(rosterIdx) * Offsets::TeamInfo_PlayerRecordStride;
+    return IsMemoryRangeReadable(rec, 2) ? rec : nullptr;
+}
+
+// True when `slot` is still held by the player `rosterIdx` (or the identity is unknown)
+bool SlotHeldBy(uint8_t* gmatch, int32_t slot, int32_t rosterIdx) {
+    if (rosterIdx < 0) return true;
+    return ReadActiveRosterIndex(gmatch, slot) == rosterIdx;
 }
 
 uint8_t* GetPlayerRecord(uint8_t* gmatch, int32_t slot) {
@@ -906,6 +930,8 @@ struct ExecRequest {
     CardKind        card          = CardKind::None; // applied by the engine's CommitToRegistry
     int32_t         offenderSlot  = -1;
     int32_t         victimSlot    = -1;
+    int32_t         offenderRoster = -1; // roster index of the meant player (-1 = current holder of the slot)
+    int32_t         victimRoster   = -1;
     uint32_t        snapId        = 0;
 };
 
@@ -932,6 +958,8 @@ struct ExecCtx {
     bool        expectOwnFoulCommit = false;
     int32_t     expectOffender = -1;
     uint32_t    expectSnapId   = 0;
+    bool        injected       = false; // the request was written into the JudgeResult
+    bool        ownFoulCommitted = false; // the engine committed (and carded) the injected foul
     // Plan (decided at consume time, applied in the tick the engine runs it)
     VerdictPool pool{};
     bool        cardsPlanApplied = false;
@@ -961,12 +989,12 @@ void ExecResetToIdle() {
     g_exec = ExecCtx{};
 }
 
-bool SetPlayerCardsAbsolute(uint8_t* gmatch, int32_t slot, uint8_t newYellows, uint8_t newReds) {
+bool SetPlayerCardsAbsolute(uint8_t* gmatch, int32_t slot, uint8_t newYellows, uint8_t newReds, int32_t rosterIdx = -1) {
     // Manual PlayerRecord write (the engine has no card decrement). The on-pitch flags are NOT touched:
     // state 0x12 (0x140449050) recomputes them from these bytes when the set-play queue runs.
     // Returns true when the sent-off status (red or two yellows) changed.
     if (!IsValidSlot(slot)) return false;
-    uint8_t* rec = GetPlayerRecord(gmatch, slot);
+    uint8_t* rec = GetPlayerRecordFor(gmatch, slot, rosterIdx);
     if (!rec || !IsMemoryRangeReadable(rec, 2)) {
         VAR_LOG_WRN("SetPlayerCardsAbsolute: PlayerRecord unavailable for slot %d", slot);
         return false;
@@ -977,15 +1005,18 @@ bool SetPlayerCardsAbsolute(uint8_t* gmatch, int32_t slot, uint8_t newYellows, u
     rec[Offsets::PlayerRecord_Reds] = newReds;
     const bool wasSentOff = (oldReds > 0 || oldYellows >= 2);
     const bool nowSentOff = (newReds > 0 || newYellows >= 2);
-    VAR_LOG_INF("SetPlayerCardsAbsolute slot=%d Y %u->%u R %u->%u", slot,
+    const bool holdsSlot = SlotHeldBy(gmatch, slot, rosterIdx);
+    VAR_LOG_INF("SetPlayerCardsAbsolute slot=%d roster=%d%s Y %u->%u R %u->%u", slot, rosterIdx,
+                holdsSlot ? "" : " (substituted)",
                 static_cast<unsigned>(oldYellows), static_cast<unsigned>(newYellows),
                 static_cast<unsigned>(oldReds), static_cast<unsigned>(newReds));
-    return wasSentOff != nowSentOff;
+    // A substituted player is off the pitch either way: his cards never change who is on it
+    return holdsSlot && (wasSentOff != nowSentOff);
 }
 
-bool ApplyCardDelta(uint8_t* gmatch, int32_t slot, CardKind origCard, CardKind targetCard) {
+bool ApplyCardDelta(uint8_t* gmatch, int32_t slot, CardKind origCard, CardKind targetCard, int32_t rosterIdx = -1) {
     if (!IsValidSlot(slot)) return false;
-    uint8_t* rec = GetPlayerRecord(gmatch, slot);
+    uint8_t* rec = GetPlayerRecordFor(gmatch, slot, rosterIdx);
     if (!rec || !IsMemoryRangeReadable(rec, 2)) {
         VAR_LOG_WRN("ApplyCardDelta: PlayerRecord unavailable for slot %d", slot);
         return false;
@@ -1005,7 +1036,7 @@ bool ApplyCardDelta(uint8_t* gmatch, int32_t slot, CardKind origCard, CardKind t
     } else if (targetCard == CardKind::Red) {
         if (curR == 0) curR = 1;
     }
-    return SetPlayerCardsAbsolute(gmatch, slot, curY, curR);
+    return SetPlayerCardsAbsolute(gmatch, slot, curY, curR, rosterIdx);
 }
 
 // Card-only edit (no set play): the whole delta / absolute value is a manual write
@@ -1014,19 +1045,20 @@ bool ApplyVerdictCards(uint8_t* gmatch, const VarVerdict& v) {
         return SetPlayerCardsAbsolute(gmatch, v.offenderSlot, v.directYellows, v.directReds);
     }
     const bool movedPlayer = IsValidSlot(v.origOffenderSlot) && IsValidSlot(v.offenderSlot) &&
-                             v.origOffenderSlot != v.offenderSlot;
+                             (v.origOffenderSlot != v.offenderSlot ||
+                              v.origOffenderRosterIdx != v.offenderRosterIdx);
     if (movedPlayer) {
         bool changed = false;
         if (v.origCard == CardKind::Yellow || v.origCard == CardKind::Red) {
-            changed |= ApplyCardDelta(gmatch, v.origOffenderSlot, v.origCard, CardKind::None);
+            changed |= ApplyCardDelta(gmatch, v.origOffenderSlot, v.origCard, CardKind::None, v.origOffenderRosterIdx);
         }
         if (v.targetCard == CardKind::Yellow || v.targetCard == CardKind::Red) {
-            changed |= ApplyCardDelta(gmatch, v.offenderSlot, CardKind::None, v.targetCard);
+            changed |= ApplyCardDelta(gmatch, v.offenderSlot, CardKind::None, v.targetCard, v.offenderRosterIdx);
         }
         return changed;
     }
     if (v.targetCard != v.origCard) {
-        return ApplyCardDelta(gmatch, v.offenderSlot, v.origCard, v.targetCard);
+        return ApplyCardDelta(gmatch, v.offenderSlot, v.origCard, v.targetCard, v.offenderRosterIdx);
     }
     return false;
 }
@@ -1179,8 +1211,10 @@ void PerformInjection(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo) {
     *reinterpret_cast<uint64_t*>(fsm + Offsets::MatchFSM_KickerCache) = 0x000000FF000000FFULL;
 
     g_exec.expectOwnFoulCommit = req.foulValid;
-    g_exec.expectOffender = req.offenderSlot;
+    // FoulInfo holds 0xFF for "no offender" (WriteSetPlayAndFoulToStruct): compare with the engine's value
+    g_exec.expectOffender = IsValidSlot(req.offenderSlot) ? req.offenderSlot : 0xFF;
     g_exec.expectSnapId = req.snapId;
+    g_exec.injected = true;
     VAR_LOG_INF("VAR request injected (fsmState=0x%X): sp=%d reason=%d team=%d off=%d vic=%d card=%d snap=%u pos=(%.1f, %.1f)",
                 g_exec.startFsmState, static_cast<int>(req.spKind), static_cast<int>(req.stopReason),
                 req.benefitedTeam, req.offenderSlot, req.victimSlot, static_cast<int>(req.card),
@@ -1193,7 +1227,8 @@ void ExecCommitLedger() {
     if (g_exec.pushRevEvent) {
         // Card counts after the engine's own commit
         if (IsValidSlot(g_exec.revEvent.offenderSlot)) {
-            if (uint8_t* rec = GetPlayerRecord(GetGmatch(), g_exec.revEvent.offenderSlot)) {
+            if (uint8_t* rec = GetPlayerRecordFor(GetGmatch(), g_exec.revEvent.offenderSlot,
+                                                  g_exec.revEvent.offenderRosterIdx)) {
                 g_exec.revEvent.offenderYellowsAfter = rec[Offsets::PlayerRecord_Yellows];
                 g_exec.revEvent.offenderRedsAfter    = rec[Offsets::PlayerRecord_Reds];
             }
@@ -1215,6 +1250,17 @@ void ExecFinish(bool applied, const char* failBannerPt) {
             g_exec.bannerText[0] ? g_exec.bannerText : "DECISÃO DO VAR APLICADA", 4800, g_exec.bannerStyle);
         VAR_LOG_INF("VAR pool seq=%u applied and verified", g_exec.poolSeq);
     } else {
+        // The injected foul was written but the engine never committed it (the kick was taken on that tick):
+        // its card was not applied while the original card was already revoked. Apply it by hand so the
+        // "cards were applied" outcome is complete and the offender is never left one card short.
+        if (g_exec.injected && g_exec.req.foulValid && !g_exec.ownFoulCommitted &&
+            (g_exec.req.card == CardKind::Yellow || g_exec.req.card == CardKind::Red) &&
+            VarState::Instance().MatchGeneration() == g_exec.matchGen) {
+            ApplyCardDelta(GetGmatch(), g_exec.req.offenderSlot, CardKind::None, g_exec.req.card, g_exec.req.offenderRoster);
+            g_exec.cardsApplied = true;
+            VAR_LOG_WRN("Injected foul not committed by the engine: card %d applied manually to slot %d",
+                        static_cast<int>(g_exec.req.card), g_exec.req.offenderSlot);
+        }
         // Cards already written stay written: record them so the ledger matches the match. The play itself
         // (and a "reviewed by VAR" incident) is not recorded because the engine never ran it.
         if (g_exec.cardsApplied && VarState::Instance().MatchGeneration() == g_exec.matchGen) {
@@ -1237,8 +1283,8 @@ bool PoolMayChangeOnPitch(const VerdictPool& pool, uint8_t* gmatch, uint8_t* mat
     auto offPitch = [&](int32_t slot) {
         return IsValidSlot(slot) && *reinterpret_cast<const uint8_t*>(matchInfo + Offsets::MatchInfo_PlayerOnPitch + slot) == 0;
     };
-    auto yellowsOf = [&](int32_t slot) -> uint8_t {
-        uint8_t* rec = IsValidSlot(slot) ? GetPlayerRecord(gmatch, slot) : nullptr;
+    auto yellowsOf = [&](int32_t slot, int32_t roster) -> uint8_t {
+        uint8_t* rec = IsValidSlot(slot) ? GetPlayerRecordFor(gmatch, slot, roster) : nullptr;
         return rec ? rec[Offsets::PlayerRecord_Yellows] : 0;
     };
     for (const auto& e : pool.cardEntries) {
@@ -1249,8 +1295,10 @@ bool PoolMayChangeOnPitch(const VerdictPool& pool, uint8_t* gmatch, uint8_t* mat
             if (v.directReds > 0 || v.directYellows >= 2) return true;
         } else {
             if (v.targetCard == CardKind::Red || v.origCard == CardKind::Red) return true;
-            if (v.targetCard == CardKind::Yellow && yellowsOf(v.offenderSlot) >= 1) return true;
-            if (v.origCard == CardKind::Yellow && yellowsOf(IsValidSlot(v.origOffenderSlot) ? v.origOffenderSlot : v.offenderSlot) >= 2) return true;
+            if (v.targetCard == CardKind::Yellow && yellowsOf(v.offenderSlot, v.offenderRosterIdx) >= 1) return true;
+            if (v.origCard == CardKind::Yellow &&
+                (IsValidSlot(v.origOffenderSlot) ? yellowsOf(v.origOffenderSlot, v.origOffenderRosterIdx)
+                                                 : yellowsOf(v.offenderSlot, v.offenderRosterIdx)) >= 2) return true;
         }
     }
     return false;
@@ -1329,12 +1377,17 @@ void ApplyPlanCards(uint8_t* gmatch) {
     for (size_t i = 0; i < stepCount; ++i) {
         if (steps[i].isPlay) {
             if (pv->origCard == CardKind::Yellow || pv->origCard == CardKind::Red) {
-                const int32_t origSlot = IsValidSlot(pv->origOffenderSlot) ? pv->origOffenderSlot : pv->offenderSlot;
-                if (uint8_t* rec = IsValidSlot(origSlot) ? GetPlayerRecord(gmatch, origSlot) : nullptr) {
-                    g_exec.revokedSlot = origSlot;
-                    g_exec.revokedWasSentOff = (rec[Offsets::PlayerRecord_Reds] > 0 || rec[Offsets::PlayerRecord_Yellows] >= 2);
+                const bool hasOrig = IsValidSlot(pv->origOffenderSlot);
+                const int32_t origSlot = hasOrig ? pv->origOffenderSlot : pv->offenderSlot;
+                const int32_t origRoster = hasOrig ? pv->origOffenderRosterIdx : pv->offenderRosterIdx;
+                if (uint8_t* rec = IsValidSlot(origSlot) ? GetPlayerRecordFor(gmatch, origSlot, origRoster) : nullptr) {
+                    // Only a player still holding his slot can come back on through this revocation
+                    if (SlotHeldBy(gmatch, origSlot, origRoster)) {
+                        g_exec.revokedSlot = origSlot;
+                        g_exec.revokedWasSentOff = (rec[Offsets::PlayerRecord_Reds] > 0 || rec[Offsets::PlayerRecord_Yellows] >= 2);
+                    }
                 }
-                g_exec.sentOffChanged |= ApplyCardDelta(gmatch, origSlot, pv->origCard, CardKind::None);
+                g_exec.sentOffChanged |= ApplyCardDelta(gmatch, origSlot, pv->origCard, CardKind::None, origRoster);
                 g_exec.cardsApplied = true;
             }
             continue;
@@ -1357,7 +1410,8 @@ void ApplyAbsorbedCardsManually(uint8_t* gmatch) {
         const VarVerdict& cv = g_exec.pool.cardEntries[i].verdict;
         // Their origCard part already went through the play's revocation
         if (cv.targetCard == CardKind::Yellow || cv.targetCard == CardKind::Red) {
-            g_exec.sentOffChanged |= ApplyCardDelta(gmatch, cv.offenderSlot, CardKind::None, cv.targetCard);
+            g_exec.sentOffChanged |= ApplyCardDelta(gmatch, cv.offenderSlot, CardKind::None, cv.targetCard,
+                                                    cv.offenderRosterIdx);
             g_exec.cardsApplied = true;
         }
     }
@@ -1366,33 +1420,50 @@ void ApplyAbsorbedCardsManually(uint8_t* gmatch) {
 // Final shape of an injected foul, decided after the manual writes of the same tick
 void FinalizeInjectedFoul(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo) {
     ExecRequest& req = g_exec.req;
-    auto wasOnPitch = [&](int32_t slot) { return IsValidSlot(slot) && g_exec.onPitchBefore[slot] != 0; };
+    // The slot must still be held by the player of the incident (a substitute is never the offender or victim)
+    auto wasOnPitch = [&](int32_t slot, int32_t roster) {
+        return IsValidSlot(slot) && g_exec.onPitchBefore[slot] != 0 && SlotHeldBy(gmatch, slot, roster);
+    };
     // A player off the pitch before this pool cannot be in the foul, unless he was off only because of the card
     // this pool just revoked (convert a red-card foul into a penalty against the same player).
-    auto eligible = [&](int32_t slot) {
-        return wasOnPitch(slot) || (slot == g_exec.revokedSlot && g_exec.revokedWasSentOff);
+    auto eligible = [&](int32_t slot, int32_t roster) {
+        return wasOnPitch(slot, roster) ||
+               (slot == g_exec.revokedSlot && g_exec.revokedWasSentOff && SlotHeldBy(gmatch, slot, roster));
     };
-    if (IsValidSlot(req.victimSlot) && !wasOnPitch(req.victimSlot)) req.victimSlot = -1;
-    if (req.foulValid && IsValidSlot(req.offenderSlot) && !eligible(req.offenderSlot)) {
-        VAR_LOG_WRN("Play offender slot %d was not on the pitch: restart kept, foul data dropped", req.offenderSlot);
+    if (IsValidSlot(req.victimSlot) && !wasOnPitch(req.victimSlot, req.victimRoster)) req.victimSlot = -1;
+    if (req.foulValid && IsValidSlot(req.offenderSlot) && !eligible(req.offenderSlot, req.offenderRoster)) {
+        VAR_LOG_WRN("Play offender slot %d (roster %d) is not on the pitch: restart kept, foul data dropped",
+                    req.offenderSlot, req.offenderRoster);
         req.foulValid = false;
         ApplyAbsorbedCardsManually(gmatch);
         if (g_exec.playCard == CardKind::Yellow || g_exec.playCard == CardKind::Red) {
-            g_exec.sentOffChanged |= ApplyCardDelta(gmatch, req.offenderSlot, CardKind::None, g_exec.playCard);
+            g_exec.sentOffChanged |= ApplyCardDelta(gmatch, req.offenderSlot, CardKind::None, g_exec.playCard,
+                                                    req.offenderRoster);
             g_exec.cardsApplied = true;
         }
         req.offenderSlot = -1;
     }
-    if (!req.foulValid) return;
+    if (!req.foulValid) {
+        // Open play with no foul left to record: reason 5 would queue the card cutscene of an older foul and an
+        // automatic replay of nothing. Reason 7 restarts silently and always runs states 0x12 / 0x13.
+        if (req.stopReason == StoppageReason::Foul) req.stopReason = StoppageReason::SilentRestart;
+        return;
+    }
 
     // The engine applies this card on the injection tick (CommitToRegistry). No card when a later direct edit
     // already set the absolute value, or when the offender is already sent off by an edit of this pool.
     CardKind card = g_exec.playCard;
     if (g_exec.laterDirectOnOffender) card = CardKind::Simple;
-    if (uint8_t* rec = GetPlayerRecord(gmatch, req.offenderSlot)) {
+    if (uint8_t* rec = GetPlayerRecordFor(gmatch, req.offenderSlot, req.offenderRoster)) {
         if (rec[Offsets::PlayerRecord_Reds] > 0 || rec[Offsets::PlayerRecord_Yellows] >= 2) card = CardKind::Simple;
     }
     req.card = card;
+    // A foul without a card in open play may become a quick free kick (0x140445740), which skips states
+    // 0x12 / 0x13: a player this pool sent off would stay on the pitch. Restart silently instead.
+    if (req.stopReason == StoppageReason::Foul && card != CardKind::Yellow && card != CardKind::Red &&
+        g_exec.sentOffChanged) {
+        req.stopReason = StoppageReason::SilentRestart;
+    }
     if (card == CardKind::Red) g_exec.redInvolved = true;
     if (const uint32_t id = EnsureValidFoulSnapshotId(matchInfo, gmatch, fsm)) req.snapId = id;
 
@@ -1407,6 +1478,10 @@ void FinalizeInjectedFoul(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo) {
         ev.benefitedTeam = req.benefitedTeam;
         ev.offenderSlot  = req.offenderSlot;
         ev.victimSlot    = req.victimSlot;
+        ev.offenderRosterIdx = static_cast<int8_t>(req.offenderRoster >= 0 ? req.offenderRoster
+                                                                          : ReadActiveRosterIndex(gmatch, req.offenderSlot));
+        ev.victimRosterIdx = static_cast<int8_t>(req.victimRoster >= 0 ? req.victimRoster
+                                                                      : ReadActiveRosterIndex(gmatch, req.victimSlot));
         ev.cardKind      = req.card;
         ev.pos           = req.spot;
         ev.reviewedByVar = true;
@@ -1459,6 +1534,22 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
 
     ExecResetToIdle();
     g_exec.pool = consumed;
+    // "-1 = whoever holds the slot now" is resolved here, at execution: from now on every write and the
+    // ledger (which updates the event history) refer to that exact player even after a substitution.
+    {
+        auto resolve = [&](VarVerdict& v) {
+            if (v.offenderRosterIdx < 0 && IsValidSlot(v.offenderSlot))
+                v.offenderRosterIdx = static_cast<int8_t>(ReadActiveRosterIndex(gmatch, v.offenderSlot));
+            if (v.victimRosterIdx < 0 && IsValidSlot(v.victimSlot))
+                v.victimRosterIdx = static_cast<int8_t>(ReadActiveRosterIndex(gmatch, v.victimSlot));
+            if (v.origOffenderRosterIdx < 0 && IsValidSlot(v.origOffenderSlot))
+                v.origOffenderRosterIdx = static_cast<int8_t>(ReadActiveRosterIndex(gmatch, v.origOffenderSlot));
+        };
+        if (g_exec.pool.hasPlayDecision) resolve(g_exec.pool.playDecision);
+        for (auto& e : g_exec.pool.cardEntries) {
+            if (e.active) resolve(e.verdict);
+        }
+    }
     g_exec.matchGen = VarState::Instance().MatchGeneration();
     g_exec.poolSeq = consumed.sequence;
     g_exec.fsm = fsm;
@@ -1473,11 +1564,16 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
     ExecRequest& req = g_exec.req;
     if (pv) {
         const PitchDims dims = ReadPitchDims(gmatch);
-        const int32_t offenderTeam = IsValidSlot(pv->offenderSlot) ? SlotToTeam(pv->offenderSlot) : (1 - pv->benefitedTeam);
+        // For an overturn the HUD gives the restart to the original offender's side, so that IS his team
+        const int32_t offenderTeam = IsValidSlot(pv->offenderSlot) ? SlotToTeam(pv->offenderSlot)
+                                   : (pv->action == VarAction::OverturnCancel) ? pv->benefitedTeam
+                                   : (1 - pv->benefitedTeam);
         const float offenderAttackDir = ReadTeamAttackDir(gmatch, offenderTeam);
         req.benefitedTeam = (pv->benefitedTeam == 1) ? 1 : 0;
         req.offenderSlot = pv->offenderSlot;
         req.victimSlot = pv->victimSlot;
+        req.offenderRoster = pv->offenderRosterIdx;
+        req.victimRoster = pv->victimRosterIdx;
         req.stopReason = StoppageReason::SilentRestart;
 
         switch (pv->action) {
@@ -1559,7 +1655,10 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
                 if (!ce.verdict.directCardEdit && pv->sourceEventId != 0 && ce.verdict.sourceEventId == pv->sourceEventId) {
                     g_exec.playCard = ce.verdict.targetCard;
                     g_exec.absorbed[i] = true;
-                    if (IsValidSlot(ce.verdict.offenderSlot)) req.offenderSlot = ce.verdict.offenderSlot;
+                    if (IsValidSlot(ce.verdict.offenderSlot)) {
+                        req.offenderSlot = ce.verdict.offenderSlot;
+                        req.offenderRoster = ce.verdict.offenderRosterIdx;
+                    }
                 } else if (ce.verdict.directCardEdit && ce.verdict.offenderSlot == req.offenderSlot) {
                     g_exec.laterDirectOnOffender = true;
                 }
@@ -1897,7 +1996,10 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
         if (g_lastSeenMatchTick > 120 && matchTick + 60 < g_lastSeenMatchTick) {
             VAR_LOG_INF("Detected Restart Match (tick %u -> %u), resetting VAR ring buffers",
                         g_lastSeenMatchTick, matchTick);
+            // Also the only reset for flows where Sider sends no set_teams between matches (rematch, some
+            // league/cup chains): the previous match's pool, events and HUD state never leak into this one.
             VarState::Instance().ResetMatch();
+            VarHudRenderer::RequestReset();
             ResetSimTrackersOnSimThread();
         }
         g_lastSeenMatchTick = matchTick;
@@ -2054,6 +2156,7 @@ void __fastcall Detour_UpdateFoulCounters(void* matchControl, void* matchInfo, v
                                        fi->snapshotTickIndex == g_exec.expectSnapId;
         if (isOurInjectedFoul) {
             g_exec.expectOwnFoulCommit = false;
+            g_exec.ownFoulCommitted = true;
             g_lastFoulValidEdge = true;
             g_lastFoulOffenderEdge = fi->offenderSlot;
             g_lastFoulCardEdge = fi->foulJudgementKind;
@@ -2104,6 +2207,8 @@ void __fastcall Detour_UpdateFoulCounters(void* matchControl, void* matchInfo, v
                 else ev.type = VarEventType::Foul;
 
                 uint8_t* gmatch = GetGmatch();
+                ev.offenderRosterIdx = static_cast<int8_t>(ReadActiveRosterIndex(gmatch, ev.offenderSlot));
+                ev.victimRosterIdx = static_cast<int8_t>(ReadActiveRosterIndex(gmatch, ev.victimSlot));
                 if (IsValidSlot(ev.offenderSlot) && gmatch) {
                     if (uint8_t* rec = GetPlayerRecord(gmatch, ev.offenderSlot)) {
                         ev.offenderYellowsAfter = rec[Offsets::PlayerRecord_Yellows] + (ev.cardKind == CardKind::Yellow ? 1 : 0);
@@ -2545,6 +2650,12 @@ void MatchHooks::PollLiveReplayState() {
     uint8_t* matchInfo = GetMatchInfo(gmatch);
     uint8_t* replayMgr = GetReplayMgr(gmatch);
     if (!matchInfo) return;
+    // This runs on the render thread, outside the simulation: the match objects can be released between two
+    // frames (scene change after the final whistle) while the pointers still hold the old values. Re-check
+    // the pages every frame (3 VirtualQuery calls) instead of trusting a pointer validated once.
+    g_pollLastMatchInfo = nullptr;
+    g_pollLastReplayMgr = nullptr;
+    g_pollLastFsm = nullptr;
     if (matchInfo != g_pollLastMatchInfo) {
         if (!IsMemoryRangeReadable(matchInfo, Offsets::MatchInfo_SpecialModeKind + 1)) {
             g_pollLastMatchInfo = nullptr;

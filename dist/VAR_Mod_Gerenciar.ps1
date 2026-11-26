@@ -7,8 +7,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot  = if (Test-Path (Join-Path $ScriptDir "modules\var_mod\var_core.dll")) { $ScriptDir }
-             elseif (Test-Path (Join-Path (Split-Path -Parent $ScriptDir) "dist\modules\var_mod\var_core.dll")) { Join-Path (Split-Path -Parent $ScriptDir) "dist" }
+$RepoRoot  = if (Test-Path -LiteralPath (Join-Path $ScriptDir "modules\var_mod\var_core.dll")) { $ScriptDir }
+             elseif (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $ScriptDir) "dist\modules\var_mod\var_core.dll")) { Join-Path (Split-Path -Parent $ScriptDir) "dist" }
              else { $ScriptDir }
 
 $SrcLua = Join-Path $RepoRoot "modules\var_mod.lua"
@@ -16,17 +16,54 @@ $SrcDll = Join-Path $RepoRoot "modules\var_mod\var_core.dll"
 $ModuleLine = 'lua.module = "var_mod.lua"'
 $Latin1 = [System.Text.Encoding]::GetEncoding(28591)
 
+# sider.ini is read and written byte for byte (Latin1 maps every byte 1:1), keeping a UTF-8 BOM and the
+# original line breaks, so module names in UTF-8 and other modules' lines are never re-encoded.
+function Read-IniFile([string]$path) {
+    $bytes = [System.IO.File]::ReadAllBytes($path)
+    $bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+    $start = if ($bom) { 3 } else { 0 }
+    $text = $Latin1.GetString($bytes, $start, $bytes.Length - $start)
+    $nl = if ($text.Contains("`r`n")) { "`r`n" } elseif ($text.Contains("`n")) { "`n" } else { "`r`n" }
+    $trailing = $text.EndsWith("`n")
+    if ($trailing) {
+        $text = $text.Substring(0, $text.Length - 1)
+        if ($text.EndsWith("`r")) { $text = $text.Substring(0, $text.Length - 1) }
+    }
+    $lines = if ($text.Length -eq 0) { @() } else { $text -split "`r?`n" }
+    return [pscustomobject]@{ Lines = [string[]]$lines; Bom = $bom; NewLine = $nl; Trailing = $trailing }
+}
+
+function Write-IniFile([string]$path, $ini, [string[]]$lines) {
+    $text = [string]::Join($ini.NewLine, $lines)
+    if ($ini.Trailing -or $lines.Length -gt 0) { $text += $ini.NewLine }
+    $body = $Latin1.GetBytes($text)
+    if ($ini.Bom) {
+        $out = New-Object byte[] ($body.Length + 3)
+        $out[0] = 0xEF; $out[1] = 0xBB; $out[2] = 0xBF
+        [System.Array]::Copy($body, 0, $out, 3, $body.Length)
+        $body = $out
+    }
+    [System.IO.File]::WriteAllBytes($path, $body)
+}
+
+function Assert-GameClosed {
+    # var_core.dll stays mapped (and pinned) while the game runs: copying or deleting it would fail halfway
+    if (Get-Process -Name "PES2021" -ErrorAction SilentlyContinue) {
+        throw "Feche o PES 2021 antes de instalar, atualizar ou desinstalar o VAR Mod."
+    }
+}
+
 function Resolve-SiderDir([string]$hint) {
     if (-not [string]::IsNullOrWhiteSpace($hint)) {
         $cleanHint = $hint.Trim().Trim('"').Trim("'")
-        if (-not (Test-Path $cleanHint -PathType Container)) {
+        if (-not (Test-Path -LiteralPath $cleanHint -PathType Container)) {
             throw "Pasta Sider informada nao existe: $cleanHint"
         }
-        $hasSider = (Test-Path (Join-Path $cleanHint "sider.dll")) -or (Test-Path (Join-Path $cleanHint "sider.ini"))
+        $hasSider = (Test-Path -LiteralPath (Join-Path $cleanHint "sider.dll")) -or (Test-Path -LiteralPath (Join-Path $cleanHint "sider.ini"))
         if (-not $hasSider) {
             throw "sider.dll ou sider.ini nao encontrado em: $cleanHint"
         }
-        return (Resolve-Path $cleanHint).Path
+        return (Resolve-Path -LiteralPath $cleanHint).Path
     }
 
     $candidates = @($ScriptDir, (Split-Path -Parent $ScriptDir))
@@ -35,30 +72,29 @@ function Resolve-SiderDir([string]$hint) {
     foreach ($drv in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
         $steamRoots += (Join-Path $drv.Root "SteamLibrary")
     }
-    foreach ($root in $steamRoots) {
-        $candidates += (Join-Path $root "steamapps\common\eFootball PES 2021\sider")
-        $candidates += (Join-Path $root "steamapps\common\BMPES")
-    }
+    # BMPES first: with both installed, the patch's Sider is the one the game is launched with
+    foreach ($root in $steamRoots) { $candidates += (Join-Path $root "steamapps\common\BMPES") }
+    foreach ($root in $steamRoots) { $candidates += (Join-Path $root "steamapps\common\eFootball PES 2021\sider") }
     foreach ($c in $candidates) {
-        if ($c -and (Test-Path (Join-Path $c "sider.dll"))) {
-            return (Resolve-Path $c).Path
+        if ($c -and (Test-Path -LiteralPath (Join-Path $c "sider.dll"))) {
+            return (Resolve-Path -LiteralPath $c).Path
         }
     }
 
     Write-Host ""
     Write-Host "Pasta do Sider nao detectada automaticamente."
     $manual = (Read-Host "Digite o caminho completo da pasta onde fica o sider.dll").Trim().Trim('"').Trim("'")
-    if (-not $manual -or -not (Test-Path (Join-Path $manual "sider.dll"))) {
+    if (-not $manual -or -not (Test-Path -LiteralPath (Join-Path $manual "sider.dll"))) {
         throw "sider.dll nao encontrado em: $manual"
     }
-    return (Resolve-Path $manual).Path
+    return (Resolve-Path -LiteralPath $manual).Path
 }
 
 function Get-TargetInis([string]$dir) {
     $inis = @()
     foreach ($name in @("sider.ini", "sider-normal.ini", "sider-capacidade.ini")) {
         $p = Join-Path $dir $name
-        if (Test-Path $p) { $inis += $p }
+        if (Test-Path -LiteralPath $p) { $inis += $p }
     }
     return $inis
 }
@@ -66,17 +102,19 @@ function Get-TargetInis([string]$dir) {
 function Backup-Ini([string]$iniPath) {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $bak = "$iniPath.antes-var-mod-$stamp.bak"
-    Copy-Item -Force $iniPath $bak
+    Copy-Item -Force -LiteralPath $iniPath -Destination $bak
     Write-Host "[backup] Criado: $bak"
 }
 
 function Set-IniModuleState([string]$iniPath, [bool]$enable) {
-    $lines = [System.IO.File]::ReadAllLines($iniPath, $Latin1)
+    $ini = Read-IniFile $iniPath
+    $lines = $ini.Lines
     $list = [System.Collections.Generic.List[string]]::new()
     $found = $false
     $lastLuaIdx = -1
     $firstLuaIdx = -1
     $luajitOn = $false
+    $luaOn = $false
 
     for ($i = 0; $i -lt $lines.Length; $i++) {
         $ln = $lines[$i]
@@ -91,16 +129,30 @@ function Set-IniModuleState([string]$iniPath, [bool]$enable) {
                 $list.Add(";" + $ModuleLine)
             }
             $lastLuaIdx = $list.Count - 1
-        } elseif ($enable -and $ln -match '^\s*;*\s*luajit\.ext\.enabled\s*=\s*\d+\s*$') {
-            # Covers "= 0" and a commented-out line: the module needs LuaJIT FFI to load its DLL
+        } elseif ($enable -and $ln -match '^\s*;*\s*luajit\.ext\.enabled\s*=\s*\d+\s*(;.*)?$') {
+            # Covers "= 0", a trailing comment and a commented-out line: the module needs LuaJIT FFI
             if (-not $luajitOn) { $list.Add("luajit.ext.enabled = 1") }
             $luajitOn = $true
+        } elseif ($enable -and $ln -match '^\s*;*\s*lua\.enabled\s*=\s*\d+\s*(;.*)?$') {
+            # Without Lua the module is never loaded and nothing tells the user why
+            if (-not $luaOn) { $list.Add("lua.enabled = 1") }
+            $luaOn = $true
         } else {
             $list.Add($ln)
             if ($ln -match '^\s*lua\.module\s*=') {
                 $lastLuaIdx = $list.Count - 1
                 if ($firstLuaIdx -lt 0) { $firstLuaIdx = $list.Count - 1 }
             }
+        }
+    }
+
+    if ($enable -and -not $luaOn) {
+        if ($firstLuaIdx -ge 0) {
+            $list.Insert($firstLuaIdx, "lua.enabled = 1")
+            $firstLuaIdx++
+            if ($lastLuaIdx -ge 0) { $lastLuaIdx++ }
+        } else {
+            $list.Add("lua.enabled = 1")
         }
     }
 
@@ -132,7 +184,7 @@ function Set-IniModuleState([string]$iniPath, [bool]$enable) {
 
     if ($changed) {
         Backup-Ini $iniPath
-        [System.IO.File]::WriteAllLines($iniPath, $list.ToArray(), $Latin1)
+        Write-IniFile $iniPath $ini $list.ToArray()
         Write-Host "[ini] Atualizado ($(if ($enable) { 'ATIVADO' } else { 'DESATIVADO' })): $iniPath"
     } else {
         Write-Host "[ini] Sem alteracoes necessarias: $iniPath"
@@ -140,7 +192,8 @@ function Set-IniModuleState([string]$iniPath, [bool]$enable) {
 }
 
 function Remove-IniModule([string]$iniPath) {
-    $lines = [System.IO.File]::ReadAllLines($iniPath, $Latin1)
+    $ini = Read-IniFile $iniPath
+    $lines = $ini.Lines
     $list = [System.Collections.Generic.List[string]]::new()
     $removed = $false
     foreach ($ln in $lines) {
@@ -152,7 +205,7 @@ function Remove-IniModule([string]$iniPath) {
     }
     if ($removed) {
         Backup-Ini $iniPath
-        [System.IO.File]::WriteAllLines($iniPath, $list.ToArray(), $Latin1)
+        Write-IniFile $iniPath $ini $list.ToArray()
         Write-Host "[ini] Entrada removida: $iniPath"
     }
 }
@@ -163,10 +216,10 @@ function Show-Status([string]$dir) {
     Write-Host ""
     Write-Host "=== Status PES 2021 VAR Mod ==="
     Write-Host "Pasta Sider : $dir"
-    Write-Host "var_mod.lua : $(if (Test-Path $dstLua) { 'Instalado' } else { 'Ausente' })"
-    Write-Host "var_core.dll: $(if (Test-Path $dstDll) { 'Instalado' } else { 'Ausente' })"
+    Write-Host "var_mod.lua : $(if (Test-Path -LiteralPath $dstLua) { 'Instalado' } else { 'Ausente' })"
+    Write-Host "var_core.dll: $(if (Test-Path -LiteralPath $dstDll) { 'Instalado' } else { 'Ausente' })"
     foreach ($ini in (Get-TargetInis $dir)) {
-        $raw = [System.IO.File]::ReadAllLines($ini, $Latin1)
+        $raw = (Read-IniFile $ini).Lines
         $state = "Nao registrado"
         foreach ($ln in $raw) {
             if ($ln -match '^\s*lua\.module\s*=\s*"var_mod\.lua"(?:\s*;.*)?\s*$') { $state = "ATIVADO"; break }
@@ -178,15 +231,17 @@ function Show-Status([string]$dir) {
 }
 
 function Do-Install([string]$dir) {
-    if (-not (Test-Path $SrcLua) -or -not (Test-Path $SrcDll)) {
+    Assert-GameClosed
+    if (-not (Test-Path -LiteralPath $SrcLua) -or -not (Test-Path -LiteralPath $SrcDll)) {
         throw "Arquivos de distribuicao nao encontrados ($SrcLua / $SrcDll). Execute native\build.ps1 antes."
     }
     $dstModDir = Join-Path $dir "modules"
     $dstCoreDir = Join-Path $dstModDir "var_mod"
     New-Item -ItemType Directory -Force -Path $dstCoreDir | Out-Null
 
-    Copy-Item -Force $SrcLua (Join-Path $dstModDir "var_mod.lua")
-    Copy-Item -Force $SrcDll (Join-Path $dstCoreDir "var_core.dll")
+    # DLL first: a new Lua must never run against an old DLL (missing exports)
+    Copy-Item -Force -LiteralPath $SrcDll -Destination (Join-Path $dstCoreDir "var_core.dll")
+    Copy-Item -Force -LiteralPath $SrcLua -Destination (Join-Path $dstModDir "var_mod.lua")
     Write-Host "[copy] var_mod.lua e var_core.dll copiados para $dstModDir"
 
     $inis = Get-TargetInis $dir
@@ -211,13 +266,14 @@ function Do-Toggle([string]$dir, [bool]$enable) {
 }
 
 function Do-Uninstall([string]$dir) {
+    Assert-GameClosed
     foreach ($ini in (Get-TargetInis $dir)) {
         Remove-IniModule $ini
     }
     $dstLua = Join-Path $dir "modules\var_mod.lua"
     $dstCoreDir = Join-Path $dir "modules\var_mod"
-    if (Test-Path $dstLua) { Remove-Item -Force $dstLua }
-    if (Test-Path $dstCoreDir) { Remove-Item -Recurse -Force $dstCoreDir }
+    if (Test-Path -LiteralPath $dstLua) { Remove-Item -Force -LiteralPath $dstLua }
+    if (Test-Path -LiteralPath $dstCoreDir) { Remove-Item -Recurse -Force -LiteralPath $dstCoreDir }
     Write-Host "[uninstall] Arquivos do VAR Mod removidos de $dir"
     Show-Status $dir
 }

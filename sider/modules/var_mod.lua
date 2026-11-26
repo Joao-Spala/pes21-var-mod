@@ -3,7 +3,7 @@
 -- Escopo: exclusivamente partidas offline (Exibicao, Master Liga, BAL, Copas, Ligas).
 -- Performance: carregamento nativo sob demanda (lazy load em set_teams / overlay_on) -> 0.00 ms no boot do jogo!
 
-local m = { version = "4.4.1" }
+local m = { version = "4.4.2" }
 
 local ffi = ffi
 local cdef_registered = false
@@ -193,6 +193,10 @@ local function txt()
     return is_english() and TXT.en or TXT.pt
 end
 
+-- Key repeat guard state (used by overlay_on, key_down and key_up below)
+local keys_held = {}
+local overlay_frame = 0
+
 function m.set_teams(ctx, home, away)
     if not ensure_native_loaded() then return end
     var_dll.var_set_offline_mode(1)
@@ -212,6 +216,7 @@ function m.context_reset(ctx)
 end
 
 function m.overlay_on(ctx)
+    overlay_frame = overlay_frame + 1
     if ensure_native_loaded() then
         var_dll.var_set_sider_overlay_open(1)
     end
@@ -237,7 +242,17 @@ function m.overlay_on(ctx)
     )
 end
 
+-- key_down repeats while the key is held (system auto-repeat): act once per press. A press is re-armed by
+-- key_up, or after ~20 overlay frames without repeats (key_up is not delivered once the overlay closes).
+
+function m.key_up(ctx, vkey)
+    keys_held[vkey] = nil
+end
+
 function m.key_down(ctx, vkey)
+    local last = keys_held[vkey]
+    keys_held[vkey] = overlay_frame
+    if last and (overlay_frame - last) < 20 then return end
     if not ensure_native_loaded() then return end
     if vkey == 0x37 then
         var_enabled = not var_enabled
@@ -258,6 +273,7 @@ function m.init(ctx)
     ctx.register("context_reset", m.context_reset)
     ctx.register("overlay_on", m.overlay_on)
     ctx.register("key_down", m.key_down)
+    ctx.register("key_up", m.key_up)
     log("[var_mod] v" .. m.version .. " registrado (modo lazy-load: zero impacto na abertura do jogo)")
 end
 

@@ -2391,6 +2391,102 @@ void TestHeapGuardAtomicSegmentRelease() {
     MarkPass("TestHeapGuardAtomicSegmentRelease");
 }
 
+// ---------------------------------------------------------------------------
+// v4.4.2: final deep review regressions
+// ---------------------------------------------------------------------------
+void TestFinalReviewRegressions() {
+    auto& st = VarState::Instance();
+    st.ResetMatch();
+
+    // A card edit on the event of a pending play decision merges into it (original card reverted once)
+    VarVerdict play{};
+    play.action = VarAction::ConvertToPenalty;
+    play.sourceEventId = 7;
+    play.offenderSlot = 3;
+    play.origOffenderSlot = 3;
+    play.origCard = CardKind::Yellow;
+    play.targetCard = CardKind::Red;
+    st.AddToVerdictPool(play);
+    VarVerdict edit{};
+    edit.action = VarAction::EditCard;
+    edit.sourceEventId = 7;
+    edit.offenderSlot = 4;
+    edit.offenderRosterIdx = 12;
+    edit.origCard = CardKind::Yellow;
+    edit.targetCard = CardKind::None;
+    st.AddToVerdictPool(edit);
+    VerdictPool pool = st.PeekVerdictPool();
+    EXPECT_TRUE(pool.hasPlayDecision, "Play decision must stay in the pool");
+    EXPECT_EQ(pool.CardCount(), static_cast<size_t>(0), "Edit of the same event must not be a second entry");
+    EXPECT_TRUE(pool.playDecision.targetCard == CardKind::None, "Edit must change the play's card");
+    EXPECT_EQ(pool.playDecision.offenderSlot, 4, "Edit must move the play's offender");
+    EXPECT_EQ(static_cast<int>(pool.playDecision.offenderRosterIdx), 12, "Edit must carry the player identity");
+
+    EXPECT_EQ(pool.playDecision.benefitedTeam, 1, "Kick goes to the opponent of the new offender");
+    const uint32_t playOrderBefore = pool.playOrder;
+
+    // An edit on another event stays separate
+    edit.sourceEventId = 9;
+    st.AddToVerdictPool(edit);
+    EXPECT_EQ(st.PeekVerdictPool().CardCount(), static_cast<size_t>(1), "Edit of another event is its own entry");
+    EXPECT_EQ(st.PeekVerdictPool().playOrder, playOrderBefore, "Merge must not reorder the play's revocation");
+    st.ResetMatch();
+
+    // A restart carries no foul: an edit of its event stays a card entry (the card is not lost)
+    VarVerdict corner{};
+    corner.action = VarAction::RestartCorner;
+    corner.sourceEventId = 7;
+    corner.benefitedTeam = 1;
+    st.AddToVerdictPool(corner);
+    edit.sourceEventId = 7;
+    edit.targetCard = CardKind::Red;
+    st.AddToVerdictPool(edit);
+    EXPECT_EQ(st.PeekVerdictPool().CardCount(), static_cast<size_t>(1), "Edit on a restart's event stays separate");
+    st.ResetMatch();
+
+    // Card counts follow the VAR's card change (timeline no longer shows a removed red)
+    VarEvent ev{};
+    ev.type = VarEventType::Foul;
+    ev.offenderSlot = 3;
+    ev.cardKind = CardKind::Red;
+    ev.offenderRedsAfter = 1;
+    ev.matchTick = 100;
+    const uint32_t id = st.PushEvent(ev);
+    VarVerdict toYellow{};
+    toYellow.action = VarAction::EditCard;
+    toYellow.sourceEventId = id;
+    toYellow.offenderSlot = 3;
+    toYellow.origCard = CardKind::Red;
+    toYellow.targetCard = CardKind::Yellow;
+    st.UpdateEventAfterVerdict(toYellow);
+    auto evs = st.GetRecentEvents(8);
+    EXPECT_TRUE(!evs.empty() && evs.front().id == id, "Event must exist");
+    EXPECT_EQ(static_cast<int>(evs.front().offenderRedsAfter), 0, "Red removed: no red count");
+    EXPECT_EQ(static_cast<int>(evs.front().offenderYellowsAfter), 1, "Yellow given: one yellow");
+    VarVerdict toNone = toYellow;
+    toNone.origCard = CardKind::Yellow;
+    toNone.targetCard = CardKind::None;
+    st.UpdateEventAfterVerdict(toNone);
+    evs = st.GetRecentEvents(8);
+    EXPECT_EQ(static_cast<int>(evs.front().offenderYellowsAfter), 0, "Yellow removed: no yellow count");
+    EXPECT_EQ(static_cast<int>(evs.front().offenderRedsAfter), 0, "No card: no red count");
+    st.ResetMatch();
+
+    // Live foul links only to the same stoppage
+    VarEvent a{}, b{};
+    a.matchPhase = b.matchPhase = 1;
+    a.time60Hz = 1000.0f;
+    b.time60Hz = 1600.0f;
+    EXPECT_TRUE(VarHudController::IsSameStoppage(a, b), "10 game seconds apart is the same stoppage");
+    b.time60Hz = 1000.0f + 60.0f * 60.0f * 20.0f;
+    EXPECT_TRUE(!VarHudController::IsSameStoppage(a, b), "20 game minutes apart is another foul");
+    b.time60Hz = 1000.0f;
+    b.matchPhase = 2;
+    EXPECT_TRUE(!VarHudController::IsSameStoppage(a, b), "Other half is another foul");
+
+    MarkPass("TestFinalReviewRegressions");
+}
+
 } // namespace
 
 int main() {
@@ -2414,6 +2510,7 @@ int main() {
     TestHudRenderSmoke();
     TestCompositeVerdictPoolAndRcuOffsets();
     TestHeapGuardAtomicSegmentRelease();
+    TestFinalReviewRegressions();
 
     std::printf("\nResumo: %d PASS, %d FAIL\n", g_passed, g_failed);
     return (g_failed == 0) ? 0 : 1;

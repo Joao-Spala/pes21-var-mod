@@ -171,18 +171,23 @@ void RenderOverlayOnSwapChainLocked(IDXGISwapChain* swapChain, bool alreadyPolle
         return;
     }
 
+    // Any frame that cannot be drawn still runs the idle tick, which clears panel focus / input blocking
+    // and the manual replay flag, so a skipped HUD never keeps the user's input blocked.
     if (!g_imguiInitialized) {
         if (!InitImGuiLocked(swapChain)) {
+            VarHudRenderer::TickIdle();
             return;
         }
     } else if (swapChain != g_swapChain) {
         ShutdownImGuiLocked();
         if (!InitImGuiLocked(swapChain)) {
+            VarHudRenderer::TickIdle();
             return;
         }
     }
 
     if (!g_imguiInitialized || !g_device || !g_context) {
+        VarHudRenderer::TickIdle();
         return;
     }
 
@@ -191,6 +196,7 @@ void RenderOverlayOnSwapChainLocked(IDXGISwapChain* swapChain, bool alreadyPolle
     // transitions always succeed natively with zero need to hook dxgi!ResizeBuffers!
     ID3D11Texture2D* backBuffer = nullptr;
     if (FAILED(swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&backBuffer))) || !backBuffer) {
+        VarHudRenderer::TickIdle();
         return;
     }
 
@@ -203,10 +209,13 @@ void RenderOverlayOnSwapChainLocked(IDXGISwapChain* swapChain, bool alreadyPolle
     const HRESULT rtvHr = g_device->CreateRenderTargetView(backBuffer, nullptr, &rtv);
     backBuffer->Release();
     if (FAILED(rtvHr) || !rtv) {
+        VarHudRenderer::TickIdle();
         return;
     }
 
-    if (vw >= 320.0f && vh >= 240.0f) {
+    if (vw < 320.0f || vh < 240.0f) {
+        VarHudRenderer::TickIdle();
+    } else {
         ID3D11RenderTargetView* prevRtv0 = nullptr;
         ID3D11DepthStencilView* prevDsv = nullptr;
         g_context->OMGetRenderTargets(1, &prevRtv0, &prevDsv);
@@ -218,6 +227,15 @@ void RenderOverlayOnSwapChainLocked(IDXGISwapChain* swapChain, bool alreadyPolle
         ImGui_ImplDX11_NewFrame();
 
         ImGuiIO& io = ImGui::GetIO();
+        if (!io.Fonts->IsBuilt()) {
+            // Device objects could not be created this frame (device removed / out of video memory):
+            // ImGui::NewFrame would assert on the missing font atlas. Skip and retry next frame.
+            if (prevRtv0) prevRtv0->Release();
+            if (prevDsv) prevDsv->Release();
+            rtv->Release();
+            VarHudRenderer::TickIdle();
+            return;
+        }
         io.DisplaySize = ImVec2(vw, vh);
 
         LARGE_INTEGER curQpc{};
@@ -293,7 +311,8 @@ HRESULT __fastcall Detour_GrSwapChainPresent(void* grSwapChain, UINT syncInterva
                 }
             }
             std::unique_lock<std::mutex> lock(g_renderMutex, std::try_to_lock);
-            if (lock.owns_lock()) {
+            // Re-check under the lock: Shutdown may have destroyed ImGui between the first test and here
+            if (lock.owns_lock() && !g_stopRequested.load(std::memory_order_acquire)) {
                 RenderOverlayOnSwapChainLocked(swapChain, polledThisFrame);
             }
         }
@@ -389,6 +408,7 @@ void Dx11Hook::Shutdown() {
 
     g_hookGrPresent.Uninstall();
     g_hooked.store(false, std::memory_order_release);
+    g_initFinished.store(false, std::memory_order_release); // a later var_on_match_start must not re-hook
 
     std::lock_guard<std::mutex> lock(g_renderMutex);
     ShutdownImGuiLocked();
