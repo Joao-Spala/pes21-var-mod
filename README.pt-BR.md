@@ -167,6 +167,18 @@ As notas de engenharia reversa estão em [`re_notes/`](re_notes), o histórico e
 
 ---
 
+## Apoie o projeto
+
+Este mod é gratuito e de código aberto, e vai continuar assim. Se ele melhorou suas partidas e você quiser me pagar um café, vou ficar muito agradecido. Um relato de bug ou um obrigado vale tanto quanto.
+
+<div align="center">
+
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Pague_um_caf%C3%A9-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/AlfaceJao)
+
+</div>
+
+---
+
 <div align="center">
 
 Projeto independente, sem afiliação com a Konami. Nenhum arquivo do jogo é distribuído ou alterado.

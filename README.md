@@ -184,6 +184,18 @@ python docs\assets\make_readme_art.py "$env:TEMP\var_hud"
 
 ---
 
+## Support the project
+
+This mod is free and open source, and it always will be. If it made your matches better and you feel like buying me a coffee, I would really appreciate it. A bug report or a thank you means just as much.
+
+<div align="center">
+
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_me_a_coffee-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/AlfaceJao)
+
+</div>
+
+---
+
 <div align="center">
 
 Independent project, not affiliated with Konami. No game file is distributed or modified.
