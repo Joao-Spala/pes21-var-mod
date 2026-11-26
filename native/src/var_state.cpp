@@ -1404,6 +1404,29 @@ bool VarState::ConsumeVerdict(VarVerdict& outVerdict) {
     return true;
 }
 
+bool VarState::ConsumeVerdictPoolIf(bool (*gate)(const VerdictPool&, void*), void* user, VerdictPool& outPool) {
+    if (!hasArmedVerdict_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!verdictPool_.HasExecutableItems()) {
+        hasArmedVerdict_.store(!verdictPool_.Empty(), std::memory_order_release);
+        return false;
+    }
+    if (gate && !gate(verdictPool_, user)) {
+        return false;
+    }
+    outPool = verdictPool_;
+    if (outPool.hasPlayDecision && outPool.playDecision.action == VarAction::None) {
+        outPool.hasPlayDecision = false;
+        outPool.playOrder = 0;
+        outPool.playDecision = VarVerdict{};
+    }
+    verdictPool_ = VerdictPool{};
+    hasArmedVerdict_.store(false, std::memory_order_release);
+    return true;
+}
+
 bool VarState::ConsumeVerdictPool(VerdictPool& outPool) {
     if (!hasArmedVerdict_.load(std::memory_order_acquire)) {
         return false;

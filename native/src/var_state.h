@@ -633,6 +633,9 @@ public:
     VerdictPool PeekVerdictPool() const;
     bool ConsumeVerdict(VarVerdict& outVerdict);
     bool ConsumeVerdictPool(VerdictPool& outPool);
+    // Consumes only if gate(pool, user) returns true; the gate runs under the same lock as the consume, so no
+    // edit can slip in between the check and the take.
+    bool ConsumeVerdictPoolIf(bool (*gate)(const VerdictPool&, void*), void* user, VerdictPool& outPool);
     void UpdateEventAfterVerdict(const VarVerdict& applied);
     void IncrementInterventions();
     void SetPostApplyBanner(const char* text, uint64_t durationMs = 4500, BannerStyle style = BannerStyle::Applied);

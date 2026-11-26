@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.3.0
+
+Novo motor de execução das decisões, montado sobre o fluxo nativo da engine (detalhes em `re_notes/05_native_decision_pipeline.md`).
+
+- **A engine aplica o cartão e expulsa**: o cartão da falta marcada pelo VAR passa pelo `CommitToRegistry` nativo, que conta uma única vez, e a expulsão sai nos estados `0x12` e `0x13` da própria engine. Acabaram a pré-gravação do cartão, a anulação da contagem da engine e a escrita do flag "em campo".
+- **Expulsão só de cartão na bola parada** usa o `RebuildSetPlay` nativo, o mesmo que a engine usa ao trocar cobrador.
+- **Máquina de estados explícita**: ocioso, aguardando o gancho nativo, aguardando a transição e intervalo, com prazos em ticks da simulação. Reinício de partida aborta a execução.
+- **Nada é gravado antes da hora**: os cartões só são escritos no mesmo tick em que a engine executa a decisão. Se ela não executar, nada fica pela metade.
+- **Verificação de verdade**: a decisão só conta como aplicada, e o histórico só é gravado, quando a FSM sai do estado em que o pedido foi feito e não volta para a bola rolando.
+- **Falta injetada com os valores padrão da engine** (sentinelas `0xFF`, `0x18`, `9`, `4`), nunca com zeros.
+- **Correções da revisão independente**: falta convertida contra quem o cartão original expulsou não perde mais o cartão, edições absorvidas vão para o jogador escolhido, o resultado do árbitro do mesmo frame nunca é sobrescrito e uma expulsão com a bola rolando só roda quando o próprio lance faz a engine processar o elenco.
+- **Ponteiros resolvidos por assinatura** só são aceitos se a chamada cair na seção de código do executável.
+
 ## v4.2.4
 
 Revisão profunda com três auditorias independentes (memória do jogo, código novo e interface).
