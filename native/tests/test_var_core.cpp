@@ -2265,6 +2265,19 @@ void TestHudRenderSmoke() {
             for (int f = 0; f < 8; ++f) frame();
             std::snprintf(shotName, sizeof(shotName), "%s_%dx%d_1_revisao", langTag, static_cast<int>(sz[0]), resTag);
             DumpDrawDataBmp(shotName, px, tw, th);
+            // Docs animation (VAR_HUD_SEQUENCE set): the replay cursor runs through the play at 1080p, the pitch
+            // follows it frame by frame and the suspect marker pulses. Back to the slide afterwards.
+            if (sz[1] == 1080.0f && sz[0] == 1920.0f && GetEnvironmentVariableA("VAR_HUD_SEQUENCE", nullptr, 0) > 0) {
+                int seq = 0;
+                for (float t = kSuspect - 420.0f; t <= kSuspect + 48.0f; t += 6.0f) {
+                    PatchReplayTelemetryForTest(true, 0, t, kWinStart, kWinEnd);
+                    frame();
+                    std::snprintf(shotName, sizeof(shotName), "seq_%s_%03d", langTag, seq++);
+                    DumpDrawDataBmp(shotName, px, tw, th);
+                }
+                PatchReplayTelemetryForTest(true, 0, kSuspect, kWinStart, kWinEnd);
+                for (int f = 0; f < 8; ++f) frame();
+            }
             // Every HUD window stays inside the screen and the panel keeps a sane share of it
             {
                 ImGuiContext& g = *ImGui::GetCurrentContext();

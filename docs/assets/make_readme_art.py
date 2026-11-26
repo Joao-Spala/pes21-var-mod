@@ -142,6 +142,63 @@ def hero(snap, lang, revisao, pool, decisao):
     out.save(os.path.join(OUT_DIR, f'hero_{lang}.png'), optimize=True)
 
 
+# Regions of the review page as fractions of the screen (the layout scales with the UI scale, so they hold at any
+# resolution): replay bar, incident card and tactical pitch, inside the panel's content column
+REGIONS = {
+    'timeline': (0.769, 0.109, 0.981, 0.150),
+    'card':     (0.769, 0.155, 0.981, 0.229),
+    'pitch':    (0.769, 0.238, 0.981, 0.480),
+}
+PANEL_TOP = (0.735, 0.0, 0.996, 0.486)  # panel from the header to the bottom of the pitch
+
+
+def crop_frac(im, box):
+    w, h = im.size
+    return im.crop((int(w * box[0]), int(h * box[1]), int(w * box[2]), int(h * box[3])))
+
+
+def feature_cards(snap, lang):
+    """Close-ups of the new features, crisp from the 4K render (the replay bar from a frame where the suspect pulses)."""
+    full = Image.open(os.path.join(snap, f'{lang}_3840x2160_1_revisao.bmp')).convert('RGB')
+    out = {}
+    for name in ('card', 'pitch'):
+        out[name] = crop_frac(full, REGIONS[name])
+    seq = os.path.join(snap, f'seq_{lang}_010.bmp')
+    if os.path.exists(seq):
+        tl = crop_frac(Image.open(seq).convert('RGB'), REGIONS['timeline'])
+        out['timeline'] = tl.resize((tl.width * 2, tl.height * 2), Image.LANCZOS)
+    for name, img in out.items():
+        card = rounded(img, 12)
+        target_w = 900 if name == 'pitch' else 760
+        card = card.resize((target_w, int(card.height * target_w / card.width)), Image.LANCZOS)
+        shadowed = with_shadow(card, pad=22, blur=12, alpha=110, offset=6)
+        d = os.path.join(OUT_DIR, lang)
+        os.makedirs(d, exist_ok=True)
+        shadowed.save(os.path.join(d, f'feat_{name}.png'), optimize=True)
+
+
+def replay_gif(snap, lang):
+    """The panel following the replay frame by frame (VAR_HUD_SEQUENCE render): bar, card and pitch."""
+    frames = []
+    i = 0
+    while True:
+        f = os.path.join(snap, f'seq_{lang}_{i:03d}.bmp')
+        if not os.path.exists(f):
+            break
+        im = crop_frac(Image.open(f).convert('RGB'), PANEL_TOP)
+        im = im.resize((int(im.width * 0.9), int(im.height * 0.9)), Image.LANCZOS)
+        frames.append(im)
+        i += 1
+    if not frames:
+        return
+    # Hold the last frame (the slide) so the eye can read it before the loop restarts
+    durations = [70] * (len(frames) - 1) + [1600]
+    # 256-colour octree per frame keeps the role colours (orange offender, cyan victim) and the gold suspect true
+    pal = [fr.quantize(colors=256, method=Image.Quantize.FASTOCTREE) for fr in frames]
+    pal[0].save(os.path.join(OUT_DIR, lang, 'replay.gif'), save_all=True, append_images=pal[1:],
+                duration=durations, loop=0, optimize=True, disposal=1)
+
+
 def main():
     snap = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.environ.get('TEMP', '.'), 'var_hud')
     for lang in ('pt', 'en'):
@@ -157,6 +214,8 @@ def main():
                           (controles, 'controles'), (pool, 'pool'), (pill, 'recolhido')):
             save_card(img, name, lang)
         hero(snap, lang, revisao, pool, decisao)
+        feature_cards(snap, lang)
+        replay_gif(snap, lang)
         print('ok', lang)
 
 

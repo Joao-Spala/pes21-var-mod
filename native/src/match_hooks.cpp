@@ -1346,7 +1346,9 @@ struct DecisionClipState {
 };
 DecisionClipState g_decisionClip;
 
-constexpr uint64_t kDecisionClipPendingTicks  = 1200; // 20 s for 0x1F to appear in the queue
+// 0x1F is pushed by the same queue rebuild that follows the injection (0x14044F140), so it shows up within a
+// tick or two. A longer wait could arm the old moment on a later, unrelated stoppage.
+constexpr uint64_t kDecisionClipPendingTicks  = 60;
 constexpr uint64_t kDecisionClipWaitIn1FTicks = 120;  // 2 s of 0x1F waiting on the request
 constexpr uint64_t kDecisionClipArmedMaxTicks = 3600; // hard cap while armed (60 s)
 constexpr uint32_t kDecisionClipPreFrames = 150;      // 2.5 s before the reviewed moment
@@ -1424,6 +1426,41 @@ void QueueDecisionReplayClip(uint8_t* matchInfo, const ExecRequest& req) {
     g_decisionClip.matchInfo = matchInfo;
 }
 
+// Window of the reviewed moment in the live ring, in frames back from its newest frame. The live ring is buffer 0,
+// inline at replay system + 0x8 (0x140A8C440: active buffer = system + 8 + slot * 0x50), the one the engine copies
+// clips from (0x14042F1DB passes id 0) whatever buffer the replay screen has selected.
+bool ComputeDecisionClipWindow(uint16_t& a, uint16_t& b, bool logFailure) {
+    if (!g_replaySingletonPtrAddr) return false;
+    const uint8_t* sys = *reinterpret_cast<const uint8_t* const*>(g_replaySingletonPtrAddr);
+    if (!IsValidPtr(sys) || !IsMemoryRangeReadable(sys + Offsets::ReplaySystem_LiveRing, 0x50)) return false;
+    const uint8_t* buf = sys + Offsets::ReplaySystem_LiveRing;
+    const uint16_t writeIdx = *reinterpret_cast<const uint16_t*>(buf + 0x10);
+    const uint16_t cap = *reinterpret_cast<const uint16_t*>(buf + 0x12);
+    const uint8_t* frames = *reinterpret_cast<const uint8_t* const*>(buf + Offsets::ReplayRingHolder_BufferPtr);
+    if (cap == 0 || cap > 4096 || writeIdx >= cap || !IsValidPtr(frames) ||
+        !IsMemoryRangeReadable(frames, static_cast<size_t>(cap) * Offsets::ReplayRing_FrameStride)) return false;
+    static float times[4096]; // sim thread only
+    static uint8_t phases[4096];
+    static uint8_t valid[4096];
+    for (uint32_t i = 0; i < cap; ++i) {
+        const uint8_t* f = frames + static_cast<size_t>(i) * Offsets::ReplayRing_FrameStride;
+        valid[i] = (*reinterpret_cast<const uint16_t*>(f + Offsets::ReplayRing_FrameInvalidMarkOff) != 0x7FFF) ? 1 : 0;
+        times[i] = *reinterpret_cast<const float*>(f + Offsets::ReplayRing_FrameTimeOff);
+        phases[i] = static_cast<uint8_t>(f[Offsets::ReplayRing_FramePhaseOff] & 0x0F);
+    }
+    const auto why = PitchGeometry::ReplayClipMath::ComputeWindow(times, phases, valid, cap, writeIdx, g_decisionClip.clipPhase,
+                                                                  g_decisionClip.clipTime60Hz, kDecisionClipPreFrames,
+                                                                  kDecisionClipPostFrames, a, b);
+    if (why != PitchGeometry::ReplayClipMath::Result::Ok) {
+        if (logFailure) {
+            VAR_LOG_INF("Decision replay: reviewed moment not in the replay ring (%s), skipped",
+                        PitchGeometry::ReplayClipMath::ResultName(why));
+        }
+        return false;
+    }
+    return true;
+}
+
 // Writes the request once 0x1F is queued. False (with the reason in the log) when it cannot be done safely.
 bool ArmDecisionReplayClip(uint8_t* matchInfo) {
     uint8_t* wb = GetMatchInfoWriteBuffer(matchInfo);
@@ -1444,38 +1481,8 @@ bool ArmDecisionReplayClip(uint8_t* matchInfo) {
         VAR_LOG_INF("Decision replay: pending clip record busy or unavailable, skipped");
         return false;
     }
-    // The live ring (slot 0): the engine copies the clip from it, counting frames back from the newest one
-    const uint8_t* sys = *reinterpret_cast<const uint8_t* const*>(g_replaySingletonPtrAddr);
-    if (!IsValidPtr(sys) || !IsMemoryRangeReadable(sys + Offsets::ReplaySingleton_ActiveSlot, 0x18)) return false;
-    if (*reinterpret_cast<const uint32_t*>(sys + Offsets::ReplaySingleton_ActiveSlot) != 0) {
-        VAR_LOG_INF("Decision replay: the live ring is not the active one, skipped");
-        return false;
-    }
-    const uint8_t* buf = *reinterpret_cast<const uint8_t* const*>(sys + Offsets::ReplaySingleton_RingHolder);
-    if (!IsValidPtr(buf) || !IsMemoryRangeReadable(buf, 0x50)) return false;
-    const uint16_t writeIdx = *reinterpret_cast<const uint16_t*>(buf + 0x10);
-    const uint16_t cap = *reinterpret_cast<const uint16_t*>(buf + 0x12);
-    const uint8_t* frames = *reinterpret_cast<const uint8_t* const*>(buf + Offsets::ReplayRingHolder_BufferPtr);
-    if (cap == 0 || cap > 4096 || writeIdx >= cap || !IsValidPtr(frames) ||
-        !IsMemoryRangeReadable(frames, static_cast<size_t>(cap) * Offsets::ReplayRing_FrameStride)) return false;
-    static float times[4096]; // sim thread only
-    static uint8_t phases[4096];
-    static uint8_t valid[4096];
-    for (uint32_t i = 0; i < cap; ++i) {
-        const uint8_t* f = frames + static_cast<size_t>(i) * Offsets::ReplayRing_FrameStride;
-        valid[i] = (*reinterpret_cast<const uint16_t*>(f + Offsets::ReplayRing_FrameInvalidMarkOff) != 0x7FFF) ? 1 : 0;
-        times[i] = *reinterpret_cast<const float*>(f + Offsets::ReplayRing_FrameTimeOff);
-        phases[i] = static_cast<uint8_t>(f[Offsets::ReplayRing_FramePhaseOff] & 0x0F);
-    }
     uint16_t a = 0, b = 0;
-    const auto why = PitchGeometry::ReplayClipMath::ComputeWindow(times, phases, valid, cap, writeIdx, g_decisionClip.clipPhase,
-                                                                  g_decisionClip.clipTime60Hz, kDecisionClipPreFrames,
-                                                                  kDecisionClipPostFrames, a, b);
-    if (why != PitchGeometry::ReplayClipMath::Result::Ok) {
-        VAR_LOG_INF("Decision replay: reviewed moment not in the replay ring (%s), skipped",
-                    PitchGeometry::ReplayClipMath::ResultName(why));
-        return false;
-    }
+    if (!ComputeDecisionClipWindow(a, b, true)) return false;
     // Minute/second/phase exactly as 0x1F checks them (0x140A6C330 with the MatchInfo phase), so the record is
     // never taken for a stale one
     const int32_t miPhase = *reinterpret_cast<const int32_t*>(matchInfo + Offsets::MatchInfo_MatchPhase);
@@ -1530,9 +1537,25 @@ void TickDecisionReplayClip(uint8_t* fsm, uint8_t* matchInfo, int32_t fsmState) 
     // Armed: done once the engine committed (-2) or consumed/reset (-1) the request
     const int32_t st = *reinterpret_cast<const int32_t*>(ClipRequestIn(matchInfo));
     if (st == -1 || st == -2) {
-        VAR_LOG_INF("Decision replay clip committed by the engine (status %d)", st);
+        uint8_t* reg = ClipRegistry();
+        const int32_t recType = reg ? *reinterpret_cast<const int32_t*>(reg + Offsets::ClipRegistry_PendingRecord3 + Offsets::ClipRecord_Type) : -1;
+        if (recType == 0x11) VAR_LOG_INF("Decision replay clip recorded by the engine (status %d)", st);
+        else VAR_LOG_WRN("Decision replay request rejected by the engine (status %d, record type 0x%X)", st, recType);
         g_decisionClip = DecisionClipState{};
         return;
+    }
+    // Still waiting for the recorder: frames recorded meanwhile (cutscenes) would shift a window computed earlier,
+    // so it follows the live ring every tick until the commit
+    if (st == 0) {
+        uint16_t a = 0, b = 0;
+        if (ComputeDecisionClipWindow(a, b, false)) {
+            uint8_t* reqs[2] = { g_decisionClip.writeBuf ? ClipRequestIn(g_decisionClip.writeBuf) : nullptr, ClipRequestIn(matchInfo) };
+            for (uint8_t* r : reqs) {
+                if (!r || !IsMemoryRangeReadable(r, Offsets::ReplayRequest_Stride) || *reinterpret_cast<const int32_t*>(r) != 0) continue;
+                *reinterpret_cast<uint16_t*>(r + 0x0C) = a;
+                *reinterpret_cast<uint16_t*>(r + 0x0E) = b;
+            }
+        }
     }
     if (fsmState == kFsmStatePendingClip3) ++g_decisionClip.waitTicksIn1F;
     if (g_decisionClip.waitTicksIn1F < kDecisionClipWaitIn1FTicks &&

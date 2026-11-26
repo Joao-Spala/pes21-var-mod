@@ -267,7 +267,8 @@ namespace Offsets {
 
     // Replay ring buffer singleton (*(*(0x143703558) + 0x6A8) + 0x40, stride 0x1FB0)
     constexpr uintptr_t ReplaySingleton_RingHolder = 0x6A8;
-    constexpr uintptr_t ReplaySingleton_ActiveSlot = 0x698; // u32, 0 = the live ring (clips use the other slots)
+    constexpr uintptr_t ReplaySingleton_ActiveSlot = 0x698; // u32, buffer selected by the replay screen
+    constexpr uintptr_t ReplaySystem_LiveRing      = 0x8;   // buffer 0 inline (stride 0x50), the live recording
     // Clip registry *(0x143703568): the pointer slot right after the replay system slot 0x143703558 (both loaded by
     // 0x14044BDF6 / 0x14044BE00). Pending record 3 at +0x1A340, its +0x10 type is 0x13 when empty (0x14044BF11).
     constexpr uintptr_t ClipRegistryFromReplaySystemSlot = 0x10;
