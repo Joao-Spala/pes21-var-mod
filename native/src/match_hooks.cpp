@@ -63,6 +63,12 @@ FnGetTimeFloat      g_fnGetTimeFloat      = nullptr;
 FnGetPlayerBySlot   g_fnGetPlayerBySlot   = nullptr;
 FnReplaySetFrame    g_fnReplaySetFrame    = nullptr;
 FnReplayGetFocusPos g_fnReplayGetFocusPos = nullptr;
+// Frames left in which the replay camera re-centres on its focus after a seek or focus change. SetFrame
+// (0x14217E800) only stores the frame index and tail-calls 0x14217BF20 with speed 0, which returns before
+// touching any actor: the actors take the new frame on a later update, so the focus position read in the
+// same call is still the old one. Render/replay-controller thread only.
+int g_cameraFollowFramesLeft = 0;
+constexpr int kCameraFollowFrames = 8;
 
 uintptr_t g_gmatchPtrAddr          = 0; // Address of global GMATCH* (0x143702208)
 uintptr_t g_matchRosterPtrAddr     = 0; // Address of global MatchRoster* (0x143714240)
@@ -2720,21 +2726,8 @@ void __fastcall Detour_ReplayCtrlSync(void* replayCtrl) {
                     }
                     g_fnReplaySetFrame(player, targetFrame);
 
-                    // Immediately refresh 3D Replay camera LookAtPos at the sought frame (even while paused)
-                    if (!cmd.hasFocusTarget && g_fnReplayGetFocusPos) {
-                        uint8_t* cam = *reinterpret_cast<uint8_t**>(ctrl + Offsets::ReplayCtrl_CameraPtr);
-                        if (IsValidPtr(cam)) {
-                            uint8_t* camState = *reinterpret_cast<uint8_t**>(cam + Offsets::ReplayCam_StatePtr);
-                            if (IsValidPtr(camState)) {
-                                const int32_t curFocus = std::clamp(
-                                    *reinterpret_cast<const int32_t*>(ctrl + Offsets::ReplayCtrl_FocusSlotDword), 0, 22);
-                                const float* pos = g_fnReplayGetFocusPos(player, curFocus);
-                                if (IsValidPtr(pos)) {
-                                    std::memcpy(camState + Offsets::ReplayCamState_LookAtPos, pos, 12);
-                                }
-                            }
-                        }
-                    }
+                    // The camera re-centres on its focus over the next frames, once the actors hold the new frame
+                    g_cameraFollowFramesLeft = kCameraFollowFrames;
 
                     (void)usedExactRingTime;
                 }
@@ -2767,8 +2760,39 @@ void __fastcall Detour_ReplayCtrlSync(void* replayCtrl) {
                         *reinterpret_cast<int32_t*>(camState + Offsets::ReplayCamState_FocusTarget) = target;
                     }
                 }
+                g_cameraFollowFramesLeft = kCameraFollowFrames;
             }
         }
+
+        // Camera follow after a seek or focus change: target onto the focus at the current frame and the camera
+        // position by the same offset (a paused replay never moves the camera by itself)
+        if (g_cameraFollowFramesLeft > 0 && g_fnReplayGetFocusPos) {
+            --g_cameraFollowFramesLeft;
+            uint8_t* player = ctrl + Offsets::ReplayCtrl_PlayerOffset;
+            uint8_t* cam = *reinterpret_cast<uint8_t**>(ctrl + Offsets::ReplayCtrl_CameraPtr);
+            if (IsValidPtr(cam)) {
+                uint8_t* camState = *reinterpret_cast<uint8_t**>(cam + Offsets::ReplayCam_StatePtr);
+                if (IsValidPtr(camState)) {
+                    const int32_t curFocus = std::clamp(
+                        *reinterpret_cast<const int32_t*>(ctrl + Offsets::ReplayCtrl_FocusSlotDword), 0, 22);
+                    const float* pos = g_fnReplayGetFocusPos(player, curFocus);
+                    if (IsValidPtr(pos)) {
+                        float focus[3];
+                        float target[3];
+                        float position[3];
+                        std::memcpy(focus, pos, sizeof(focus));
+                        std::memcpy(target, camState + Offsets::ReplayCamState_LookAtPos, sizeof(target));
+                        std::memcpy(position, camState + Offsets::ReplayCamState_Position, sizeof(position));
+                        if (PitchGeometry::ReplayCameraMath::FollowFocus(target, position, focus)) {
+                            std::memcpy(camState + Offsets::ReplayCamState_LookAtPos, target, sizeof(target));
+                            std::memcpy(camState + Offsets::ReplayCamState_Position, position, sizeof(position));
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        g_cameraFollowFramesLeft = 0;
     }
 
     g_hookReplayCtrlSync.Original<FnReplayCtrlSync>()(replayCtrl);

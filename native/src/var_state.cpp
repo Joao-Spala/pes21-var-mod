@@ -1180,6 +1180,51 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
     std::sort(markers.begin(), markers.end(), [](const ReplayMarker& a, const ReplayMarker& b) {
         return a.time60Hz < b.time60Hz;
     });
+    FlagTopSuspect(markers);
+}
+
+// A missed foul is a contact the referee let go: official events (he already decided) never qualify, and
+// physical markers folded into an official one never reach this list. The engine's own contact model weighs
+// most: a challenge that made the opponent go down (nearFoul: contact reaction caused by that player) is the
+// classic unpunished foul. Then the challenge type, the zone (in the box it is a penalty) and how tight the
+// contact was. A dive scores low on purpose: it can deserve a card, but it is not a foul against the diver.
+int32_t VarState::SuspicionScore(const ReplayMarker& m) {
+    if (m.isOfficialEvent) return 0;
+    int32_t s = 0;
+    switch (m.kind) {
+        case IncidentKind::SlideTackle:  s = 46; break;
+        case IncidentKind::StandTackle:  s = 38; break;
+        case IncidentKind::VictimFall:   s = 34; break;
+        case IncidentKind::BodyCharge:   s = 30; break;
+        case IncidentKind::Dive:         s = 22; break;
+        case IncidentKind::CloseContact: s = 12; break;
+        default:                         return 0;
+    }
+    if (m.nearFoul && m.kind != IncidentKind::Dive) s += 22;
+    if (m.signedBoxDistM < 0.0f) s += 24;
+    else if (m.signedBoxDistM < 6.0f) s += 8;
+    if (m.contactDistM < 1.0f) s += 10;
+    else if (m.contactDistM < 1.5f) s += 5;
+    return std::clamp(s, 0, 100);
+}
+
+void VarState::FlagTopSuspect(std::vector<ReplayMarker>& markers) {
+    int best = -1;
+    for (int i = 0; i < static_cast<int>(markers.size()); ++i) {
+        ReplayMarker& m = markers[static_cast<size_t>(i)];
+        m.suspicion = SuspicionScore(m);
+        m.topSuspect = false;
+        if (m.suspicion < kSuspectThreshold) continue;
+        if (best < 0) { best = i; continue; }
+        const ReplayMarker& b = markers[static_cast<size_t>(best)];
+        // Strongest suspicion, then tighter contact, then the latest (closest to the stoppage being reviewed)
+        if (m.suspicion > b.suspicion ||
+            (m.suspicion == b.suspicion && m.contactDistM < b.contactDistM) ||
+            (m.suspicion == b.suspicion && m.contactDistM == b.contactDistM && m.time60Hz > b.time60Hz)) {
+            best = i;
+        }
+    }
+    if (best >= 0) markers[static_cast<size_t>(best)].topSuspect = true;
 }
 
 std::vector<ReplayMarker> VarState::GetReplayWindowMarkers(int32_t winPhase, float winStartTime, float winEndTime) const {

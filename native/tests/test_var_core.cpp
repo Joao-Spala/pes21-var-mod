@@ -1408,6 +1408,67 @@ void PatchReplayTelemetryForTest(bool active, int32_t cursorPhase, float cursorT
         0, 0.0f, 0, 0, 0, 0, 0, -1, -1);
 }
 
+void TestSuspectAndCameraFollow() {
+    auto mk = [](IncidentKind kind, bool nearFoul, float boxDist, float contact, float t, bool official) {
+        ReplayMarker m{};
+        m.kind = kind;
+        m.nearFoul = nearFoul;
+        m.signedBoxDistM = boxDist;
+        m.contactDistM = contact;
+        m.time60Hz = t;
+        m.isOfficialEvent = official;
+        return m;
+    };
+    // Scores
+    EXPECT_EQ(VarState::SuspicionScore(mk(IncidentKind::SlideTackle, true, -3.0f, 0.8f, 0, false)), 100,
+              "Slide that floored the opponent in the box must be the maximum");
+    EXPECT_EQ(VarState::SuspicionScore(mk(IncidentKind::SlideTackle, true, 20.0f, 1.2f, 0, false)), 73,
+              "Slide that floored the opponent in midfield");
+    EXPECT_EQ(VarState::SuspicionScore(mk(IncidentKind::CloseContact, false, 20.0f, 1.4f, 0, false)), 17,
+              "A plain close contest is never a suspect");
+    EXPECT_EQ(VarState::SuspicionScore(mk(IncidentKind::SlideTackle, true, -3.0f, 0.5f, 0, true)), 0,
+              "An official decision is never a missed foul");
+    EXPECT_TRUE(VarState::SuspicionScore(mk(IncidentKind::Dive, true, -2.0f, 0.5f, 0, false)) < VarState::kSuspectThreshold,
+                "A dive is not a missed foul even in the box");
+    EXPECT_TRUE(VarState::SuspicionScore(mk(IncidentKind::BodyCharge, true, 20.0f, 1.2f, 0, false)) < VarState::kSuspectThreshold,
+                "A shoulder charge that floors the opponent in midfield stays below the threshold");
+    EXPECT_TRUE(VarState::SuspicionScore(mk(IncidentKind::StandTackle, true, 20.0f, 1.2f, 0, false)) >= VarState::kSuspectThreshold,
+                "A standing tackle that floors the opponent is a suspect");
+
+    // Exactly one top suspect: strongest, then tighter contact, then latest
+    std::vector<ReplayMarker> ms;
+    ms.push_back(mk(IncidentKind::StandTackle, true, 20.0f, 1.2f, 100.0f, false));   // 65
+    ms.push_back(mk(IncidentKind::SlideTackle, true, 20.0f, 1.2f, 200.0f, false));   // 73
+    ms.push_back(mk(IncidentKind::SlideTackle, true, 20.0f, 1.2f, 300.0f, false));   // 73, later
+    ms.push_back(mk(IncidentKind::SlideTackle, true, -2.0f, 0.5f, 400.0f, true));    // official: 0
+    VarState::FlagTopSuspect(ms);
+    int flagged = 0;
+    for (const auto& m : ms) flagged += m.topSuspect ? 1 : 0;
+    EXPECT_EQ(flagged, 1, "Exactly one marker must be the top suspect");
+    EXPECT_TRUE(ms[2].topSuspect, "Tie on score and contact goes to the latest play");
+    ms[1].contactDistM = 0.9f;  // tighter contact now wins (score 78)
+    VarState::FlagTopSuspect(ms);
+    EXPECT_TRUE(ms[1].topSuspect && !ms[2].topSuspect, "Higher score must win");
+    std::vector<ReplayMarker> weak{ mk(IncidentKind::CloseContact, false, 20.0f, 1.4f, 10.0f, false) };
+    VarState::FlagTopSuspect(weak);
+    EXPECT_TRUE(!weak[0].topSuspect, "No suspect below the threshold");
+
+    // Replay camera follow: target onto the focus, position moved by the same offset
+    float target[3] = { 10.0f, 1.0f, 5.0f };
+    float position[3] = { 10.0f, 12.0f, -20.0f };
+    const float focus[3] = { -30.0f, 0.5f, 8.0f };
+    EXPECT_TRUE(PitchGeometry::ReplayCameraMath::FollowFocus(target, position, focus), "Valid focus must be followed");
+    EXPECT_TRUE(target[0] == -30.0f && target[1] == 0.5f && target[2] == 8.0f, "Target must land on the focus");
+    EXPECT_TRUE(position[0] == -30.0f && std::fabs(position[1] - 11.5f) < 1e-5f && position[2] == -17.0f,
+                "Camera position must keep its offset from the target");
+    const float bad[3] = { std::nanf(""), 0.0f, 0.0f };
+    const float offWorld[3] = { 900.0f, 0.0f, 0.0f };
+    EXPECT_TRUE(!PitchGeometry::ReplayCameraMath::FollowFocus(target, position, bad), "NaN focus must be rejected");
+    EXPECT_TRUE(!PitchGeometry::ReplayCameraMath::FollowFocus(target, position, offWorld), "Off-world focus must be rejected");
+    EXPECT_TRUE(target[0] == -30.0f && position[0] == -30.0f, "Rejected focus must leave the camera untouched");
+    MarkPass("TestSuspectAndCameraFollow");
+}
+
 void TestSnapshotInterpolation() {
     auto& st = VarState::Instance();
     st.ResetMatch();
@@ -2896,6 +2957,7 @@ int main() {
     TestV4BroadcastHudAndRadar();
     TestPerfOverhaulEquivalence();
     TestSnapshotInterpolation();
+    TestSuspectAndCameraFollow();
     TestRemapAndLanguage();
     TestHudRenderSmoke();
     TestCompositeVerdictPoolAndRcuOffsets();

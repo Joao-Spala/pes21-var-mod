@@ -466,6 +466,10 @@ struct ReplayMarker {
     float        contactDistM    = 99.0f;
     float        signedBoxDistM  = 99.0f;
     bool         nearFoul        = false;
+    // 0..100: how likely this is a foul the referee did not give (official events score 0). The single
+    // strongest marker of the window at or above kSuspectThreshold is flagged as the play to review.
+    int32_t      suspicion       = 0;
+    bool         topSuspect      = false;
     char         label[48]       = {};
 };
 
@@ -696,6 +700,10 @@ public:
     static bool DetectPhysicalIncident(const PlaySnapshot& snap, const PitchDims& dims,
                                        const float teamAttackDir[2], DetectedIncident& outInc);
     static void FormatIncidentLabel(IncidentKind kind, bool insideBox, char* outBuf, size_t outSize);
+    // Suspicion of a missed foul for a timeline marker (see ReplayMarker::suspicion)
+    static constexpr int32_t kSuspectThreshold = 60;
+    static int32_t SuspicionScore(const ReplayMarker& m);
+    static void FlagTopSuspect(std::vector<ReplayMarker>& markers);
 
 private:
     VarState();

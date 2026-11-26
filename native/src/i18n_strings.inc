@@ -37,6 +37,8 @@ I18N("Lance anterior", "Previous incident")
 I18N("Próximo lance", "Next incident")
 I18N("%s em %s", "%s on %s")
 I18N("Clique para ir ao lance", "Click to jump to this incident")
+I18N("PROVÁVEL FALTA NÃO MARCADA", "LIKELY MISSED FOUL")
+I18N("Lance suspeito", "Suspect play")
 
 // ---- Incident card
 I18N("FALTA MARCADA", "FOUL GIVEN")

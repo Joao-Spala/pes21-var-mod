@@ -6,6 +6,8 @@
 - **Interpolation**: in slow motion and between two frames, ball and player positions are blended between the two neighbouring frames. Actions, contact and possession stay those of the nearest frame, and a stopped clock, a gap or a teleport (restart, substitution) is never blended.
 - **Lighter search**: the replay cursor lookup walks an 8-byte key per frame instead of whole snapshots, and recording a frame no longer invalidates the event history cache. Measured: about 2.5 us per cursor move and 0.04 us per recorded frame, against a 16,600 us frame.
 - Ring memory grows from 0.4 MB to 2.5 MB.
+- **Camera follows the jump**: clicking a play on the replay bar now re-centres the 3D replay camera on its focus at the new frame. `ReplayPlayer::SetFrame` only stores the frame index, so the focus position read in the same call was the old one and the paused camera stayed put. For the next 8 frames the target moves onto the focus and the camera position moves by the same offset, keeping the angle and distance.
+- **Suspect play**: every play the referee let go gets a missed-foul score (challenge type, whether the opponent went down from that contact, inside or near the box, contact distance). The strongest one at or above the threshold pulses in gold on the replay bar until you open it, then keeps a quiet gold ring. Its tooltip reads "LIKELY MISSED FOUL" and the incident card shows a gold dot. Official decisions and dives never qualify.
 
 ## v4.4.8
 

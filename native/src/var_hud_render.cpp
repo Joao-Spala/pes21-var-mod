@@ -86,6 +86,7 @@ constexpr ImU32 Yellow     = IM_COL32(246, 196, 46, 255);
 constexpr ImU32 Red        = IM_COL32(236, 76, 84, 255);
 constexpr ImU32 Green      = IM_COL32(52, 199, 112, 255);
 constexpr ImU32 Orange     = IM_COL32(248, 150, 64, 255);
+constexpr ImU32 Suspect    = IM_COL32(255, 214, 102, 255);
 constexpr ImU32 Neutral    = IM_COL32(176, 186, 202, 255);
 // Pitch
 constexpr ImU32 Surround   = IM_COL32(15, 31, 24, 255);
@@ -871,11 +872,39 @@ void RenderTimeline(ImDrawList* dl, float contentW, VarState& state) {
         }
     }
 
+    // The suspect pulses (two sonar rings) until the user opens it once in this replay window. Afterwards it
+    // keeps a quiet gold ring, so it stays findable without competing with the selection.
+    static int32_t s_seenPhase = -999;
+    static float s_seenTime = -1e9f;
+    int suspectIdx = -1;
+    for (int i = 0; i < total; ++i) {
+        if (markers[i].topSuspect) { suspectIdx = i; break; }
+    }
+    const bool suspectSeen = suspectIdx >= 0 && markers[suspectIdx].matchPhase == s_seenPhase &&
+                             std::fabs(markers[suspectIdx].time60Hz - s_seenTime) < 1.0f;
+    if (suspectIdx >= 0 && suspectIdx == selIdx && !suspectSeen) {
+        s_seenPhase = markers[suspectIdx].matchPhase;
+        s_seenTime = markers[suspectIdx].time60Hz;
+    }
+
     for (int i = 0; i < total; ++i) {
         const auto& m = markers[i];
         const float mx = trackX0 + std::clamp(m.timelineNorm, 0.0f, 1.0f) * trackW;
         const bool emph = (i == selIdx) || (i == hovered);
         const float r = emph ? Uf(5.5f) : (m.isOfficialEvent ? Uf(4.5f) : Uf(3.6f));
+        if (i == suspectIdx) {
+            if (!suspectSeen) {
+                const float t = static_cast<float>(ImGui::GetTime());
+                for (int k = 0; k < 2; ++k) {
+                    const float ph = std::fmod(t / 1.6f + 0.5f * static_cast<float>(k), 1.0f);
+                    const float rr = r + Uf(2.0f) + ph * Uf(11.0f);
+                    const int a = static_cast<int>(200.0f * (1.0f - ph) * (1.0f - ph));
+                    dl->AddCircle(ImVec2(mx, cy), rr, (C::Suspect & 0x00FFFFFFu) | (static_cast<ImU32>(a) << 24), 24,
+                                  std::max(1.2f, Uf(1.6f)));
+                }
+            }
+            dl->AddCircle(ImVec2(mx, cy), r + Uf(2.4f), C::Suspect, 20, std::max(1.2f, Uf(1.5f)));
+        }
         dl->AddCircleFilled(ImVec2(mx, cy), r + Uf(1.6f), C::PanelSolid, 16);
         dl->AddCircleFilled(ImVec2(mx, cy), r, MarkerColor(m), 16);
         if (emph) dl->AddCircle(ImVec2(mx, cy), r + Uf(3.0f), IM_COL32(255, 255, 255, 220), 20, std::max(1.2f, Uf(1.4f)));
@@ -890,6 +919,11 @@ void RenderTimeline(ImDrawList* dl, float contentW, VarState& state) {
         char off[80];
         g_controller.FormatPlayerBroadcastBuf(m.offenderSlot, off, sizeof(off));
         ImGui::BeginTooltip();
+        if (m.topSuspect) {
+            if (F.sm) ImGui::PushFont(F.sm);
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C::Suspect), "%s", Tr("PROVÁVEL FALTA NÃO MARCADA"));
+            if (F.sm) ImGui::PopFont();
+        }
         if (F.strong) ImGui::PushFont(F.strong);
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(MarkerColor(m)), "%02d:%02d  \xC2\xB7  %s", mm, ms, Tr(m.label));
         if (F.strong) ImGui::PopFont();
@@ -953,7 +987,13 @@ void RenderIncidentCard(ImDrawList* dl, float contentW, VarState& state) {
     }
     const float zoneW = TrackedW(zone);
     Tracked(dl, ImVec2(e.x - pad - zoneW, y1), inBox ? C::Red : C::Text3, zone);
-    dl->AddCircleFilled(ImVec2(p.x + pad + U(4), y1 + row1H * 0.5f), U(4), sev, 12);
+    // The play under review is the suspect of this replay: gold dot with a ring, matching its timeline marker
+    const auto& cardMarkers = g_controller.ReplayMarkers();
+    const int cardSel = g_controller.SelectedMarkerIndex();
+    const bool cardSuspect = cardSel >= 0 && cardSel < static_cast<int>(cardMarkers.size()) &&
+                             cardMarkers[static_cast<size_t>(cardSel)].topSuspect;
+    dl->AddCircleFilled(ImVec2(p.x + pad + U(4), y1 + row1H * 0.5f), U(4), cardSuspect ? C::Suspect : sev, 12);
+    if (cardSuspect) dl->AddCircle(ImVec2(p.x + pad + U(4), y1 + row1H * 0.5f), U(6.5f), C::Suspect, 16, std::max(1.0f, Uf(1.2f)));
     const float titleMaxW = std::max(U(40), contentW - pad * 2 - zoneW - U(26));
     // Title uses tracked caption in primary colour (clipped)
     TrackedFit(dl, ImVec2(p.x + pad + U(14), y1), C::Text, title, titleMaxW);

@@ -241,9 +241,11 @@ namespace Offsets {
     constexpr uintptr_t ReplayCtrl_CameraMode      = 0x64C; // uint8_t (0..2=Follow, 3=FreeCam)
     constexpr uintptr_t ReplayCtrl_FocusSlotByte   = 0x64D; // uint8_t (0=ball, 1..22=player)
 
-    // ReplayCamera (0x141EB8FF0 / 0x141EB9390)
+    // ReplayCamera (0x141EB8FF0 / 0x141EB9390). 0x141EB93A0 hands the state to 0x1419FD4E0, a plain
+    // SetLookAt(position, target, up) copy: +0x0C is the camera position, +0x00 the target, +0x18 the up vector
     constexpr uintptr_t ReplayCam_StatePtr         = 0x18;
     constexpr uintptr_t ReplayCamState_LookAtPos   = 0x00; // Vec3 (12 bytes)
+    constexpr uintptr_t ReplayCamState_Position    = 0x0C; // Vec3 (12 bytes)
     constexpr uintptr_t ReplayCamState_FocusTarget = 0x44; // int32_t (0=ball, 1..22=player)
 
     // Replay ring buffer singleton (*(*(0x143703558) + 0x6A8) + 0x40, stride 0x1FB0)
@@ -600,6 +602,24 @@ inline Vec3 CalcThrowInSpot(const PitchDims& d, const Vec3& refPos) {
     const float zEdge = (d.halfWidth > 0.1f) ? (d.halfWidth - 0.1f) : d.halfWidth;
     return Vec3{ x, 0.0f, zSign * zEdge };
 }
+
+// Replay camera follow after a seek: the target goes to the focus position at the new frame and the camera
+// position moves by the same offset, so the view keeps its angle and distance instead of turning from the old
+// spot. Returns false (nothing written) for a non-finite or off-world focus position.
+namespace ReplayCameraMath {
+inline bool FollowFocus(float target[3], float position[3], const float focus[3]) {
+    for (int i = 0; i < 3; ++i) {
+        if (!std::isfinite(focus[i]) || !std::isfinite(target[i]) || !std::isfinite(position[i])) return false;
+    }
+    if (std::fabs(focus[0]) > 150.0f || std::fabs(focus[2]) > 150.0f || focus[1] < -10.0f || focus[1] > 80.0f) return false;
+    for (int i = 0; i < 3; ++i) {
+        const float delta = focus[i] - target[i];
+        target[i] = focus[i];
+        position[i] += delta;
+    }
+    return true;
+}
+} // namespace ReplayCameraMath
 
 // Formats match phase + 60Hz half-time ticks into mm:ss (verified against 0x1420C6760 / 0x140A6C3B0).
 inline void FormatMatchClock(int32_t matchPhase, float time60Hz, int& outMinutes, int& outSeconds) {
