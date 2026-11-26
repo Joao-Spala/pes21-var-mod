@@ -32,6 +32,25 @@ std::atomic<bool> g_resetPending{ false };
 // VarState data revision captured this frame (render thread only). Keys per-frame caches so a new
 // snapshot, incident, verdict or match reset always invalidates them.
 uint32_t g_frameDataRevision = 0;
+// Horizontal extent of the open panel in the last frame it was drawn: banners and toasts are centred in the free
+// part of the screen so they never cover the panel on small or narrow screens
+float    g_panelX0 = 0.0f;
+float    g_panelX1 = 0.0f;
+uint64_t g_panelDrawnFrame = 0;
+uint64_t g_hudFrame = 0;
+
+// X of an element of width w: centred on the screen, or in the free side when the open panel would cover it
+float CenterOutsidePanel(float vw, float w) {
+    const float centered = std::floor((vw - w) * 0.5f);
+    if (g_panelDrawnFrame + 1 < g_hudFrame || g_panelX1 <= g_panelX0) return centered;
+    if (centered + w <= g_panelX0 || centered >= g_panelX1) return centered;
+    const float leftFree = g_panelX0;
+    const float rightFree = vw - g_panelX1;
+    const float gap = 12.0f;
+    if (leftFree >= rightFree && w + 2.0f * gap <= leftFree) return std::floor((leftFree - w) * 0.5f);
+    if (rightFree > leftFree && w + 2.0f * gap <= rightFree) return std::floor(g_panelX1 + (rightFree - w) * 0.5f);
+    return centered; // no free side wide enough: keep it centred
+}
 HudPage g_pageAtFrameStart = HudPage::Main; // page before this frame's mouse clicks
 uint64_t g_frameNamesRevision = 0; // roster + teams revisions of this frame (names in summaries)
 bool g_scrollToSelection = false;
@@ -594,12 +613,6 @@ void PanelShadow(ImVec2 a, ImVec2 b, float radius) {
     }
 }
 
-float ComputeUiScale(float vh, int preset) {
-    float s = std::clamp(vh / 1080.0f, 0.78f, 2.2f);
-    if (preset == 0) s *= 0.88f;
-    else if (preset == 2) s *= 1.14f;
-    return std::round(s * 20.0f) / 20.0f;
-}
 
 // ============================================================================
 // Banners, collapsed pill, debug telemetry
@@ -629,7 +642,7 @@ void RenderBanner(float vw, float vh, const char* storedText, uint64_t startMs, 
     const float badgeMeasure = Measure(Txt::Strong, "VAR") + U(14);
     const float w = U(14) + badgeMeasure + U(14) + titleW + (detail ? U(14) + detailW : 0.0f) + U(18);
     const float slide = (1.0f - alpha) * U(-10);
-    const ImVec2 p(std::floor((vw - w) * 0.5f), (isAlert ? U(72) : U(24)) + slide);
+    const ImVec2 p(CenterOutsidePanel(vw, w), (isAlert ? U(72) : U(24)) + slide);
     const ImVec2 e(p.x + w, p.y + h);
 
     ImDrawList* dl = ImGui::GetForegroundDrawList();
@@ -1907,7 +1920,7 @@ void RenderConfirmToast(float vw, float vh) {
     const float h = U(40);
     const float iconW = U(22);
     const float w = std::min(vw - U(40), U(18) + iconW + U(10) + textW + U(20));
-    const ImVec2 p(std::floor((vw - w) * 0.5f), std::floor(vh * 0.80f + rise));
+    const ImVec2 p(CenterOutsidePanel(vw, w), std::floor(vh * 0.80f + rise));
     const ImVec2 e(p.x + w, p.y + h);
     dl->AddRectFilled(ImVec2(p.x, p.y + U(3)), ImVec2(e.x, e.y + U(3)), WithAlpha(IM_COL32(0, 0, 0, 255), 0.35f * a), U(kRadCard));
     dl->AddRectFilled(p, e, WithAlpha(IM_COL32(16, 34, 26, 255), 0.97f * a), U(kRadCard));
@@ -1926,7 +1939,7 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& poo
     const HudConfig cfg = g_controller.Config();
     const auto& tel = g_controller.Telemetry();
     const auto& teams = g_controller.Teams();
-    const float panelW = std::min(std::max(U(440), 340.0f), std::max(vw * 0.42f, 240.0f));
+    const float panelW = std::min(U(440), std::max(vw * 0.42f, 240.0f));
     const float margin = U(20);
     const float maxPanelH = std::max(340.0f, vh - 2.0f * margin);
     const float posX = cfg.dockLeft ? margin : (vw - margin - panelW);
@@ -1941,6 +1954,9 @@ void RenderOpenPanel(float vw, float vh, VarState& state, const VerdictPool& poo
     constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
                                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    g_panelX0 = posX;
+    g_panelX1 = posX + panelW;
+    g_panelDrawnFrame = g_hudFrame;
     if (ImGui::Begin("##VarPanelV5", nullptr, kFlags)) {
         const float contentW = ImGui::GetContentRegionAvail().x;
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -2130,8 +2146,21 @@ void ApplyTheme() {
 // ============================================================================
 // Public API
 // ============================================================================
-bool VarHudRenderer::EnsureFonts(float viewportH) {
-    const float s = ComputeUiScale(viewportH, g_lastScalePreset);
+// The HUD keeps the same share of the screen at any resolution: 1.0 at 1920x1080, proportional to the height,
+// and limited by the width so 4:3 / 5:4 screens and narrow windows never get a panel too wide for them
+// (1440 px of width per 1080 px of height = 4:3). A floor keeps text readable on tiny backbuffers and a ceiling
+// keeps the font atlas reasonable at 5K / 8K. The size preset (Pequeno / Médio / Grande) scales on top.
+float VarHudRenderer::ComputeUiScale(float viewportW, float viewportH, int preset) {
+    if (viewportW <= 0.0f || viewportH <= 0.0f) return 1.0f;
+    float s = std::min(viewportH / 1080.0f, viewportW / 1440.0f);
+    if (preset == 0) s *= 0.88f;
+    else if (preset == 2) s *= 1.14f;
+    s = std::clamp(s, kMinUiScale, kMaxUiScale);
+    return std::round(s * 20.0f) / 20.0f;
+}
+
+bool VarHudRenderer::EnsureFonts(float viewportW, float viewportH) {
+    const float s = ComputeUiScale(viewportW, viewportH, g_lastScalePreset);
     if (F.body && std::fabs(s - F.baked) < 0.01f) return false;
 
     ImGuiIO& io = ImGui::GetIO();
@@ -2223,6 +2252,7 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
         InputManager::CancelCapture();
     }
 
+    ++g_hudFrame;
     // Single mutex lock + revision-cached players/teams/history/sync/markers (0 heap allocs on steady frames)
     state.CaptureHudRenderSnapshot(s_renderSnap);
     g_frameDataRevision = s_renderSnap.historyRev;
@@ -2232,7 +2262,7 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
     const VerdictPool& pool = s_renderSnap.pool;
     const HudConfig& cfg = s_renderSnap.cfg;
     g_lastScalePreset = cfg.scalePreset;
-    S = (F.baked > 0.0f) ? F.baked : ComputeUiScale(viewportH, cfg.scalePreset);
+    S = (F.baked > 0.0f) ? F.baked : ComputeUiScale(viewportW, viewportH, cfg.scalePreset);
 
     g_controller.UpdateContext(tel, s_renderSnap.sync, s_renderSnap.players, s_renderSnap.teams,
                                s_renderSnap.history, s_renderSnap.stats, cfg,

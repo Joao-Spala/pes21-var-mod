@@ -3,6 +3,7 @@
 #include "heap_guard.h"
 #include "i18n.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "inline_hook.h"
 #include "input_manager.h"
 #include "match_hooks.h"
@@ -1894,7 +1895,28 @@ void TestHudRenderSmoke() {
         st.UpdatePlayers(pl);
     }
 
-    const float sizes[3][2] = { { 1920.0f, 1080.0f }, { 1280.0f, 720.0f }, { 3840.0f, 2160.0f } };
+    // UI scale keeps the same share of the screen: proportional to the height on 16:9 and wider screens,
+    // limited by the width on 4:3 / 5:4, never below the readable floor nor above the atlas ceiling
+    {
+        struct ScaleCase { float w, h, expect; };
+        const ScaleCase cases[] = {
+            { 1920.0f, 1080.0f, 1.00f }, { 1280.0f, 720.0f, 0.65f }, { 1366.0f, 768.0f, 0.70f },
+            { 1600.0f, 900.0f, 0.85f }, { 2560.0f, 1440.0f, 1.35f }, { 3840.0f, 2160.0f, 2.00f },
+            { 2560.0f, 1080.0f, 1.00f }, { 3440.0f, 1440.0f, 1.35f }, { 1024.0f, 768.0f, 0.70f },
+            { 1280.0f, 1024.0f, 0.90f }, { 800.0f, 600.0f, 0.60f }, { 7680.0f, 4320.0f, 3.00f },
+        };
+        for (const auto& c : cases) {
+            const float sc = VarHudRenderer::ComputeUiScale(c.w, c.h, 1);
+            if (std::fabs(sc - c.expect) > 0.051f) {
+                std::printf("[FAIL] UI scale %.0fx%.0f = %.2f, expected %.2f\n", c.w, c.h, sc, c.expect);
+                ++g_failed;
+                return;
+            }
+        }
+    }
+
+    const float sizes[][2] = { { 1920.0f, 1080.0f }, { 1280.0f, 720.0f }, { 3840.0f, 2160.0f },
+                               { 1024.0f, 768.0f }, { 3440.0f, 1440.0f }, { 1280.0f, 1024.0f }, { 800.0f, 600.0f } };
     int framesRendered = 0;
     for (int lang = 0; lang < 2; ++lang) {
         for (const auto& sz : sizes) {
@@ -1904,7 +1926,7 @@ void TestHudRenderSmoke() {
             PatchReplayTelemetryForTest(true, 0, 1000.0f, 900.0f, 2100.0f);
             VarHudRenderer::RequestReset();
             io.DisplaySize = ImVec2(sz[0], sz[1]);
-            VarHudRenderer::EnsureFonts(sz[1]);
+            VarHudRenderer::EnsureFonts(sz[0], sz[1]);
             io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
 
             auto frame = [&]() {
@@ -1916,10 +1938,35 @@ void TestHudRenderSmoke() {
             };
             const char* langTag = lang ? "en" : "pt";
             const int resTag = static_cast<int>(sz[1]);
-            frame();
-            frame();
-            std::snprintf(shotName, sizeof(shotName), "%s_%d_1_revisao", langTag, resTag);
+            // A resolution change settles in a few frames (panel measures its body, window auto-fits)
+            for (int f = 0; f < 8; ++f) frame();
+            std::snprintf(shotName, sizeof(shotName), "%s_%dx%d_1_revisao", langTag, static_cast<int>(sz[0]), resTag);
             DumpDrawDataBmp(shotName, px, tw, th);
+            // Every HUD window stays inside the screen and the panel keeps a sane share of it
+            {
+                ImGuiContext& g = *ImGui::GetCurrentContext();
+                for (ImGuiWindow* w : g.Windows) {
+                    if (!w->WasActive || w->Hidden || (w->Flags & ImGuiWindowFlags_ChildWindow)) continue;
+                    if (std::strstr(w->Name, "Debug") != nullptr) continue; // ImGui fallback and the debug overlay
+                    if (GetEnvironmentVariableA("VAR_HUD_SNAPSHOT_DIR", nullptr, 0) > 0) {
+                        std::printf("[info] %.0fx%.0f %s pos (%.0f,%.0f) size (%.0f,%.0f) content %.0f\n", sz[0], sz[1], w->Name,
+                                    w->Pos.x, w->Pos.y, w->Size.x, w->Size.y, w->ContentSize.y);
+                    }
+                    const bool inside = w->Pos.x >= -0.5f && w->Pos.y >= -0.5f &&
+                                        w->Pos.x + w->Size.x <= sz[0] + 0.5f && w->Pos.y + w->Size.y <= sz[1] + 0.5f;
+                    if (!inside) {
+                        std::printf("[FAIL] HUD window '%s' outside %.0fx%.0f: pos (%.0f,%.0f) size (%.0f,%.0f)\n",
+                                    w->Name, sz[0], sz[1], w->Pos.x, w->Pos.y, w->Size.x, w->Size.y);
+                        ++g_failed;
+                        return;
+                    }
+                    if (w->Size.x > sz[0] * 0.5f || w->Size.x < sz[0] * 0.12f) {
+                        std::printf("[FAIL] HUD window '%s' width %.0f is not a sane share of %.0f\n", w->Name, w->Size.x, sz[0]);
+                        ++g_failed;
+                        return;
+                    }
+                }
+            }
             EXPECT_EQ(VarHudRenderer::CurrentPage(), HudPage::Main, "Panel must open on REVISAO");
             EXPECT_TRUE(ImGui::GetDrawData()->TotalVtxCount > 0, "Panel produced no geometry");
 
@@ -1928,7 +1975,7 @@ void TestHudRenderSmoke() {
             frame();
             frame();
             EXPECT_EQ(VarHudRenderer::CurrentPage(), HudPage::Configure, "Confirm must open the decision page");
-            std::snprintf(shotName, sizeof(shotName), "%s_%d_1b_decisao", langTag, resTag);
+            std::snprintf(shotName, sizeof(shotName), "%s_%dx%d_1b_decisao", langTag, static_cast<int>(sz[0]), resTag);
             DumpDrawDataBmp(shotName, px, tw, th);
             InputManager::QueueKeyboardAction(NavAction::Back);
             frame();
@@ -1939,14 +1986,14 @@ void TestHudRenderSmoke() {
             frame();
             frame();
             EXPECT_EQ(VarHudRenderer::CurrentPage(), HudPage::Squad, "NextTab must reach CARTOES");
-            std::snprintf(shotName, sizeof(shotName), "%s_%d_2_cartoes", langTag, resTag);
+            std::snprintf(shotName, sizeof(shotName), "%s_%dx%d_2_cartoes", langTag, static_cast<int>(sz[0]), resTag);
             DumpDrawDataBmp(shotName, px, tw, th);
 
             InputManager::QueueKeyboardAction(NavAction::NextTab);
             frame();
             frame();
             EXPECT_EQ(VarHudRenderer::CurrentPage(), HudPage::Config, "NextTab must reach OPCOES");
-            std::snprintf(shotName, sizeof(shotName), "%s_%d_3_opcoes", langTag, resTag);
+            std::snprintf(shotName, sizeof(shotName), "%s_%dx%d_3_opcoes", langTag, static_cast<int>(sz[0]), resTag);
             DumpDrawDataBmp(shotName, px, tw, th);
 
             for (int i = 0; i < kSettingsRowControls; ++i) InputManager::QueueKeyboardAction(NavAction::Down);
@@ -1955,7 +2002,7 @@ void TestHudRenderSmoke() {
             frame();
             frame();
             EXPECT_EQ(VarHudRenderer::CurrentPage(), HudPage::Controls, "Controles row must open the Controls page");
-            std::snprintf(shotName, sizeof(shotName), "%s_%d_4_controles", langTag, resTag);
+            std::snprintf(shotName, sizeof(shotName), "%s_%dx%d_4_controles", langTag, static_cast<int>(sz[0]), resTag);
             DumpDrawDataBmp(shotName, px, tw, th);
 
             // Walk every row (forces scroll-to-selection on 720p) and every column

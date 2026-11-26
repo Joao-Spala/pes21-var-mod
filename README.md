@@ -1,6 +1,6 @@
-# PES 2021 - VAR Mod v4.4.5 (PT-BR & EN)
+# PES 2021 - VAR Mod v4.4.6 (PT-BR & EN)
 
-![Version](https://img.shields.io/badge/Version-v4.4.5-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.4.6-38BDF8?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Idiomas](https://img.shields.io/badge/Idiomas-PT--BR_%7C_English-2EA043?style=for-the-badge)
 ![Sider Compatible](https://img.shields.io/badge/Sider_7.3_%2F_BMPES_16.3-100%25_Compatible-F59E0B?style=for-the-badge)
@@ -24,7 +24,7 @@
 
 ### Instalação
 
-1. Baixe o **`PES2021_VAR_Mod_v4.4.5.zip`** na página de [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
+1. Baixe o **`PES2021_VAR_Mod_v4.4.6.zip`** na página de [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
 2. Feche o jogo e rode o **`VAR_Mod_Gerenciar.bat`**. No menu, escolha **`1 - Instalar ou atualizar`**. Se o jogo estiver aberto, o instalador avisa e não mexe em nada.
    - O instalador acha a pasta do Sider ou do BMPES (ou pede o caminho), copia os arquivos, ativa `lua.enabled = 1` e `luajit.ext.enabled = 1` e registra `lua.module = "var_mod.lua"` no `sider.ini`. Antes de mexer no `sider.ini`, ele cria um backup datado.
 3. Abra o jogo pelo **Sider** (no BMPES, pelo atalho do próprio patch). A DLL só carrega na primeira partida (ou ao abrir o menu do Sider), então a abertura do jogo não fica mais lenta.
@@ -77,7 +77,7 @@ O controle só abre e recolhe o painel. Ele continua controlando o replay normal
 - **Nomes, números e uniformes reais**: lidos da memória do jogo (`MatchRoster`), incluindo substituições ao vivo, avatar do Rumo ao Estrelato e uniformes licenciados ou editados (BMPES). Se o elenco não puder ser lido, o painel mostra `CASA` / `FORA`.
 - **Campo tático 2D**: escala `1:1` com zoom automático na área, linha do penúltimo defensor, contato infrator x vítima e clique no gramado para mover o local da cobrança.
 - **Atalhos e idioma**: remap de cada ação com 2 teclas, troca automática em conflito e proteção contra ficar sem atalho essencial. Interface em **Português (BR)** ou **English**, trocada na hora.
-- **Leve e seguro**: DLL de menos de 1 MB, hook nativo em `GrSwapChain::Present0` (sem dispositivo DX11 extra), texto nítido de 720p a 4K, somente partidas offline e nenhum arquivo do jogo alterado.
+- **Leve e seguro**: DLL de menos de 1 MB, hook nativo em `GrSwapChain::Present0` (sem dispositivo DX11 extra), interface do mesmo tamanho relativo e texto nítido em qualquer resolução (720p a 4K, ultrawide, 4:3), somente partidas offline e nenhum arquivo do jogo alterado.
 
 ### Solução de problemas
 
@@ -100,7 +100,7 @@ Video assistant referee (**VAR**) for **eFootball PES 2021 (`v1.7.2.0`, Steam)**
 
 ### Installation
 
-1. Download **`PES2021_VAR_Mod_v4.4.5.zip`** from the [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) page and extract it anywhere.
+1. Download **`PES2021_VAR_Mod_v4.4.6.zip`** from the [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) page and extract it anywhere.
 2. Close the game and run **`VAR_Mod_Gerenciar.bat`**. In the menu, pick **`1 - Instalar ou atualizar`** (install or update). If the game is still open, the installer says so and changes nothing.
    - The installer finds your Sider or BMPES folder (or asks for the path), copies the files, enables `lua.enabled = 1` and `luajit.ext.enabled = 1` and registers `lua.module = "var_mod.lua"` in `sider.ini`. It makes a timestamped backup of `sider.ini` first.
 3. Launch the game through **Sider** (for BMPES, through the patch launcher). The DLL only loads on the first match (or when the Sider menu is opened), so game startup is not slowed down.
@@ -153,7 +153,7 @@ The gamepad only opens and collapses the panel and keeps controlling the replay.
 - **Real names, numbers and kits**: read from game memory (`MatchRoster`), including live substitutions, Become a Legend avatar and licensed or edited kits (BMPES). If the squad cannot be read, the panel shows `HOME` / `AWAY`.
 - **2D tactical pitch**: `1:1` scale with automatic box zoom, second-to-last defender line, offender vs fouled contact and click-to-move restart spot.
 - **Shortcuts and language**: remap every action with 2 keys, automatic swap on conflict and a guard that never leaves an essential action unbound. UI in **English** or **Português (BR)**, switched instantly.
-- **Light and safe**: DLL under 1 MB, native `GrSwapChain::Present0` hook (no extra DX11 device), crisp text from 720p to 4K, offline matches only and no game file modified.
+- **Light and safe**: DLL under 1 MB, native `GrSwapChain::Present0` hook (no extra DX11 device), the same relative size and crisp text at any resolution (720p to 4K, ultrawide, 4:3), offline matches only and no game file modified.
 
 ### Troubleshooting
 

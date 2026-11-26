@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.4.6
+
+- **Interface do mesmo tamanho relativo em qualquer resolução**: a escala segue a altura da tela (1,0 em 1080p) e é limitada pela largura, então o painel ocupa a mesma fração da tela de 720p a 4K, em ultrawide, 4:3 e 5:4. Antes, em 720p o painel ficava proporcionalmente maior que o normal, em 4:3 e 5:4 a largura não era considerada, e acima de 4K ele ficava pequeno. Há um piso de legibilidade em telas muito pequenas e um teto em 5K e 8K. O tamanho escolhido em Opções (Pequeno, Médio, Grande) continua valendo por cima.
+- **Avisos fora do painel**: os avisos do topo e de confirmação são centralizados na parte livre da tela quando o painel aberto ficaria por baixo deles.
+- **Validado por teste em 12 resoluções**: a escala proporcional é conferida em 12 resoluções, e em 7 delas, nos dois idiomas, o painel desenhado fica inteiro dentro da tela e com largura proporcional.
+
 ## v4.4.5
 
 Verificação tripla final por três ângulos novos (temporização do executor contra o binário, detecção e classificação de lances, empacotamento e documentação) e rodada de convergência.

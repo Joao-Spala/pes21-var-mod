@@ -307,7 +307,11 @@ public:
     // Builds the HUD fonts rasterized at the exact UI scale of this resolution (crisp text from 720p to
     // 4K). Must be called OUTSIDE NewFrame/Render. Returns true when the font atlas was (re)built, so the
     // renderer backend must recreate its font texture (ImGui_ImplDX11_InvalidateDeviceObjects).
-    static bool EnsureFonts(float viewportH);
+    static bool EnsureFonts(float viewportW, float viewportH);
+    // UI scale for a backbuffer: same share of the screen at any resolution (see the definition)
+    static float ComputeUiScale(float viewportW, float viewportH, int preset);
+    static constexpr float kMinUiScale = 0.60f;
+    static constexpr float kMaxUiScale = 3.00f;
     static void ResetFonts(); // ImGui context destroyed
     static void TickIdle();
     static void RenderFrame(float viewportW, float viewportH);

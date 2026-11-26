@@ -127,7 +127,7 @@ bool InitImGuiLocked(IDXGISwapChain* swapChain) {
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
 
     // Fonts are built by VarHudRenderer::EnsureFonts at the exact UI scale of the backbuffer (crisp 720p..4K)
-    VarHudRenderer::EnsureFonts(static_cast<float>(desc.BufferDesc.Height));
+    VarHudRenderer::EnsureFonts(static_cast<float>(desc.BufferDesc.Width), static_cast<float>(desc.BufferDesc.Height));
 
     ImGui::StyleColorsDark();
     if (!ImGui_ImplDX11_Init(g_device, g_context)) {
@@ -222,7 +222,7 @@ void RenderOverlayOnSwapChainLocked(IDXGISwapChain* swapChain, bool alreadyPolle
         g_context->OMGetRenderTargets(1, &prevRtv0, &prevDsv);
 
         // Resolution or HUD size preset changed: re-rasterize fonts at the new scale (outside the ImGui frame)
-        if (VarHudRenderer::EnsureFonts(vh)) {
+        if (VarHudRenderer::EnsureFonts(vw, vh)) {
             ImGui_ImplDX11_InvalidateDeviceObjects(); // NewFrame recreates the font texture
         }
         ImGui_ImplDX11_NewFrame();
