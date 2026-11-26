@@ -1408,6 +1408,58 @@ void PatchReplayTelemetryForTest(bool active, int32_t cursorPhase, float cursorT
         0, 0.0f, 0, 0, 0, 0, 0, -1, -1);
 }
 
+void TestDecisionReplayWindow() {
+    using namespace PitchGeometry::ReplayClipMath;
+    // Ring of 660 frames, 600 recorded, match clock 2.3 ticks per frame, newest frame at writeIdx - 1 (wrapped)
+    constexpr uint32_t kCap = 660;
+    constexpr uint32_t kWrite = 250;
+    std::vector<float> t(kCap, 0.0f);
+    std::vector<uint8_t> ph(kCap, 2), ok(kCap, 0);
+    auto at = [&](uint32_t back) { return (kWrite + kCap - 1 - back) % kCap; };
+    for (uint32_t back = 0; back < 600; ++back) {
+        ok[at(back)] = 1;
+        t[at(back)] = 90000.0f - 2.3f * static_cast<float>(back);
+    }
+    uint16_t a = 0, b = 0;
+    Result r = ComputeWindow(t.data(), ph.data(), ok.data(), kCap, kWrite, 2, 90000.0f - 2.3f * 200.0f, 150, 90, a, b);
+    EXPECT_TRUE(r == Result::Ok && a == 351 && b == 111, "Window around a moment 200 frames back");
+    r = ComputeWindow(t.data(), ph.data(), ok.data(), kCap, kWrite, 2, 90000.0f - 2.3f * 550.0f, 150, 90, a, b);
+    EXPECT_TRUE(r == Result::Ok && a == 599 && b == 461, "Start clamped to the oldest recorded frame");
+    r = ComputeWindow(t.data(), ph.data(), ok.data(), kCap, kWrite, 2, 90000.0f - 2.3f * 30.0f, 150, 90, a, b);
+    EXPECT_TRUE(r == Result::Ok && a == 181 && b == 1, "End clamped to the newest frame");
+    r = ComputeWindow(t.data(), ph.data(), ok.data(), kCap, kWrite, 2, 90000.0f - 2.3f * 900.0f, 150, 90, a, b);
+    EXPECT_TRUE(r == Result::TooOld, "Moment older than the ring must be refused");
+    // Stopped clock: the newest 60 frames (a cutscene) all carry the stoppage time. Counting by position keeps the
+    // window right; counting by time would have treated those 60 frames as not newer than the moment.
+    std::vector<float> t2 = t;
+    for (uint32_t back = 0; back < 60; ++back) t2[at(back)] = 90000.0f - 2.3f * 60.0f;
+    r = ComputeWindow(t2.data(), ph.data(), ok.data(), kCap, kWrite, 2, 90000.0f - 2.3f * 200.0f, 150, 90, a, b);
+    EXPECT_TRUE(r == Result::Ok && a == 351 && b == 111, "Stopped clock frames must not skew the window");
+    // A hole in the ring ends the frames the engine copies: the start is limited to the contiguous run
+    std::vector<uint8_t> ok2 = ok;
+    ok2[at(300)] = 0;
+    r = ComputeWindow(t.data(), ph.data(), ok2.data(), kCap, kWrite, 2, 90000.0f - 2.3f * 200.0f, 150, 90, a, b);
+    EXPECT_TRUE(r == Result::Ok && a == 299 && b == 111, "Start limited to the contiguous recorded frames");
+    // Frames of an older phase at the far end are skipped, the moment in the current phase still found
+    std::vector<uint8_t> ph2 = ph;
+    for (uint32_t back = 500; back < 600; ++back) ph2[at(back)] = 0;
+    r = ComputeWindow(t.data(), ph2.data(), ok.data(), kCap, kWrite, 2, 90000.0f - 2.3f * 200.0f, 150, 90, a, b);
+    EXPECT_TRUE(r == Result::Ok && a == 351, "Older phase frames at the far end do not block the window");
+    std::vector<uint8_t> none(kCap, 0);
+    r = ComputeWindow(t.data(), ph.data(), none.data(), kCap, kWrite, 2, 90000.0f, 150, 90, a, b);
+    EXPECT_TRUE(r == Result::NoFrames, "Empty ring must be refused");
+
+    // Engine clock: rounded up minute, phase offsets (0x140A6C330)
+    int mm = 0, ss = 0;
+    PitchGeometry::EngineMatchClock(60.0f * (23 * 60 + 16), 1, mm, ss);
+    EXPECT_TRUE(mm == 24 && ss == 16, "Minute rounds up when seconds are not zero");
+    PitchGeometry::EngineMatchClock(60.0f * (10 * 60), 1, mm, ss);
+    EXPECT_TRUE(mm == 10 && ss == 0, "Exact minute stays");
+    PitchGeometry::EngineMatchClock(60.0f * (5 * 60 + 1), 3, mm, ss);
+    EXPECT_TRUE(mm == 51 && ss == 1, "Phase 3 adds 45 minutes");
+    MarkPass("TestDecisionReplayWindow");
+}
+
 void TestSuspectAndCameraFollow() {
     auto mk = [](IncidentKind kind, bool nearFoul, float boxDist, float contact, float t, bool official) {
         ReplayMarker m{};
@@ -3134,6 +3186,7 @@ int main() {
     TestPerfOverhaulEquivalence();
     TestSnapshotInterpolation();
     TestSuspectAndCameraFollow();
+    TestDecisionReplayWindow();
     TestRemapAndLanguage();
     TestHudRenderSmoke();
     TestCompositeVerdictPoolAndRcuOffsets();

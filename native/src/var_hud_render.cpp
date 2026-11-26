@@ -98,6 +98,7 @@ constexpr ImU32 GrassA     = IM_COL32(20, 46, 36, 255);
 constexpr ImU32 GrassB     = IM_COL32(23, 52, 40, 255);
 constexpr ImU32 Line       = IM_COL32(220, 236, 228, 92);
 constexpr ImU32 Offside    = IM_COL32(130, 196, 255, 150);
+constexpr ImU32 OffsideText = IM_COL32(150, 206, 255, 255);
 } // namespace C
 
 constexpr float kRadPanel = 12.0f;
@@ -1215,40 +1216,13 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     const int32_t activeOff = configure ? g_controller.DraftOffenderSlot() : g_controller.DetectedOffenderSlot();
     const int32_t activeVic = configure ? g_controller.DraftVictimSlot() : g_controller.DetectedVictimSlot();
 
-    const char* offsideLabel = nullptr;
-    ImVec2 offsideLabelPos(0, 0);
+    float offsideLineX = -1.0f; // screen x of the offside line when drawn
     if (sync.hasSnapshot && std::fabs(spot.x) >= 22.0f) {
         const int defTeam = ((spot.x >= 0.0f) == (tel.teamAttackDir[0] >= 0.0f)) ? 0 : 1;
         float ox = 0.0f;
         if (VarHudController::ComputeSecondLastDefenderX(sync.snapshot, defTeam, tel.teamAttackDir[defTeam], ox)) {
             DrawDashedLine(dl, toScreen(ox, -d.halfWidth), toScreen(ox, d.halfWidth), C::Offside, lineTh, U(5), U(4));
-            // Label beside the line (never across it), drawn after the players where it covers the fewest of them:
-            // either side of the line, under the chips row, mid-height or above the zoom chip
-            const ImVec2 lt = toScreen(ox, -d.halfWidth);
-            offsideLabel = Tr("IMPEDIMENTO");
-            const float lw = TrackedW(offsideLabel) + U(10);
-            const float lh = LineH(Txt::Caption) + U(4);
-            const float rows[3] = { std::max(lt.y, pos.y) + U(8) + U(20) + U(6), (pos.y + end.y - lh) * 0.5f,
-                                    end.y - U(8) - U(22) - U(6) - lh };
-            const float sides[2] = { lt.x + U(6), lt.x - U(6) - lw };
-            float bestCost = 1e30f;
-            for (int si = 0; si < 2; ++si) {
-                for (int ri = 0; ri < 3; ++ri) {
-                    const float x = sides[si], y = rows[ri];
-                    float cost = static_cast<float>(si * 3 + ri); // preferred order on ties
-                    if (x < pos.x + U(4) || x + lw > end.x - U(4)) cost += 1e6f;
-                    for (int s2 = 0; s2 < 22; ++s2) {
-                        if (!sync.snapshot.playerOnPitch[s2]) continue;
-                        const ImVec2 tp = toScreen(sync.snapshot.playerPos[s2].x, sync.snapshot.playerPos[s2].z);
-                        const float rr = U(11);
-                        const float ow = std::min(x + lw, tp.x + rr) - std::max(x, tp.x - rr);
-                        const float oh = std::min(y + lh, tp.y + rr) - std::max(y, tp.y - rr);
-                        if (ow > 0.0f && oh > 0.0f) cost += ow * oh;
-                    }
-                    if (cost < bestCost) { bestCost = cost; offsideLabelPos = ImVec2(x, y); }
-                }
-            }
-            offsideLabelPos.x = std::clamp(offsideLabelPos.x, pos.x + U(4), std::max(pos.x + U(4), end.x - U(4) - lw));
+            offsideLineX = toScreen(ox, -d.halfWidth).x; // its label is placed after the players and tags
         }
     }
 
@@ -1302,7 +1276,7 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
         const bool focusPlay = IsValidSlot(activeOff) || IsValidSlot(activeVic);
         // Minimum sizes in pixels: below them a shirt number is not readable (720p, 4:3, 800x600)
         const float rBase = std::max(vp.isZoomed ? Uf(8.2f) : Uf(5.8f), vp.isZoomed ? 7.5f : 5.5f);
-        const float rHero = std::max(vp.isZoomed ? Uf(9.6f) : Uf(7.0f), vp.isZoomed ? 8.5f : 6.5f);
+        const float rHero = std::max(vp.isZoomed ? Uf(9.6f) : Uf(7.0f), vp.isZoomed ? 8.5f : 7.5f);
         auto isHero = [&](int s) { return s == activeOff || s == activeVic; };
         // Shirt numbers come from the baked font closest in size above the target, so they are never blurred by a
         // strong downscale at small UI scales
@@ -1442,6 +1416,8 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
 
         // 6. Role tags last, placed where they cover the fewest tokens, the ball and each other. A player outside
         // the visible part of the pitch gets no tag (it would point at nothing).
+        ImVec2 tagMin[2], tagMax[2];
+        int tagCount = 0;
         if (vp.isZoomed || bothOn) {
             ImVec2 placedMin(0, 0), placedMax(0, 0);
             bool placed = false;
@@ -1489,23 +1465,57 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                 placedMin = best;
                 placedMax = bEnd;
                 placed = true;
+                if (tagCount < 2) { tagMin[tagCount] = best; tagMax[tagCount] = bEnd; ++tagCount; }
             };
             const bool vicBelow = !bothOn || sn.playerPos[activeVic].z >= sn.playerPos[activeOff].z;
             tag(activeOff, Tr("INFRATOR"), C::RoleOffender, !vicBelow);
             tag(activeVic, Tr("VÍTIMA"), C::RoleFouled, vicBelow);
+        }
+
+        // 7. Offside label: beside the line (never across it), wherever it covers the fewest tokens, the ball and
+        // the role tags; text opaque, only the line itself is translucent
+        if (offsideLineX >= 0.0f) {
+            const char* txt = Tr("IMPEDIMENTO");
+            const float lw = TrackedW(txt) + U(10);
+            const float lh = LineH(Txt::Caption) + U(4);
+            const float top = pos.y + U(8) + U(20) + U(6);
+            const float bottom = end.y - U(8) - U(22) - U(6) - lh;
+            auto overlapArea = [](ImVec2 a0, ImVec2 a1, ImVec2 b0, ImVec2 b1) {
+                const float w = std::min(a1.x, b1.x) - std::max(a0.x, b0.x);
+                const float h = std::min(a1.y, b1.y) - std::max(a0.y, b0.y);
+                return (w > 0.0f && h > 0.0f) ? w * h : 0.0f;
+            };
+            float bestCost = 1e30f;
+            ImVec2 best(0, 0);
+            bool found = false;
+            for (int side = 0; side < 2; ++side) {
+                const float x = side == 0 ? offsideLineX + U(6) : offsideLineX - U(6) - lw;
+                if (x < pos.x + U(4) || x + lw > end.x - U(4)) continue; // would cross the line once clamped
+                for (int row = 0; row < 8 && bottom > top; ++row) {
+                    const float y = top + (bottom - top) * static_cast<float>(row) / 7.0f;
+                    const ImVec2 a(x, y), b(x + lw, y + lh);
+                    float cost = static_cast<float>(side * 8 + row) * 0.5f;
+                    for (int s = 0; s < 22; ++s) {
+                        if (!sn.playerOnPitch[s]) continue;
+                        const float rr = isHero(s) ? rHero + Uf(4.2f) : rBase + Uf(1.5f);
+                        cost += overlapArea(a, b, ImVec2(tokenPos[s].x - rr, tokenPos[s].y - rr),
+                                            ImVec2(tokenPos[s].x + rr, tokenPos[s].y + rr)) * (isHero(s) ? 6.0f : 1.0f);
+                    }
+                    cost += overlapArea(a, b, ImVec2(bp.x - br, bp.y - br), ImVec2(bp.x + br, bp.y + br)) * 6.0f;
+                    for (int t = 0; t < tagCount; ++t) cost += overlapArea(a, b, tagMin[t], tagMax[t]) * 20.0f;
+                    if (cost < bestCost) { bestCost = cost; best = a; found = true; }
+                }
+            }
+            if (found) {
+                dl->AddRectFilled(best, ImVec2(best.x + lw, best.y + lh), IM_COL32(8, 12, 18, 215), U(kRadChip));
+                Tracked(dl, ImVec2(best.x + U(5), best.y + U(2)), C::OffsideText, txt);
+            }
         }
     } else {
         // No recorded frame for this moment: the live ball only
         dl->AddCircleFilled(bp, br + Uf(4.0f), IM_COL32(255, 255, 255, 40), 0);
         dl->AddCircleFilled(bp, br, IM_COL32(255, 255, 255, 255), 0);
         dl->AddCircle(bp, br, IM_COL32(10, 14, 20, 235), 0, std::max(1.0f, Uf(1.3f)));
-    }
-
-    if (offsideLabel) {
-        const float lw = TrackedW(offsideLabel) + U(10);
-        const float lh = LineH(Txt::Caption) + U(4);
-        dl->AddRectFilled(offsideLabelPos, ImVec2(offsideLabelPos.x + lw, offsideLabelPos.y + lh), IM_COL32(8, 12, 18, 200), U(kRadChip));
-        Tracked(dl, ImVec2(offsideLabelPos.x + U(5), offsideLabelPos.y + U(2)), C::Offside, offsideLabel);
     }
 
     dl->AddRectFilled(zoomP, zoomE, overZoom ? IM_COL32(30, 38, 52, 230) : IM_COL32(8, 12, 18, 190), U(kRadChip));
@@ -1691,7 +1701,7 @@ void RenderOptionsPage(ImDrawList* dl, float contentW, const HudConfig& cfg, boo
         std::snprintf(id, sizeof(id), "##cfg_%d", idx);
         const bool clicked = RowBase(dl, id, rp, ImVec2(contentW, rowH), sel == idx, hov);
         if (*hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(idx);
-        if (clicked && idx != kSettingsRowLanguage && idx != 3 && idx != 4) g_controller.TriggerSettingsRow(idx, +1, state);
+        if (clicked) g_controller.TriggerSettingsRow(idx, +1, state);
         return rp;
     };
     auto rowEnd = [&](ImVec2 rp) {
@@ -1716,7 +1726,13 @@ void RenderOptionsPage(ImDrawList* dl, float contentW, const HudConfig& cfg, boo
         RowBase(dl, id, rp, ImVec2(contentW, rowH), sel == idx, &hov, true, false);
         if (hov && mouseMoved && g_controller.Page() == g_pageAtFrameStart) g_controller.SetSelectedIndex(idx);
         label(rp, pt, contentW - valueW - U(80));
-        const int delta = ValueSelector(dl, id, rp, ImVec2(contentW, rowH), valueW, value, C::Text, sel == idx);
+        int delta = ValueSelector(dl, id, rp, ImVec2(contentW, rowH), valueW, value, C::Text, sel == idx);
+        {
+            char lid[28];
+            std::snprintf(lid, sizeof(lid), "##cfgl_%d", idx);
+            const float labelW = std::max(U(20), contentW - valueW - U(8) - U(26) * 2.0f - U(4));
+            if (HitArea(lid, rp, ImVec2(labelW, rowH), nullptr)) delta = +1;
+        }
         if (delta != 0) g_controller.TriggerSettingsRow(idx, delta, state);
         rowEnd(rp);
     };
@@ -1729,6 +1745,7 @@ void RenderOptionsPage(ImDrawList* dl, float contentW, const HudConfig& cfg, boo
     selectorRow(4, "Tamanho", VarHudController::ScalePresetLabel(cfg.scalePreset));
     SectionCaption(dl, "PARTIDA", U(10));
     toggleRow(5, "Alertas durante o jogo", cfg.broadcastAlerts);
+    toggleRow(kSettingsRowReplayAfterDecision, "Replay do lance após a decisão", cfg.replayAfterDecision);
     SectionCaption(dl, "GERAL", U(10));
     selectorRow(kSettingsRowLanguage, "Idioma", i18n::LanguageDisplayName(cfg.language == 1 ? Language::English : Language::PtBr));
     {

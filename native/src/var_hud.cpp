@@ -1147,6 +1147,8 @@ void VarHudController::TriggerSettingsRow(int row, int delta, VarState& state) {
         cfg.scalePreset = (cfg.scalePreset + delta + 3) % 3;
     } else if (row == 5) {
         cfg.broadcastAlerts = !cfg.broadcastAlerts;
+    } else if (row == kSettingsRowReplayAfterDecision) {
+        cfg.replayAfterDecision = !cfg.replayAfterDecision;
     } else if (row == kSettingsRowLanguage) {
         cfg.language = (cfg.language == 1) ? 0 : 1; // applied instantly to the whole HUD
     }
@@ -1414,8 +1416,10 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     v.fromLiveFoul = draftFromLiveFoul_ && !draftDirectCardMode_;
     v.liveSetPlayKind = v.targetsLiveSetPlay ? static_cast<int8_t>(tel_.activeSetPlayKind) : static_cast<int8_t>(-1);
     v.armStoppage = tel_.stoppageCount;
-    v.playPhase = tel_.replayCursorPhase;
-    v.playTime60Hz = tel_.replayCursorTime;
+    // The reviewed moment (replayed after the decision) only exists when the decision was confirmed in the replay
+    const bool inReplay = tel_.replayMode >= 1 && tel_.replayMode <= 3;
+    v.playPhase = inReplay ? tel_.replayCursorPhase : -1;
+    v.playTime60Hz = inReplay ? tel_.replayCursorTime : 0.0f;
     // A slot of the source event means the player who held it then. A slot the user picked means whoever
     // holds it now (the squad lists show the current players).
     auto currentRoster = [&](int32_t slot) -> int8_t {

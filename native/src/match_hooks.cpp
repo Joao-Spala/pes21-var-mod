@@ -987,6 +987,11 @@ struct ExecRequest {
     int32_t         offenderRoster = -1; // roster index of the meant player (-1 = current holder of the slot)
     int32_t         victimRoster   = -1;
     uint32_t        snapId        = 0;
+    // Reviewed moment (replay cursor when the decision was confirmed), replayed after the decision
+    bool            wantClip      = false;
+    int32_t         clipPhase     = -1;
+    float           clipTime60Hz  = 0.0f;
+    int32_t         clipMatchPhase = -1; // MatchInfo phase at injection: what FSM state 0x1F compares the record to
 };
 
 struct ExecCtx {
@@ -1317,6 +1322,227 @@ void ResetVanishingSpray(uint8_t* fsm) {
     g_fnSprayRefCommit(ref);
 }
 
+// ============================================================================
+// Replay of the reviewed play after the decision (engine "pending clip", request slot 3)
+// ============================================================================
+// The engine already replays a past moment through its pending clips (advantage late card, delayed chances): a
+// request in MatchInfo + 0x168C[3] (0x2C bytes) with status 0 is committed by the recorder on its next active pass
+// (0x14042E850 works on the write buffer, 0x14042F0E0 copies the ring frames into a clip buffer, record
+// REG + 0x1A340) and FSM state 0x1F (0x14044BDE0) plays that record from the read buffer.
+// 0x1F is only queued on some stoppages (0x14044F140: a slot 0 stoppage request and MatchInfo + 0x177F clear), so
+// the request is written only once 0x1F is actually in the FSM queue: a request without 0x1F would leave the record
+// occupied and block later ones. The window is counted in ring frames back from the newest one, as the engine
+// does, so a stopped clock (cutscene frames with the same time) cannot skew it. A watchdog that only counts while
+// the FSM sits in 0x1F returns an unconsumed request to idle (0x1F waits while the request status != -1).
+struct DecisionClipState {
+    enum class Stage { Idle, Pending, Armed };
+    Stage    stage = Stage::Idle;
+    int32_t  clipPhase = -1;
+    float    clipTime60Hz = 0.0f;
+    uint64_t sinceTick = 0;
+    uint64_t waitTicksIn1F = 0;
+    uint8_t* matchInfo = nullptr;
+    uint8_t* writeBuf = nullptr;
+};
+DecisionClipState g_decisionClip;
+
+constexpr uint64_t kDecisionClipPendingTicks  = 1200; // 20 s for 0x1F to appear in the queue
+constexpr uint64_t kDecisionClipWaitIn1FTicks = 120;  // 2 s of 0x1F waiting on the request
+constexpr uint64_t kDecisionClipArmedMaxTicks = 3600; // hard cap while armed (60 s)
+constexpr uint32_t kDecisionClipPreFrames = 150;      // 2.5 s before the reviewed moment
+constexpr uint32_t kDecisionClipPostFrames = 90;      // 1.5 s after it
+constexpr int32_t  kFsmStatePendingClip3 = 0x1F;
+
+uint8_t* ClipRegistry() {
+    if (!g_replaySingletonPtrAddr) return nullptr;
+    // *(0x143703568) = the replay system pointer slot (0x143703558) + 0x10, both loaded by 0x14044BDF6 / 0x14044BE00
+    const uintptr_t slot = g_replaySingletonPtrAddr + Offsets::ClipRegistryFromReplaySystemSlot;
+    if (!IsMemoryRangeReadable(reinterpret_cast<const void*>(slot), sizeof(void*))) return nullptr;
+    uint8_t* reg = *reinterpret_cast<uint8_t* const*>(slot);
+    if (!IsValidPtr(reg) || !IsMemoryRangeReadable(reg + Offsets::ClipRegistry_PendingRecord3, Offsets::ClipRecord_Type + 4)) return nullptr;
+    return reg;
+}
+
+bool FsmQueueContains(uint8_t* fsm, int32_t state) {
+    if (!IsValidPtr(fsm) || !IsMemoryRangeReadable(fsm + Offsets::MatchFSM_StateQueue, Offsets::MatchFSM_QueueTail + 1 - Offsets::MatchFSM_StateQueue)) return false;
+    const uint8_t head = fsm[Offsets::MatchFSM_QueueHead];
+    const uint8_t tail = fsm[Offsets::MatchFSM_QueueTail];
+    if (head >= 30 || tail >= 30) return false;
+    for (uint8_t i = head; i != tail; i = static_cast<uint8_t>((i + 1) % 30)) {
+        if (*reinterpret_cast<const int32_t*>(fsm + Offsets::MatchFSM_StateQueue + static_cast<size_t>(i) * 4) == state) return true;
+    }
+    return false;
+}
+
+// Fills one request exactly as 0x140A68D40 does (type 0x11 prio 0x5B, segment 1 cleared, flag bit 4 cleared). The
+// status goes last, after a compiler barrier, so a reader never sees status 0 with half-written fields.
+void WriteClipRequest(uint8_t* r, uint8_t minute, uint8_t second, uint8_t phase, uint16_t framesBackStart, uint16_t framesBackEnd) {
+    *reinterpret_cast<uint16_t*>(r + 0x0C) = framesBackStart;
+    *reinterpret_cast<uint16_t*>(r + 0x0E) = framesBackEnd;
+    r[0x06] = static_cast<uint8_t>(r[0x06] & ~0x10);
+    *reinterpret_cast<uint32_t*>(r + 0x10) = 0;
+    *reinterpret_cast<uint16_t*>(r + 0x0A) = 0;
+    r[0x08] = minute;
+    r[0x09] = second;
+    r[0x07] = phase;
+    r[0x04] = 0x11;
+    r[0x05] = 0x5B;
+    *reinterpret_cast<int32_t*>(r + 0x24) = 0x29;
+    *reinterpret_cast<int32_t*>(r + 0x28) = 0xFFFF;
+    std::atomic_signal_fence(std::memory_order_release);
+    *reinterpret_cast<volatile int32_t*>(r + 0x00) = 0; // commit on the next recorder pass
+}
+
+// Back to the idle state of the request constructor 0x140A68200 (time stamp at +0x1C left as it was)
+void ResetClipRequest(uint8_t* r) {
+    *reinterpret_cast<volatile int32_t*>(r + 0x00) = -1;
+    std::atomic_signal_fence(std::memory_order_release);
+    *reinterpret_cast<uint64_t*>(r + 0x08) = 0;
+    *reinterpret_cast<uint64_t*>(r + 0x10) = 0;
+    *reinterpret_cast<uint16_t*>(r + 0x05) = 0;
+    r[0x07] = 0;
+    r[0x04] = 0x13;
+    *reinterpret_cast<int32_t*>(r + 0x18) = 0xA;
+    *reinterpret_cast<int32_t*>(r + 0x24) = 0x29;
+    *reinterpret_cast<int32_t*>(r + 0x28) = 0xFFFF;
+}
+
+uint8_t* ClipRequestIn(uint8_t* mi) {
+    return mi ? mi + Offsets::MatchInfo_ReplayRequests + 3 * Offsets::ReplayRequest_Stride : nullptr;
+}
+
+// Decision applied on this tick with the ball in play: remember the reviewed moment, armed once 0x1F is queued
+void QueueDecisionReplayClip(uint8_t* matchInfo, const ExecRequest& req) {
+    if (!req.wantClip || req.stopReason != StoppageReason::Foul || !IsValidPtr(matchInfo)) return;
+    if (!VarState::Instance().GetHudConfig().replayAfterDecision) return;
+    if (g_decisionClip.stage != DecisionClipState::Stage::Idle) return;
+    g_decisionClip = DecisionClipState{};
+    g_decisionClip.stage = DecisionClipState::Stage::Pending;
+    g_decisionClip.clipPhase = req.clipPhase;
+    g_decisionClip.clipTime60Hz = req.clipTime60Hz;
+    g_decisionClip.sinceTick = g_mainTickCount;
+    g_decisionClip.matchInfo = matchInfo;
+}
+
+// Writes the request once 0x1F is queued. False (with the reason in the log) when it cannot be done safely.
+bool ArmDecisionReplayClip(uint8_t* matchInfo) {
+    uint8_t* wb = GetMatchInfoWriteBuffer(matchInfo);
+    uint8_t* reqRead = ClipRequestIn(matchInfo);
+    uint8_t* reqWrite = ClipRequestIn(wb);
+    if (!IsMemoryRangeReadable(reqRead, Offsets::ReplayRequest_Stride) ||
+        (reqWrite && !IsMemoryRangeReadable(reqWrite, Offsets::ReplayRequest_Stride))) return false;
+    if (matchInfo[Offsets::MatchInfo_SkipStoppageReplays] != 0) {
+        VAR_LOG_INF("Decision replay: replays are off for this stoppage (MatchInfo+0x177F), skipped");
+        return false;
+    }
+    if (*reinterpret_cast<const int32_t*>(reqRead) != -1 || (reqWrite && *reinterpret_cast<const int32_t*>(reqWrite) != -1)) {
+        VAR_LOG_INF("Decision replay: request slot 3 is in use by the engine, skipped");
+        return false;
+    }
+    uint8_t* reg = ClipRegistry();
+    if (!reg || *reinterpret_cast<const int32_t*>(reg + Offsets::ClipRegistry_PendingRecord3 + Offsets::ClipRecord_Type) != Offsets::ClipRecord_Empty) {
+        VAR_LOG_INF("Decision replay: pending clip record busy or unavailable, skipped");
+        return false;
+    }
+    // The live ring (slot 0): the engine copies the clip from it, counting frames back from the newest one
+    const uint8_t* sys = *reinterpret_cast<const uint8_t* const*>(g_replaySingletonPtrAddr);
+    if (!IsValidPtr(sys) || !IsMemoryRangeReadable(sys + Offsets::ReplaySingleton_ActiveSlot, 0x18)) return false;
+    if (*reinterpret_cast<const uint32_t*>(sys + Offsets::ReplaySingleton_ActiveSlot) != 0) {
+        VAR_LOG_INF("Decision replay: the live ring is not the active one, skipped");
+        return false;
+    }
+    const uint8_t* buf = *reinterpret_cast<const uint8_t* const*>(sys + Offsets::ReplaySingleton_RingHolder);
+    if (!IsValidPtr(buf) || !IsMemoryRangeReadable(buf, 0x50)) return false;
+    const uint16_t writeIdx = *reinterpret_cast<const uint16_t*>(buf + 0x10);
+    const uint16_t cap = *reinterpret_cast<const uint16_t*>(buf + 0x12);
+    const uint8_t* frames = *reinterpret_cast<const uint8_t* const*>(buf + Offsets::ReplayRingHolder_BufferPtr);
+    if (cap == 0 || cap > 4096 || writeIdx >= cap || !IsValidPtr(frames) ||
+        !IsMemoryRangeReadable(frames, static_cast<size_t>(cap) * Offsets::ReplayRing_FrameStride)) return false;
+    static float times[4096]; // sim thread only
+    static uint8_t phases[4096];
+    static uint8_t valid[4096];
+    for (uint32_t i = 0; i < cap; ++i) {
+        const uint8_t* f = frames + static_cast<size_t>(i) * Offsets::ReplayRing_FrameStride;
+        valid[i] = (*reinterpret_cast<const uint16_t*>(f + Offsets::ReplayRing_FrameInvalidMarkOff) != 0x7FFF) ? 1 : 0;
+        times[i] = *reinterpret_cast<const float*>(f + Offsets::ReplayRing_FrameTimeOff);
+        phases[i] = static_cast<uint8_t>(f[Offsets::ReplayRing_FramePhaseOff] & 0x0F);
+    }
+    uint16_t a = 0, b = 0;
+    const auto why = PitchGeometry::ReplayClipMath::ComputeWindow(times, phases, valid, cap, writeIdx, g_decisionClip.clipPhase,
+                                                                  g_decisionClip.clipTime60Hz, kDecisionClipPreFrames,
+                                                                  kDecisionClipPostFrames, a, b);
+    if (why != PitchGeometry::ReplayClipMath::Result::Ok) {
+        VAR_LOG_INF("Decision replay: reviewed moment not in the replay ring (%s), skipped",
+                    PitchGeometry::ReplayClipMath::ResultName(why));
+        return false;
+    }
+    // Minute/second/phase exactly as 0x1F checks them (0x140A6C330 with the MatchInfo phase), so the record is
+    // never taken for a stale one
+    const int32_t miPhase = *reinterpret_cast<const int32_t*>(matchInfo + Offsets::MatchInfo_MatchPhase);
+    int minute = 0, second = 0;
+    PitchGeometry::EngineMatchClock(g_decisionClip.clipTime60Hz, miPhase, minute, second);
+    const uint8_t mm = static_cast<uint8_t>(std::clamp(minute, 0, 255));
+    const uint8_t ss = static_cast<uint8_t>(std::clamp(second, 0, 59));
+    const uint8_t ph = static_cast<uint8_t>(std::clamp(miPhase, 0, 255));
+    if (reqWrite) WriteClipRequest(reqWrite, mm, ss, ph, a, b);
+    WriteClipRequest(reqRead, mm, ss, ph, a, b);
+    g_decisionClip.stage = DecisionClipState::Stage::Armed;
+    g_decisionClip.sinceTick = g_mainTickCount;
+    g_decisionClip.waitTicksIn1F = 0;
+    g_decisionClip.writeBuf = wb;
+    VAR_LOG_INF("Decision replay requested: %02d:%02d phase %u, frames back %u..%u", minute, second, ph, a, b);
+    return true;
+}
+
+void ResetArmedClipRequest(bool onlyUncommitted) {
+    uint8_t* reqs[2] = { ClipRequestIn(g_decisionClip.matchInfo), ClipRequestIn(g_decisionClip.writeBuf) };
+    for (uint8_t* r : reqs) {
+        if (!r || !IsMemoryRangeReadable(r, Offsets::ReplayRequest_Stride)) continue;
+        if (onlyUncommitted && *reinterpret_cast<const int32_t*>(r) != 0) continue;
+        ResetClipRequest(r);
+    }
+}
+
+// A decision undone on its own tick takes its replay with it
+void CancelDecisionReplayClip() {
+    if (g_decisionClip.stage == DecisionClipState::Stage::Idle) return;
+    if (g_decisionClip.stage == DecisionClipState::Stage::Armed) ResetArmedClipRequest(true);
+    VAR_LOG_INF("Decision replay cancelled with the undone decision");
+    g_decisionClip = DecisionClipState{};
+}
+
+// Sim thread, every tick
+void TickDecisionReplayClip(uint8_t* fsm, uint8_t* matchInfo, int32_t fsmState) {
+    if (g_decisionClip.stage == DecisionClipState::Stage::Idle) return;
+    if (matchInfo != g_decisionClip.matchInfo || !IsValidPtr(matchInfo)) {
+        g_decisionClip = DecisionClipState{};
+        return;
+    }
+    if (g_decisionClip.stage == DecisionClipState::Stage::Pending) {
+        if (FsmQueueContains(fsm, kFsmStatePendingClip3) || fsmState == kFsmStatePendingClip3) {
+            if (!ArmDecisionReplayClip(matchInfo)) g_decisionClip = DecisionClipState{};
+        } else if (g_mainTickCount - g_decisionClip.sinceTick > kDecisionClipPendingTicks) {
+            VAR_LOG_INF("Decision replay: the engine queued no pending-clip replay for this stoppage, skipped");
+            g_decisionClip = DecisionClipState{};
+        }
+        return;
+    }
+    // Armed: done once the engine committed (-2) or consumed/reset (-1) the request
+    const int32_t st = *reinterpret_cast<const int32_t*>(ClipRequestIn(matchInfo));
+    if (st == -1 || st == -2) {
+        VAR_LOG_INF("Decision replay clip committed by the engine (status %d)", st);
+        g_decisionClip = DecisionClipState{};
+        return;
+    }
+    if (fsmState == kFsmStatePendingClip3) ++g_decisionClip.waitTicksIn1F;
+    if (g_decisionClip.waitTicksIn1F < kDecisionClipWaitIn1FTicks &&
+        g_mainTickCount - g_decisionClip.sinceTick < kDecisionClipArmedMaxTicks) return;
+    ResetArmedClipRequest(false);
+    VAR_LOG_WRN("Decision replay request not consumed (status %d, %llu ticks waiting in 0x1F): returned to idle", st,
+                static_cast<unsigned long long>(g_decisionClip.waitTicksIn1F));
+    g_decisionClip = DecisionClipState{};
+}
+
 // Writes the request into the FSM JudgeResult (the engine consumes it on this tick) and mirrors it into both
 // MatchInfo buffers for readers that run before the next commit.
 void PerformInjection(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo) {
@@ -1341,6 +1567,7 @@ void PerformInjection(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo) {
     g_exec.expectOffender = IsValidSlot(req.offenderSlot) ? req.offenderSlot : 0xFF;
     g_exec.expectSnapId = req.snapId;
     g_exec.injected = true;
+    QueueDecisionReplayClip(matchInfo, req);
     VAR_LOG_INF("VAR request injected (fsmState=0x%X): sp=%d reason=%d team=%d off=%d vic=%d card=%d snap=%u pos=(%.1f, %.1f)",
                 g_exec.startFsmState, static_cast<int>(req.spKind), static_cast<int>(req.stopReason),
                 req.benefitedTeam, req.offenderSlot, req.victimSlot, static_cast<int>(req.card),
@@ -1837,6 +2064,9 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
         req.offenderRoster = pv->offenderRosterIdx;
         req.victimRoster = pv->victimRosterIdx;
         req.stopReason = StoppageReason::SilentRestart;
+        req.wantClip = (pv->playPhase >= 0);
+        req.clipPhase = pv->playPhase;
+        req.clipTime60Hz = pv->playTime60Hz;
 
         switch (pv->action) {
             case VarAction::ConvertToPenalty:
@@ -2025,6 +2255,7 @@ void ExecVerifyAfterMainTick(uint8_t* fsm) {
             VAR_LOG_ERR("Rollback: MatchControl working copy not where expected, its JudgeResult was not restored");
         }
     }
+    CancelDecisionReplayClip(); // the decision of this tick is undone: so is its replay request
     VAR_LOG_WRN("VAR pool seq=%u: SetPlayReady left without EnterOutOfPlay (queue reason 0x%X), tick undone",
                 g_exec.poolSeq, reason);
     const VerdictPool pool = g_exec.pool;
@@ -2322,6 +2553,7 @@ void OnManualReplayController(uint8_t* ctrl) {
 void ResetSimTrackersOnSimThread() {
     g_lastSeenMatchTick = 0;
     g_hasSnapshotTick = false;
+    g_decisionClip = DecisionClipState{};
     g_lastAdvActive = false;
     g_lastFoulValidEdge = false;
     g_lastFoulOffenderEdge = -1;
@@ -2462,6 +2694,7 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
 
         CalibrateSidesAtKickoff(gmatch, matchInfo, matchStatus);
         ReplayDiag::OnSimTick(matchInfo, matchStatus);
+        TickDecisionReplayClip(fsm, matchInfo, fsmState);
         ReplayDiag::OnFsmState(fsmState, replayMgr, matchTick);
 
         const uint8_t curReplayMode = IsValidPtr(replayMgr) ? *reinterpret_cast<const uint8_t*>(replayMgr + Offsets::ReplayMgr_Mode) : 0;

@@ -193,6 +193,14 @@ namespace Offsets {
     constexpr uintptr_t MatchInfo_KickerSlots     = 0x173C; // int32_t[2]
     constexpr uintptr_t MatchInfo_PlayerOnPitch   = 0x1748; // uint8_t[22]
     constexpr uintptr_t MatchInfo_SpecialModeKind = 0x1775; // uint8_t (0=normal match)
+    // Replay requests (4 x 0x2C, reset 0x140A68200): +0x00 i32 status (-1 idle, -2 committed, 0 commit now,
+    // N delay), +0x04 type, +0x05 priority, +0x06 flags, +0x07 phase, +0x08 minute, +0x09 second, +0x0C/+0x0E u16
+    // frames back from the newest ring frame (start/end), +0x10/+0x12 segment 1. Slot 3 = pending clip played by
+    // FSM state 0x1F (0x14044BEEF reads it from MatchInfo, 0x14044BF05 the record REG + 0x16110 + 3 * 0x1610).
+    constexpr uintptr_t MatchInfo_ReplayRequests  = 0x168C;
+    constexpr uintptr_t ReplayRequest_Stride      = 0x2C;
+    // Set when the engine skips the replay states of this stoppage (0x1D and 0x1F are not queued)
+    constexpr uintptr_t MatchInfo_SkipStoppageReplays = 0x177F;
     // Foul position snapshot pool (verified via 0x1404B4B40 / 0x140A82120)
     constexpr uintptr_t MatchInfo_FoulSnapshotPool        = 0x17AC;
     constexpr size_t    MatchInfo_FoulSnapshotStride      = 0x3E4;
@@ -259,6 +267,14 @@ namespace Offsets {
 
     // Replay ring buffer singleton (*(*(0x143703558) + 0x6A8) + 0x40, stride 0x1FB0)
     constexpr uintptr_t ReplaySingleton_RingHolder = 0x6A8;
+    constexpr uintptr_t ReplaySingleton_ActiveSlot = 0x698; // u32, 0 = the live ring (clips use the other slots)
+    // Clip registry *(0x143703568): the pointer slot right after the replay system slot 0x143703558 (both loaded by
+    // 0x14044BDF6 / 0x14044BE00). Pending record 3 at +0x1A340, its +0x10 type is 0x13 when empty (0x14044BF11).
+    constexpr uintptr_t ClipRegistryFromReplaySystemSlot = 0x10;
+    constexpr uintptr_t ClipRegistry_PendingRecord3 = 0x1A340;
+    constexpr uintptr_t ClipRecord_Type            = 0x10;
+    constexpr int32_t   ClipRecord_Empty           = 0x13;
+    constexpr uintptr_t ReplayRing_FrameInvalidMarkOff = 0x24C; // u16 == 0x7FFF: frame not recorded
     constexpr uintptr_t ReplayRingHolder_BufferPtr = 0x40;
     constexpr size_t    ReplayRing_FrameStride     = 0x1FB0;
     constexpr uintptr_t ReplayRing_FrameTimeOff    = 0x00; // float (60Hz ticks)
@@ -624,6 +640,70 @@ inline bool IsUsableFocus(const float focus[3]) {
     return !(focus[0] == 0.0f && focus[1] == 0.0f && focus[2] == 0.0f);
 }
 } // namespace ReplayCameraMath
+
+// Window of a replay clip around a past moment, as the engine's requests express it: frames back from the newest
+// ring frame (start A >= end B). Counted by ring position from the write index over the contiguous recorded frames,
+// exactly what the engine copies (0x140A8D4B0 / 0x140465450): a stopped clock (frames with the same time) cannot
+// skew it. The moment must be among those frames, in the same phase.
+namespace ReplayClipMath {
+enum class Result { Ok, NoFrames, TooOld, NotFound };
+inline const char* ResultName(Result r) {
+    switch (r) {
+        case Result::Ok:       return "ok";
+        case Result::NoFrames: return "no recorded frames";
+        case Result::TooOld:   return "older than the ring";
+        default:               return "moment not found";
+    }
+}
+inline Result ComputeWindow(const float* times, const uint8_t* phases, const uint8_t* valid, uint32_t cap, uint32_t writeIdx,
+                            int32_t phase, float time60Hz, uint32_t preFrames, uint32_t postFrames,
+                            uint16_t& outStart, uint16_t& outEnd) {
+    if (cap == 0 || writeIdx >= cap) return Result::NoFrames;
+    uint32_t n = 0;            // contiguous recorded frames going back from the newest
+    int64_t best = -1;         // frames back of the moment
+    float bestDt = 1e30f;
+    float oldestSamePhase = 0.0f;
+    bool anySamePhase = false;
+    for (uint32_t k = 0; k < cap; ++k) {
+        const uint32_t idx = (writeIdx + cap - 1 - k) % cap;
+        if (!valid[idx]) break;
+        ++n;
+        if ((phases[idx] & 0x0F) != (static_cast<uint32_t>(phase) & 0x0F)) continue;
+        if (!anySamePhase || times[idx] < oldestSamePhase) oldestSamePhase = times[idx];
+        anySamePhase = true;
+        const float dt = std::fabs(times[idx] - time60Hz);
+        if (dt < bestDt) { bestDt = dt; best = k; } // strict: the newest frame wins a tie
+    }
+    if (n < 2 || !anySamePhase) return Result::NoFrames;
+    if (time60Hz < oldestSamePhase - 1.0f) return Result::TooOld;
+    if (best < 0 || !(bestDt <= 12.0f)) return Result::NotFound;
+    const uint32_t back = static_cast<uint32_t>(best);
+    uint32_t a = std::min(back + preFrames, n - 1);
+    uint32_t b = (back > postFrames) ? back - postFrames : 0;
+    // The recorder commits on its next pass, possibly after one more frame: everything one frame further back
+    a = std::min(a + 1, n - 1);
+    b = std::min(b + 1, a);
+    if (a <= b || a > 0xFFFF) return Result::NotFound;
+    outStart = static_cast<uint16_t>(a);
+    outEnd = static_cast<uint16_t>(b);
+    return Result::Ok;
+}
+} // namespace ReplayClipMath
+
+// Minute and second exactly as the engine's 0x140A6C330 computes them (rounded up when seconds are not 0, and
+// +45 / +90 / +105 for phases 3 / 5 / 7): what FSM state 0x1F compares a pending clip against
+inline void EngineMatchClock(float time60Hz, int32_t matchPhase, int& outMinutes, int& outSeconds) {
+    const uint32_t ticks = (time60Hz > 0.0f) ? static_cast<uint32_t>(static_cast<int64_t>(time60Hz)) : 0u;
+    const uint32_t totalSec = ticks / 60;
+    uint32_t minutes = totalSec / 60;
+    const uint32_t seconds = totalSec % 60;
+    if (seconds != 0) ++minutes;
+    if (matchPhase == 3) minutes += 45;
+    else if (matchPhase == 5) minutes += 90;
+    else if (matchPhase == 7) minutes += 105;
+    outMinutes = static_cast<int>(minutes);
+    outSeconds = static_cast<int>(seconds);
+}
 
 // Formats match phase + 60Hz half-time ticks into mm:ss (verified against 0x1420C6760 / 0x140A6C3B0).
 inline void FormatMatchClock(int32_t matchPhase, float time60Hz, int& outMinutes, int& outSeconds) {

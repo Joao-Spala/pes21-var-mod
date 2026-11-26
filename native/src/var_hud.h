@@ -21,10 +21,11 @@ enum class HudPage : int32_t {
 };
 
 // OPCOES rows: 0..5 toggles, 6 = Idioma, 7 = Controles, 8 = Voltar
-constexpr int kSettingsRowLanguage = 6;
-constexpr int kSettingsRowControls = 7;
-constexpr int kSettingsRowBack     = 8;
-constexpr int kSettingsRowCount    = 9;
+constexpr int kSettingsRowReplayAfterDecision = 6;
+constexpr int kSettingsRowLanguage = 7;
+constexpr int kSettingsRowControls = 8;
+constexpr int kSettingsRowBack     = 9;
+constexpr int kSettingsRowCount    = 10;
 // Controles rows: one per BindAction, then Restaurar Padrao, then Voltar
 constexpr int kControlsRowRestore  = kBindActionCount;
 constexpr int kControlsRowBack     = kBindActionCount + 1;
