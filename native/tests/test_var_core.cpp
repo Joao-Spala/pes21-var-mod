@@ -2035,7 +2035,7 @@ void TestHudRenderSmoke() {
             sn.playerOnPitch[p] = 1;
             sn.playerPos[p] = Vec3{ lerp(kStart[p][0], kBox[p][0], ease) + drift, 0.0f, lerp(kStart[p][1], kBox[p][1], ease) + wob };
         }
-        // The plays: Pulgar (5) on Anibal Moreno (16) in midfield, Richard Rios (17) into Arrascaeta (7)
+        // The plays: Pulgar (5) on Anibal Moreno (16) in midfield, Andreas Pereira (17) into Arrascaeta (7)
         auto meet = [&](int a, int b, const Vec3& at, float when, float width) {
             const float w = 1.0f - std::clamp(std::fabs(time - when) / width, 0.0f, 1.0f);
             sn.playerPos[a] = Vec3{ lerp(sn.playerPos[a].x, at.x - 0.5f, w), 0.0f, lerp(sn.playerPos[a].z, at.z - 0.3f, w) };
@@ -2123,7 +2123,7 @@ void TestHudRenderSmoke() {
             { "AGUSTÍN ROSSI", 1 }, { "GUILLERMO VARELA", 2 }, { "LÉO ORTIZ", 3 }, { "LÉO PEREIRA", 4 }, { "ALEX SANDRO", 26 },
             { "ERICK PULGAR", 5 }, { "JORGINHO", 21 }, { "DE ARRASCAETA", 10 }, { "SAMUEL LINO", 16 }, { "LUIZ ARAUJO", 7 }, { "PEDRO", 9 },
             { "WEVERTON", 21 }, { "MARCOS ROCHA", 2 }, { "GUSTAVO GÓMEZ", 15 }, { "MURILO", 26 }, { "PIQUEREZ", 22 },
-            { "ANÍBAL MORENO", 5 }, { "RICHARD RÍOS", 27 }, { "RAPHAEL VEIGA", 23 }, { "FACUNDO TORRES", 17 }, { "VITOR ROQUE", 9 }, { "FLACO LÓPEZ", 42 },
+            { "ANÍBAL MORENO", 5 }, { "ANDREAS PEREIRA", 8 }, { "RAPHAEL VEIGA", 23 }, { "FACUNDO TORRES", 17 }, { "VITOR ROQUE", 9 }, { "FLACO LÓPEZ", 42 },
         };
         std::array<PlayerSlotInfo, 22> pl{};
         for (int i = 0; i < 22; ++i) {
@@ -2279,7 +2279,7 @@ void TestHudRenderSmoke() {
             struct CardEdit { int slot; int yellows; const char* pt; const char* en; };
             const CardEdit edits[] = {
                 { 5,  0, "Cart\xC3\xA3o \xC2\xB7 #5 Erick Pulgar \xC2\xB7 sem cart\xC3\xA3o", "Card \xC2\xB7 #5 Erick Pulgar \xC2\xB7 no card" },
-                { 17, 1, "Cart\xC3\xA3o \xC2\xB7 #27 Richard R\xC3\xADos \xC2\xB7 1 amarelo", "Card \xC2\xB7 #27 Richard R\xC3\xADos \xC2\xB7 1 yellow" },
+                { 17, 1, "Cart\xC3\xA3o \xC2\xB7 #8 Andreas Pereira \xC2\xB7 1 amarelo", "Card \xC2\xB7 #8 Andreas Pereira \xC2\xB7 1 yellow" },
                 { 16, 1, "Cart\xC3\xA3o \xC2\xB7 #5 An\xC3\xAD" "bal Moreno \xC2\xB7 1 amarelo", "Card \xC2\xB7 #5 An\xC3\xAD" "bal Moreno \xC2\xB7 1 yellow" },
                 { 6,  1, "Cart\xC3\xA3o \xC2\xB7 #21 Jorginho \xC2\xB7 1 amarelo", "Card \xC2\xB7 #21 Jorginho \xC2\xB7 1 yellow" },
             };
