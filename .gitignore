@@ -18,3 +18,11 @@ backups/
 Thumbs.db
 .vscode/
 .idea/
+
+# Segredos e configuracoes locais (nunca publicar)
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+.claude/
