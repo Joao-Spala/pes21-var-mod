@@ -9,7 +9,7 @@
 ![Languages](https://img.shields.io/badge/Languages-PT--BR_%7C_English-2EA043?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-8B5CF6?style=for-the-badge)
 
-[English](README.md) · **Português (BR)**
+[English](README.md) · **Português (BR)** · [Apoie](#apoie-o-projeto)
 
 ### [Baixar a última versão](https://github.com/Joao-Spala/pes21-var-mod/releases/latest)
 
@@ -169,13 +169,19 @@ As notas de engenharia reversa estão em [`re_notes/`](re_notes), o histórico e
 
 ## Apoie o projeto
 
+<table>
+<tr>
+<td width="160" align="center"><img src="docs/images/pix_qr.png" alt="QR Code Pix" width="140"></td>
+<td>
+
 Este mod é gratuito e de código aberto, e vai continuar assim. Se ele melhorou suas partidas e você quiser me pagar um café, vou ficar muito agradecido. Um relato de bug ou um obrigado vale tanto quanto.
 
-<div align="center">
+**Pix:** escaneie o QR ou use a chave aleatória `925fd607-2011-4ca2-83a4-b3cf145b408b`<br>
+**De fora do Brasil:** [![Ko-fi](https://img.shields.io/badge/Ko--fi-Pague_um_caf%C3%A9-FF5E5B?style=flat&logo=ko-fi&logoColor=white)](https://ko-fi.com/AlfaceJao)
 
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Pague_um_caf%C3%A9-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/AlfaceJao)
-
-</div>
+</td>
+</tr>
+</table>
 
 ---
 

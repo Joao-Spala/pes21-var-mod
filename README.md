@@ -9,7 +9,7 @@
 ![Languages](https://img.shields.io/badge/Languages-PT--BR_%7C_English-2EA043?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-8B5CF6?style=for-the-badge)
 
-**English** · [Português (BR)](README.pt-BR.md)
+**English** · [Português (BR)](README.pt-BR.md) · [Support](#support-the-project)
 
 ### [Download the latest release](https://github.com/Joao-Spala/pes21-var-mod/releases/latest)
 
@@ -188,11 +188,9 @@ python docs\assets\make_readme_art.py "$env:TEMP\var_hud"
 
 This mod is free and open source, and it always will be. If it made your matches better and you feel like buying me a coffee, I would really appreciate it. A bug report or a thank you means just as much.
 
-<div align="center">
-
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_me_a_coffee-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/AlfaceJao)
 
-</div>
+Brazilian? There is a Pix QR code in the [Portuguese README](README.pt-BR.md#apoie-o-projeto).
 
 ---
 
