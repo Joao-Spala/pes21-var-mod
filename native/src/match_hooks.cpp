@@ -897,9 +897,15 @@ void SampleInPlayFrame(uint8_t* gmatch, uint8_t* matchInfo, int32_t matchPhase, 
     snap.ballOwnerSlot       = realOwner;
     snap.recentBallOwnerSlot = g_recentBallOwnerSlot;
 
+    // Engine positions are always finite in practice. A torn or garbage read must still never reach the HUD math
+    // (NaN defeats every range check downstream), so each component is kept finite and inside +-1000 m.
+    auto sanitize = [](Vec3& v) {
+        for (float* c : { &v.x, &v.y, &v.z }) *c = std::isfinite(*c) ? std::clamp(*c, -1000.0f, 1000.0f) : 0.0f;
+    };
     uint8_t* ball = *reinterpret_cast<uint8_t**>(gmatch + Offsets::GMATCH_Ball);
     if (IsValidPtr(ball)) {
         std::memcpy(&snap.ballPos, ball + Offsets::Ball_PosVec3, sizeof(Vec3));
+        sanitize(snap.ballPos);
     }
 
     for (int slot = 0; slot < 22; ++slot) {
@@ -912,6 +918,7 @@ void SampleInPlayFrame(uint8_t* gmatch, uint8_t* matchInfo, int32_t matchPhase, 
             gmatch + Offsets::GMATCH_PlayerSpatialBase + static_cast<size_t>(slot) * Offsets::GMATCH_EntryStride);
         if (IsValidPtr(spatial)) {
             std::memcpy(&snap.playerPos[slot], spatial + Offsets::PlayerSpatial_PosVec3, sizeof(Vec3));
+            sanitize(snap.playerPos[slot]);
         }
     }
 

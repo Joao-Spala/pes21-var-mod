@@ -3,15 +3,17 @@
 # What it does, and nothing else:
 #   - finds the Sider folder (the folder with sider.dll), or asks for it
 #   - install: copies modules\var_mod.lua and modules\var_mod\var_core.dll into <Sider folder>\modules\
-#   - edits sider.ini (and sider-*.ini variants if present) to contain:
+#   - edits sider.ini (and any sider-*.ini variant next to it) to contain:
 #         lua.enabled = 1
 #         luajit.ext.enabled = 1
 #         lua.module = "var_mod.lua"
-#     after saving a dated copy of each file next to it (sider.ini.before-var-mod-<date>.bak)
+#     after saving a dated copy of each file next to it (sider.ini.before-var-mod-<date>.bak, never overwritten)
 #   - enable: writes the same three sider.ini lines as install, without copying files
 #   - disable: comments out the lua.module line (the files stay)
-#   - uninstall: removes the two files and the lua.module line, keeps var_mod.ini (your settings) next to sider.ini
-# It refuses to run while PES 2021 is open. No network access, no registry, no other files.
+#   - uninstall: removes the lua.module line, modulesar_mod.lua and the modulesar_mod\ folder, after saving
+#     your settings as var_mod.ini.before-uninstall-<date>.bak next to sider.ini (lua.enabled and luajit.ext.enabled stay 1)
+#   - status: only reads
+# It changes nothing while PES 2021 is open. No network access, no registry, no other files.
 #
 # Usage: VAR_Mod_Setup.bat  (menu)  or  powershell -File VAR_Mod_Setup.ps1 -Action install|enable|disable|uninstall|status [-SiderDir <path>]
 
@@ -66,7 +68,7 @@ function Write-IniFile([string]$path, $ini, [string[]]$lines) {
 function Assert-GameClosed {
     # var_core.dll stays mapped (and pinned) while the game runs: copying or deleting it would fail halfway
     if (Get-Process -Name "PES2021" -ErrorAction SilentlyContinue) {
-        throw "Close PES 2021 before installing, updating or uninstalling the VAR Mod."
+        throw "Close PES 2021 before changing the VAR Mod installation (install, enable, disable or uninstall)."
     }
 }
 
@@ -116,18 +118,28 @@ function Resolve-SiderDir([string]$hint) {
 }
 
 function Get-TargetInis([string]$dir) {
+    # sider.ini plus the variants a launcher may switch between (sider-<name>.ini). Backups never match.
     $inis = @()
-    foreach ($name in @("sider.ini", "sider-normal.ini", "sider-capacidade.ini")) {
-        $p = Join-Path $dir $name
-        if (Test-Path -LiteralPath $p) { $inis += $p }
+    $main = Join-Path $dir "sider.ini"
+    if (Test-Path -LiteralPath $main) { $inis += $main }
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^sider-[^\/]+\.ini$' } | Sort-Object Name)) {
+        $inis += $f.FullName
     }
     return $inis
 }
 
-function Backup-Ini([string]$iniPath) {
+function Get-FreeBackupPath([string]$prefix) {
+    # Never overwrite an earlier backup, even two runs in the same second
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $bak = "$iniPath.before-var-mod-$stamp.bak"
-    Copy-Item -Force -LiteralPath $iniPath -Destination $bak
+    $path = "$prefix-$stamp.bak"
+    $n = 2
+    while (Test-Path -LiteralPath $path) { $path = "$prefix-$stamp-$n.bak"; $n++ }
+    return $path
+}
+
+function Backup-Ini([string]$iniPath) {
+    $bak = Get-FreeBackupPath "$iniPath.before-var-mod"
+    Copy-Item -LiteralPath $iniPath -Destination $bak
     Write-Host "[backup] Created: $bak"
 }
 
@@ -154,6 +166,7 @@ function Set-IniModuleState([string]$iniPath, [bool]$enable) {
                 $list.Add(";" + $ModuleLine)
             }
             $lastLuaIdx = $list.Count - 1
+            if ($firstLuaIdx -lt 0) { $firstLuaIdx = $list.Count - 1 }
         } elseif ($enable -and $ln -match '^\s*;*\s*luajit\.ext\.enabled\s*=\s*\d+\s*(;.*)?$') {
             # Covers "= 0", a trailing comment and a commented-out line: the module needs LuaJIT FFI
             if (-not $luajitOn) { $list.Add("luajit.ext.enabled = 1") }
@@ -280,6 +293,7 @@ function Do-Install([string]$dir) {
 }
 
 function Do-Toggle([string]$dir, [bool]$enable) {
+    Assert-GameClosed
     $inis = Get-TargetInis $dir
     if ($inis.Count -eq 0) {
         Write-Warning "No sider.ini found in $dir."
@@ -300,9 +314,8 @@ function Do-Uninstall([string]$dir) {
     # The user's settings (shortcuts, language) are kept next to sider.ini before the folder goes away
     $userIni = Join-Path $dstCoreDir "var_mod.ini"
     if (Test-Path -LiteralPath $userIni) {
-        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $kept = Join-Path $dir "var_mod.ini.before-uninstall-$stamp.bak"
-        Copy-Item -Force -LiteralPath $userIni -Destination $kept
+        $kept = Get-FreeBackupPath (Join-Path $dir "var_mod.ini.before-uninstall")
+        Copy-Item -LiteralPath $userIni -Destination $kept
         Write-Host "[backup] VAR Mod settings kept in: $kept"
     }
     if (Test-Path -LiteralPath $dstLua) { Remove-Item -Force -LiteralPath $dstLua }

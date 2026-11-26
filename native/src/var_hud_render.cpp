@@ -1390,13 +1390,13 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
             const float dz = sn.playerPos[s].z - past.pos[s].z;
             const float dist = std::sqrt(dx * dx + dz * dz);
             const float speed = dist / (static_cast<float>(sn.simFrame - past.simFrame) / 60.0f); // m/s, real time
-            if (speed < 1.5f || speed > 14.0f) return; // standing, or a teleport
+            if (!(speed >= 1.5f && speed <= 14.0f)) return; // standing, a teleport, or a non-finite read
             const ImVec2 c = tokenPos[s];
             const ImVec2 o = toScreen(sn.playerPos[s].x, sn.playerPos[s].z);
             const ImVec2 f = toScreen(sn.playerPos[s].x + dx / dist, sn.playerPos[s].z + dz / dist);
             ImVec2 dir(f.x - o.x, f.y - o.y);
             const float dl2 = std::sqrt(dir.x * dir.x + dir.y * dir.y);
-            if (dl2 < 1e-3f) return;
+            if (!(dl2 >= 1e-3f)) return;
             dir = ImVec2(dir.x / dl2, dir.y / dl2);
             const float len = std::clamp(speed * Uf(1.5f), Uf(5.0f), Uf(16.0f));
             const ImVec2 p0(c.x + dir.x * (r + Uf(2.0f)), c.y + dir.y * (r + Uf(2.0f)));

@@ -254,12 +254,27 @@ void RenderOverlayOnSwapChainLocked(IDXGISwapChain* swapChain, bool alreadyPolle
         return;
     }
 
+    // Every view taken for this frame is released (and the game's targets restored once ours was bound) on any
+    // exit, including an exception from font rebuilding or ImGui::Render: a leaked back buffer view would make
+    // the next ResizeBuffers fail.
+    struct FrameViews {
+        ID3D11DeviceContext* ctx;
+        ID3D11RenderTargetView* own;
+        ID3D11RenderTargetView* prevRtv0 = nullptr;
+        ID3D11DepthStencilView* prevDsv = nullptr;
+        bool bound = false;
+        ~FrameViews() {
+            if (bound) ctx->OMSetRenderTargets(1, &prevRtv0, prevDsv);
+            if (prevRtv0) prevRtv0->Release();
+            if (prevDsv) prevDsv->Release();
+            own->Release();
+        }
+    } views{ g_context, rtv };
+
     if (vw < 320.0f || vh < 240.0f) {
         VarHudRenderer::TickIdle();
     } else {
-        ID3D11RenderTargetView* prevRtv0 = nullptr;
-        ID3D11DepthStencilView* prevDsv = nullptr;
-        g_context->OMGetRenderTargets(1, &prevRtv0, &prevDsv);
+        g_context->OMGetRenderTargets(1, &views.prevRtv0, &views.prevDsv);
 
         // Resolution or HUD size preset changed: re-rasterize fonts at the new scale (outside the ImGui frame)
         if (VarHudRenderer::EnsureFonts(vw, vh)) {
@@ -276,9 +291,6 @@ void RenderOverlayOnSwapChainLocked(IDXGISwapChain* swapChain, bool alreadyPolle
         if (!io.Fonts->IsBuilt()) {
             // Device objects could not be created this frame (device removed / out of video memory):
             // ImGui::NewFrame would assert on the missing font atlas. Skip and retry next frame.
-            if (prevRtv0) prevRtv0->Release();
-            if (prevDsv) prevDsv->Release();
-            rtv->Release();
             VarHudRenderer::TickIdle();
             return;
         }
@@ -332,14 +344,9 @@ void RenderOverlayOnSwapChainLocked(IDXGISwapChain* swapChain, bool alreadyPolle
 
         ImGui::Render();
         g_context->OMSetRenderTargets(1, &rtv, nullptr);
+        views.bound = true;
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-
-        g_context->OMSetRenderTargets(1, &prevRtv0, prevDsv);
-        if (prevRtv0) prevRtv0->Release();
-        if (prevDsv) prevDsv->Release();
     }
-
-    rtv->Release();
 }
 
 HRESULT __fastcall Detour_GrSwapChainPresent(void* grSwapChain, UINT syncInterval) {

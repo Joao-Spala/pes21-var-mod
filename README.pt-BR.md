@@ -2,7 +2,7 @@
 
 <img src="docs/images/hero_pt.png" alt="VAR para PES 2021: pause, reveja, decida. O jogo obedece." width="100%">
 
-![Version](https://img.shields.io/badge/Version-v4.4.11-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.4.12-38BDF8?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Sider](https://img.shields.io/badge/Sider_7.3+-Compatible-F59E0B?style=for-the-badge)
 ![Native](https://img.shields.io/badge/Native-C%2B%2B20_%2B_DX11_%2B_ImGui-84CC16?style=for-the-badge)
@@ -100,7 +100,7 @@ O painel abre automaticamente no Replay Manual. Os lances detectados já trazem 
 
 ## Instalação
 
-Feche o jogo, baixe o **`PES2021_VAR_Mod_v4.4.11.zip`** em [Releases](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia. Depois instale à mão (opção A) ou com o script de instalação (opção B). As duas dão o mesmo resultado.
+Feche o jogo, baixe o **`PES2021_VAR_Mod_v4.4.12.zip`** em [Releases](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia. Depois instale à mão (opção A) ou com o script de instalação (opção B). As duas dão o mesmo resultado.
 
 ### Opção A: instalação manual
 
@@ -110,7 +110,7 @@ Feche o jogo, baixe o **`PES2021_VAR_Mod_v4.4.11.zip`** em [Releases](https://gi
    <pasta do Sider>\modules\var_mod.lua
    <pasta do Sider>\modules\var_mod\var_core.dll
    ```
-3. Faça uma cópia do `<pasta do Sider>\sider.ini`, abra o arquivo num editor de texto e garanta que estas três linhas existam. Se `lua.enabled` ou `luajit.ext.enabled` já existirem com `= 0`, troque para `= 1`. Coloque a linha `lua.module` junto das outras linhas `lua.module`.
+3. Faça uma cópia do `<pasta do Sider>\sider.ini`, abra o arquivo num editor de texto e garanta que estas três linhas existam. Se `lua.enabled` ou `luajit.ext.enabled` já existirem com `= 0`, troque para `= 1`. Coloque a linha `lua.module` junto das outras linhas `lua.module`. Se a pasta também tiver variantes `sider-<nome>.ini` que um launcher alterna, faça o mesmo em cada uma.
    ```ini
    lua.enabled = 1
    luajit.ext.enabled = 1
@@ -122,14 +122,14 @@ Para **desativar**, coloque um `;` no começo da linha `lua.module = "var_mod.lu
 
 ### Opção B: script de instalação
 
-Rode o **`VAR_Mod_Setup.bat`** e escolha **`1 - Install or update`**. Ele executa o `VAR_Mod_Setup.ps1`, um script PowerShell em texto puro que pode ser aberto no Bloco de Notas antes de rodar. O cabeçalho lista tudo o que ele faz: encontra a pasta do Sider (ou pergunta), copia os dois arquivos, edita o `sider.ini` como na opção A depois de salvar um backup datado ao lado e não faz nada com o jogo aberto. Sem acesso à rede e sem alterar o registro.
+Rode o **`VAR_Mod_Setup.bat`** e escolha **`1 - Install or update`**. Ele executa o `VAR_Mod_Setup.ps1`, um script PowerShell em texto puro que pode ser aberto no Bloco de Notas antes de rodar. O cabeçalho lista tudo o que ele faz: encontra a pasta do Sider (ou pergunta), copia os dois arquivos, edita o `sider.ini` e as variantes `sider-<nome>.ini` como na opção A depois de salvar um backup datado de cada um e não altera nada com o jogo aberto. Sem acesso à rede e sem alterar o registro.
 
 | Opção | Ação |
 | --- | --- |
 | **1 - Install or update** | Copia os arquivos e ativa o mod no `sider.ini` |
-| **2 - Enable** | Ativa o mod sem copiar arquivos |
+| **2 - Enable** | Grava as mesmas linhas no `sider.ini` sem copiar arquivos |
 | **3 - Disable** | Comenta a linha do mod no `sider.ini` e mantém os arquivos |
-| **4 - Uninstall** | Guarda o `var_mod.ini` ao lado do `sider.ini`, remove os arquivos e a linha do mod e mantém `luajit.ext.enabled = 1` |
+| **4 - Uninstall** | Salva suas configurações como `var_mod.ini.before-uninstall-<data>.bak` ao lado do `sider.ini` e depois remove a linha do mod, o `modulesar_mod.lua` e a pasta `modulesar_mod\`. `lua.enabled` e `luajit.ext.enabled` continuam em 1 |
 
 ## Opções
 

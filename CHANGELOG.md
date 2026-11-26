@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.4.12
+
+Final triple check of v4.4.11 (build with the real executable, ASan and UBSan, two independent reviewers, installer runs on test folders, privacy scan of the repository and the package).
+
+- **Setup script matches its description**: enable and disable now also refuse to run while PES 2021 is open, every `sider-<name>.ini` variant next to `sider.ini` is handled (backups never match), and a backup made in the same second as an earlier one gets a `-2` suffix instead of replacing it. When `var_mod.lua` is the only module, `lua.enabled` and `luajit.ext.enabled` are written before its line instead of at the end of the file. The header, the README and the options table now describe uninstall exactly (settings saved as `var_mod.ini.before-uninstall-<date>.bak`, whole `modulesar_mod\` folder removed).
+- **Overlay robustness**: the views taken for each frame are released and the game's render targets restored on any exit, including an out of memory error while rebuilding fonts after a resolution change. A leaked view would make the next resize fail.
+- **Position reads**: ball and player positions are kept finite and within the pitch area before any HUD math, so a torn read can never draw broken geometry.
+- **Package**: zip entries use `/` as the separator again, as the ZIP format requires (the first v4.4.11 upload used `\` and was replaced).
+
 ## v4.4.11
 
 - **Setup script in English**: `VAR_Mod_Gerenciar.bat` / `.ps1` are now `VAR_Mod_Setup.bat` / `.ps1`, with menu, messages and backup names in English (`sider.ini.before-var-mod-<date>.bak`). The script header lists exactly what it does: the two files it copies, the three `sider.ini` lines it writes after a dated backup, no network access and no registry changes.
