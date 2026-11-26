@@ -2,7 +2,7 @@
 
 <img src="docs/images/hero_en.png" alt="VAR for PES 2021: pause, review, decide. The game obeys." width="100%">
 
-![Version](https://img.shields.io/badge/Version-v4.4.10-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.4.11-38BDF8?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Sider](https://img.shields.io/badge/Sider_7.3+-Compatible-F59E0B?style=for-the-badge)
 ![Native](https://img.shields.io/badge/Native-C%2B%2B20_%2B_DX11_%2B_ImGui-84CC16?style=for-the-badge)
@@ -100,31 +100,36 @@ The panel opens automatically in the Manual Replay. Detected plays come with off
 
 ## Installation
 
-1. Download **`PES2021_VAR_Mod_v4.4.10.zip`** from [Releases](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) and extract it.
-2. With the game closed, run **`VAR_Mod_Gerenciar.bat`** and choose **`1 - Instalar ou atualizar`** (install or update).
-3. Start the game through Sider (or through the patch launcher).
+Close the game, download **`PES2021_VAR_Mod_v4.4.11.zip`** from [Releases](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) and extract it. Then install it by hand (option A) or with the setup script (option B). Both give the same result.
 
-The installer locates Sider (or asks for its path), backs up `sider.ini` before changing it and does nothing while the game is running. The DLL is loaded on the first match.
+### Option A: manual installation
 
-<details>
-<summary><b>Installer options and manual installation</b></summary>
+1. Find your **Sider folder**: the folder that contains `sider.dll`. With a patch it is usually the patch's own folder. With standalone Sider it is wherever you extracted Sider.
+2. Copy the package's `modules` folder into the Sider folder, so that you end up with:
+   ```text
+   <Sider folder>\modules\var_mod.lua
+   <Sider folder>\modules\var_mod\var_core.dll
+   ```
+3. Make a copy of `<Sider folder>\sider.ini`, then open it in a text editor and make sure these three lines are present. If `lua.enabled` or `luajit.ext.enabled` already exist with `= 0`, change them to `= 1`. Put the `lua.module` line next to any other `lua.module` lines.
+   ```ini
+   lua.enabled = 1
+   luajit.ext.enabled = 1
+   lua.module = "var_mod.lua"
+   ```
+4. Start the game through Sider (or through the patch launcher). The mod loads on the first match.
+
+To **disable** the mod, put a `;` at the start of the `lua.module = "var_mod.lua"` line. To **uninstall**, delete that line, `modules\var_mod.lua` and the `modules\var_mod\` folder (your settings are in `modules\var_mod\var_mod.ini`).
+
+### Option B: setup script
+
+Run **`VAR_Mod_Setup.bat`** and choose **`1 - Install or update`**. It runs `VAR_Mod_Setup.ps1`, a plain-text PowerShell script you can open in Notepad before running. Its header lists everything it does: it finds the Sider folder (or asks for it), copies the two files, edits `sider.ini` as in option A after saving a dated backup next to it, and does nothing while the game is running. No network access and no registry changes.
 
 | Option | Action |
 | --- | --- |
 | **1 - Install or update** | Copies the files and enables the mod in `sider.ini` |
 | **2 - Enable** | Enables the mod without copying files |
-| **3 - Disable** | Disables the mod and keeps the files |
-| **4 - Uninstall** | Keeps `var_mod.ini` next to `sider.ini`, removes the files and the mod entry, keeps `luajit.ext.enabled = 1` |
-
-**Manual installation:** copy `modules\var_mod.lua` to `<sider folder>\modules\` and `modules\var_mod\var_core.dll` to `<sider folder>\modules\var_mod\`, then add to `sider.ini`:
-
-```ini
-lua.enabled = 1
-luajit.ext.enabled = 1
-lua.module = "var_mod.lua"
-```
-
-</details>
+| **3 - Disable** | Comments out the mod's line in `sider.ini` and keeps the files |
+| **4 - Uninstall** | Keeps `var_mod.ini` next to `sider.ini`, removes the files and the mod's line, keeps `luajit.ext.enabled = 1` |
 
 ## Options
 

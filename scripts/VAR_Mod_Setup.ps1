@@ -1,3 +1,20 @@
+# PES 2021 VAR Mod - setup script (optional: the README also explains the manual installation)
+#
+# What it does, and nothing else:
+#   - finds the Sider folder (the folder with sider.dll), or asks for it
+#   - install: copies modules\var_mod.lua and modules\var_mod\var_core.dll into <Sider folder>\modules\
+#   - edits sider.ini (and sider-*.ini variants if present) to contain:
+#         lua.enabled = 1
+#         luajit.ext.enabled = 1
+#         lua.module = "var_mod.lua"
+#     after saving a dated copy of each file next to it (sider.ini.before-var-mod-<date>.bak)
+#   - enable: writes the same three sider.ini lines as install, without copying files
+#   - disable: comments out the lua.module line (the files stay)
+#   - uninstall: removes the two files and the lua.module line, keeps var_mod.ini (your settings) next to sider.ini
+# It refuses to run while PES 2021 is open. No network access, no registry, no other files.
+#
+# Usage: VAR_Mod_Setup.bat  (menu)  or  powershell -File VAR_Mod_Setup.ps1 -Action install|enable|disable|uninstall|status [-SiderDir <path>]
+
 param(
     [ValidateSet("menu", "install", "enable", "disable", "uninstall", "status")]
     [string]$Action = "menu",
@@ -49,7 +66,7 @@ function Write-IniFile([string]$path, $ini, [string[]]$lines) {
 function Assert-GameClosed {
     # var_core.dll stays mapped (and pinned) while the game runs: copying or deleting it would fail halfway
     if (Get-Process -Name "PES2021" -ErrorAction SilentlyContinue) {
-        throw "Feche o PES 2021 antes de instalar, atualizar ou desinstalar o VAR Mod."
+        throw "Close PES 2021 before installing, updating or uninstalling the VAR Mod."
     }
 }
 
@@ -57,11 +74,11 @@ function Resolve-SiderDir([string]$hint) {
     if (-not [string]::IsNullOrWhiteSpace($hint)) {
         $cleanHint = $hint.Trim().Trim('"').Trim("'")
         if (-not (Test-Path -LiteralPath $cleanHint -PathType Container)) {
-            throw "Pasta Sider informada nao existe: $cleanHint"
+            throw "The given Sider folder does not exist: $cleanHint"
         }
         $hasSider = (Test-Path -LiteralPath (Join-Path $cleanHint "sider.dll")) -or (Test-Path -LiteralPath (Join-Path $cleanHint "sider.ini"))
         if (-not $hasSider) {
-            throw "sider.dll ou sider.ini nao encontrado em: $cleanHint"
+            throw "sider.dll or sider.ini not found in: $cleanHint"
         }
         return (Resolve-Path -LiteralPath $cleanHint).Path
     }
@@ -90,10 +107,10 @@ function Resolve-SiderDir([string]$hint) {
     }
 
     Write-Host ""
-    Write-Host "Pasta do Sider nao detectada automaticamente."
-    $manual = (Read-Host "Digite o caminho completo da pasta onde fica o sider.dll").Trim().Trim('"').Trim("'")
+    Write-Host "The Sider folder was not found automatically."
+    $manual = (Read-Host "Enter the full path of the folder that contains sider.dll").Trim().Trim('"').Trim("'")
     if (-not $manual -or -not (Test-Path -LiteralPath (Join-Path $manual "sider.dll"))) {
-        throw "sider.dll nao encontrado em: $manual"
+        throw "sider.dll not found in: $manual"
     }
     return (Resolve-Path -LiteralPath $manual).Path
 }
@@ -109,9 +126,9 @@ function Get-TargetInis([string]$dir) {
 
 function Backup-Ini([string]$iniPath) {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $bak = "$iniPath.antes-var-mod-$stamp.bak"
+    $bak = "$iniPath.before-var-mod-$stamp.bak"
     Copy-Item -Force -LiteralPath $iniPath -Destination $bak
-    Write-Host "[backup] Criado: $bak"
+    Write-Host "[backup] Created: $bak"
 }
 
 function Set-IniModuleState([string]$iniPath, [bool]$enable) {
@@ -193,9 +210,9 @@ function Set-IniModuleState([string]$iniPath, [bool]$enable) {
     if ($changed) {
         Backup-Ini $iniPath
         Write-IniFile $iniPath $ini $list.ToArray()
-        Write-Host "[ini] Atualizado ($(if ($enable) { 'ATIVADO' } else { 'DESATIVADO' })): $iniPath"
+        Write-Host "[ini] Updated ($(if ($enable) { 'ENABLED' } else { 'DISABLED' })): $iniPath"
     } else {
-        Write-Host "[ini] Sem alteracoes necessarias: $iniPath"
+        Write-Host "[ini] No changes needed: $iniPath"
     }
 }
 
@@ -214,7 +231,7 @@ function Remove-IniModule([string]$iniPath) {
     if ($removed) {
         Backup-Ini $iniPath
         Write-IniFile $iniPath $ini $list.ToArray()
-        Write-Host "[ini] Entrada removida: $iniPath"
+        Write-Host "[ini] Entry removed: $iniPath"
     }
 }
 
@@ -223,15 +240,15 @@ function Show-Status([string]$dir) {
     $dstDll = Join-Path $dir "modules\var_mod\var_core.dll"
     Write-Host ""
     Write-Host "=== Status PES 2021 VAR Mod ==="
-    Write-Host "Pasta Sider : $dir"
-    Write-Host "var_mod.lua : $(if (Test-Path -LiteralPath $dstLua) { 'Instalado' } else { 'Ausente' })"
-    Write-Host "var_core.dll: $(if (Test-Path -LiteralPath $dstDll) { 'Instalado' } else { 'Ausente' })"
+    Write-Host "Sider folder: $dir"
+    Write-Host "var_mod.lua : $(if (Test-Path -LiteralPath $dstLua) { 'Installed' } else { 'Missing' })"
+    Write-Host "var_core.dll: $(if (Test-Path -LiteralPath $dstDll) { 'Installed' } else { 'Missing' })"
     foreach ($ini in (Get-TargetInis $dir)) {
         $raw = (Read-IniFile $ini).Lines
-        $state = "Nao registrado"
+        $state = "Not registered"
         foreach ($ln in $raw) {
-            if ($ln -match '^\s*lua\.module\s*=\s*"var_mod\.lua"(?:\s*;.*)?\s*$') { $state = "ATIVADO"; break }
-            if ($ln -match '^\s*;+\s*lua\.module\s*=\s*"var_mod\.lua"(?:\s*;.*)?\s*$') { $state = "DESATIVADO" }
+            if ($ln -match '^\s*lua\.module\s*=\s*"var_mod\.lua"(?:\s*;.*)?\s*$') { $state = "ENABLED"; break }
+            if ($ln -match '^\s*;+\s*lua\.module\s*=\s*"var_mod\.lua"(?:\s*;.*)?\s*$') { $state = "DISABLED" }
         }
         Write-Host ("{0,-22}: {1}" -f (Split-Path -Leaf $ini), $state)
     }
@@ -241,7 +258,7 @@ function Show-Status([string]$dir) {
 function Do-Install([string]$dir) {
     Assert-GameClosed
     if (-not (Test-Path -LiteralPath $SrcLua) -or -not (Test-Path -LiteralPath $SrcDll)) {
-        throw "Arquivos de distribuicao nao encontrados ($SrcLua / $SrcDll). Execute native\build.ps1 antes."
+        throw "Package files not found ($SrcLua / $SrcDll). Run native\build.ps1 first."
     }
     $dstModDir = Join-Path $dir "modules"
     $dstCoreDir = Join-Path $dstModDir "var_mod"
@@ -250,11 +267,11 @@ function Do-Install([string]$dir) {
     # DLL first: a new Lua must never run against an old DLL (missing exports)
     Copy-Item -Force -LiteralPath $SrcDll -Destination (Join-Path $dstCoreDir "var_core.dll")
     Copy-Item -Force -LiteralPath $SrcLua -Destination (Join-Path $dstModDir "var_mod.lua")
-    Write-Host "[copy] var_mod.lua e var_core.dll copiados para $dstModDir"
+    Write-Host "[copy] var_mod.lua and var_core.dll copied to $dstModDir"
 
     $inis = Get-TargetInis $dir
     if ($inis.Count -eq 0) {
-        Write-Warning "Nenhum sider.ini encontrado em $dir. Adicione manualmente: $ModuleLine"
+        Write-Warning "No sider.ini found in $dir. Add this line by hand: $ModuleLine"
     }
     foreach ($ini in $inis) {
         Set-IniModuleState $ini $true
@@ -265,7 +282,7 @@ function Do-Install([string]$dir) {
 function Do-Toggle([string]$dir, [bool]$enable) {
     $inis = Get-TargetInis $dir
     if ($inis.Count -eq 0) {
-        Write-Warning "Nenhum sider.ini encontrado em $dir."
+        Write-Warning "No sider.ini found in $dir."
     }
     foreach ($ini in $inis) {
         Set-IniModuleState $ini $enable
@@ -284,13 +301,13 @@ function Do-Uninstall([string]$dir) {
     $userIni = Join-Path $dstCoreDir "var_mod.ini"
     if (Test-Path -LiteralPath $userIni) {
         $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $kept = Join-Path $dir "var_mod.ini.antes-desinstalar-$stamp.bak"
+        $kept = Join-Path $dir "var_mod.ini.before-uninstall-$stamp.bak"
         Copy-Item -Force -LiteralPath $userIni -Destination $kept
-        Write-Host "[backup] Configuracao do VAR Mod guardada em: $kept"
+        Write-Host "[backup] VAR Mod settings kept in: $kept"
     }
     if (Test-Path -LiteralPath $dstLua) { Remove-Item -Force -LiteralPath $dstLua }
     if (Test-Path -LiteralPath $dstCoreDir) { Remove-Item -Recurse -Force -LiteralPath $dstCoreDir }
-    Write-Host "[uninstall] Arquivos do VAR Mod removidos de $dir"
+    Write-Host "[uninstall] VAR Mod files removed from $dir"
     Show-Status $dir
 }
 
@@ -305,12 +322,12 @@ switch ($Action) {
     "menu" {
         while ($true) {
             Show-Status $targetDir
-            Write-Host "1 - Instalar ou atualizar VAR Mod (e ativar no Sider)"
-            Write-Host "2 - Ativar VAR Mod no Sider"
-            Write-Host "3 - Desativar VAR Mod no Sider (mantem arquivos)"
-            Write-Host "4 - Desinstalar completamente"
-            Write-Host "0 - Sair"
-            $choice = Read-Host "Escolha uma opcao"
+            Write-Host "1 - Install or update the VAR Mod (and enable it in Sider)"
+            Write-Host "2 - Enable the VAR Mod in Sider"
+            Write-Host "3 - Disable the VAR Mod in Sider (keeps the files)"
+            Write-Host "4 - Uninstall completely"
+            Write-Host "0 - Exit"
+            $choice = Read-Host "Choose an option"
             try {
                 switch ($choice) {
                     "1" { Do-Install $targetDir }
@@ -318,12 +335,12 @@ switch ($Action) {
                     "3" { Do-Toggle $targetDir $false }
                     "4" { Do-Uninstall $targetDir }
                     "0" { break }
-                    default { Write-Host "Opcao invalida." }
+                    default { Write-Host "Invalid option." }
                 }
             } catch {
                 # An error (for example the game still open) goes back to the menu instead of closing it
                 Write-Host ""
-                Write-Host "[erro] $($_.Exception.Message)"
+                Write-Host "[error] $($_.Exception.Message)"
             }
             if ($choice -eq "0") { break }
         }

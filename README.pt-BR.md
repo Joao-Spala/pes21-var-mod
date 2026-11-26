@@ -2,7 +2,7 @@
 
 <img src="docs/images/hero_pt.png" alt="VAR para PES 2021: pause, reveja, decida. O jogo obedece." width="100%">
 
-![Version](https://img.shields.io/badge/Version-v4.4.10-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.4.11-38BDF8?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Sider](https://img.shields.io/badge/Sider_7.3+-Compatible-F59E0B?style=for-the-badge)
 ![Native](https://img.shields.io/badge/Native-C%2B%2B20_%2B_DX11_%2B_ImGui-84CC16?style=for-the-badge)
@@ -100,31 +100,36 @@ O painel abre automaticamente no Replay Manual. Os lances detectados já trazem 
 
 ## Instalação
 
-1. Baixe o **`PES2021_VAR_Mod_v4.4.10.zip`** em [Releases](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia.
-2. Com o jogo fechado, rode o **`VAR_Mod_Gerenciar.bat`** e escolha **`1 - Instalar ou atualizar`**.
-3. Abra o jogo pelo Sider (ou pelo atalho do patch).
+Feche o jogo, baixe o **`PES2021_VAR_Mod_v4.4.11.zip`** em [Releases](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia. Depois instale à mão (opção A) ou com o script de instalação (opção B). As duas dão o mesmo resultado.
 
-O instalador localiza o Sider (ou pede o caminho), faz backup do `sider.ini` antes de alterá-lo e não faz nada com o jogo aberto. A DLL é carregada na primeira partida.
+### Opção A: instalação manual
 
-<details>
-<summary><b>Opções do instalador e instalação manual</b></summary>
+1. Encontre a **pasta do Sider**: a pasta que tem o `sider.dll`. Num patch, normalmente é a própria pasta do patch. Com o Sider avulso, é onde você extraiu o Sider.
+2. Copie a pasta `modules` do pacote para dentro da pasta do Sider, para ficar assim:
+   ```text
+   <pasta do Sider>\modules\var_mod.lua
+   <pasta do Sider>\modules\var_mod\var_core.dll
+   ```
+3. Faça uma cópia do `<pasta do Sider>\sider.ini`, abra o arquivo num editor de texto e garanta que estas três linhas existam. Se `lua.enabled` ou `luajit.ext.enabled` já existirem com `= 0`, troque para `= 1`. Coloque a linha `lua.module` junto das outras linhas `lua.module`.
+   ```ini
+   lua.enabled = 1
+   luajit.ext.enabled = 1
+   lua.module = "var_mod.lua"
+   ```
+4. Abra o jogo pelo Sider (ou pelo atalho do patch). O mod carrega na primeira partida.
+
+Para **desativar**, coloque um `;` no começo da linha `lua.module = "var_mod.lua"`. Para **desinstalar**, apague essa linha, o `modules\var_mod.lua` e a pasta `modules\var_mod\` (suas configurações ficam em `modules\var_mod\var_mod.ini`).
+
+### Opção B: script de instalação
+
+Rode o **`VAR_Mod_Setup.bat`** e escolha **`1 - Install or update`**. Ele executa o `VAR_Mod_Setup.ps1`, um script PowerShell em texto puro que pode ser aberto no Bloco de Notas antes de rodar. O cabeçalho lista tudo o que ele faz: encontra a pasta do Sider (ou pergunta), copia os dois arquivos, edita o `sider.ini` como na opção A depois de salvar um backup datado ao lado e não faz nada com o jogo aberto. Sem acesso à rede e sem alterar o registro.
 
 | Opção | Ação |
 | --- | --- |
-| **1 - Instalar ou atualizar** | Copia os arquivos e ativa o mod no `sider.ini` |
-| **2 - Ativar** | Ativa o mod sem copiar arquivos |
-| **3 - Desativar** | Desativa o mod e mantém os arquivos |
-| **4 - Desinstalar** | Guarda o `var_mod.ini` ao lado do `sider.ini`, remove os arquivos e a linha do mod e mantém `luajit.ext.enabled = 1` |
-
-**Instalação manual:** copie `modules\var_mod.lua` para `<pasta do sider>\modules\` e `modules\var_mod\var_core.dll` para `<pasta do sider>\modules\var_mod\`, depois adicione ao `sider.ini`:
-
-```ini
-lua.enabled = 1
-luajit.ext.enabled = 1
-lua.module = "var_mod.lua"
-```
-
-</details>
+| **1 - Install or update** | Copia os arquivos e ativa o mod no `sider.ini` |
+| **2 - Enable** | Ativa o mod sem copiar arquivos |
+| **3 - Disable** | Comenta a linha do mod no `sider.ini` e mantém os arquivos |
+| **4 - Uninstall** | Guarda o `var_mod.ini` ao lado do `sider.ini`, remove os arquivos e a linha do mod e mantém `luajit.ext.enabled = 1` |
 
 ## Opções
 

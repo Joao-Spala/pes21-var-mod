@@ -46,5 +46,5 @@ Verified in `ReplayCam.lua`, `goal_pyro.lua` and `doc\scripting.html`:
 ## 4. Patch Pattern for Installation and Activation/Deactivation
 
 Verified in `<patch folder>/GoalPyro_Opcional.ps1` and `<patch folder>/Comemoracoes_Opcional.ps1`:
-- The package provides `VAR_Mod_Gerenciar.bat` + `VAR_Mod_Gerenciar.ps1` to install, enable, disable or remove the module (`luajit.ext.enabled = 1` and `lua.module = "var_mod.lua"` in the `sider*.ini` files with Latin-1 encoding `28591`), checking that `PES2021.exe` is closed and creating a dated backup before editing.
+- The package provides `VAR_Mod_Setup.bat` + `VAR_Mod_Setup.ps1` to install, enable, disable or remove the module (`luajit.ext.enabled = 1` and `lua.module = "var_mod.lua"` in the `sider*.ini` files with Latin-1 encoding `28591`), checking that `PES2021.exe` is closed and creating a dated backup before editing.
 - Additionally, in game, the user can toggle the VAR in real time through the Sider menu (`overlay_on`).

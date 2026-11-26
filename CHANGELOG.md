@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.4.11
+
+- **Setup script in English**: `VAR_Mod_Gerenciar.bat` / `.ps1` are now `VAR_Mod_Setup.bat` / `.ps1`, with menu, messages and backup names in English (`sider.ini.before-var-mod-<date>.bak`). The script header lists exactly what it does: the two files it copies, the three `sider.ini` lines it writes after a dated backup, no network access and no registry changes.
+- **Manual installation documented step by step**: the README now presents the manual installation first (copy two files, add three lines to `sider.ini`), with how to disable and uninstall by hand. The setup script is optional.
+- No change to the mod itself.
+
 ## v4.4.10
 
 Final review of v4.4.9 by four independent reviewers (requirements, bugs, interface, documentation).

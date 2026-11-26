@@ -193,10 +193,10 @@ if (-not $SkipTests) {
 # Stage the distribution only now: dist/ never holds an untested build (the installer copies from it)
 Copy-Item -Force $OutDll $DistDll
 Copy-Item -Force (Join-Path $RepoRoot "sider\modules\var_mod.lua") (Join-Path $DistMod "var_mod.lua")
-if (Test-Path (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.ps1")) {
-    Copy-Item -Force (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.ps1") (Join-Path $DistDir "VAR_Mod_Gerenciar.ps1")
+if (Test-Path (Join-Path $RepoRoot "scripts\VAR_Mod_Setup.ps1")) {
+    Copy-Item -Force (Join-Path $RepoRoot "scripts\VAR_Mod_Setup.ps1") (Join-Path $DistDir "VAR_Mod_Setup.ps1")
 }
-if (Test-Path (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.bat")) {
-    Copy-Item -Force (Join-Path $RepoRoot "scripts\VAR_Mod_Gerenciar.bat") (Join-Path $DistDir "VAR_Mod_Gerenciar.bat")
+if (Test-Path (Join-Path $RepoRoot "scripts\VAR_Mod_Setup.bat")) {
+    Copy-Item -Force (Join-Path $RepoRoot "scripts\VAR_Mod_Setup.bat") (Join-Path $DistDir "VAR_Mod_Setup.bat")
 }
 Write-Host "[ok] Distribuicao pronta em: $DistDll"
