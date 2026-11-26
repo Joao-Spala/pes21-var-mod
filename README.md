@@ -13,6 +13,8 @@
 
 ### [Download the latest release](https://github.com/Joao-Spala/pes21-var-mod/releases/latest)
 
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_me_a_coffee-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/AlfaceJao)
+
 </div>
 
 ---
