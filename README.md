@@ -2,7 +2,7 @@
 
 <img src="docs/images/hero_en.png" alt="VAR for PES 2021: pause, review, decide. The game obeys." width="100%">
 
-![Version](https://img.shields.io/badge/Version-v4.4.9-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.4.10-38BDF8?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Sider](https://img.shields.io/badge/Sider_7.3+-Compatible-F59E0B?style=for-the-badge)
 ![Native](https://img.shields.io/badge/Native-C%2B%2B20_%2B_DX11_%2B_ImGui-84CC16?style=for-the-badge)
@@ -21,7 +21,7 @@
 
 ## What it is
 
-**VAR for PES 2021** adds a manual video review to offline matches. Pause, open the replay, pick a play and decide. The decision is applied inside the PES engine, so the restart, the card and the sending off follow as if the referee had made that call from the start. Then the engine shows the play again.
+**VAR for PES 2021** adds a manual video review to offline matches. Pause, open the replay, pick a play and decide. The decision is applied inside the PES engine, so the restart, the card and the sending off follow as if the referee had made that call from the start. When it is a foul or a penalty given with the ball in play, the engine then shows the play again.
 
 It is a Sider module (native x64 DLL plus Lua) for the Steam version of the game.
 
@@ -65,23 +65,23 @@ The panel finds the moments that matter by itself. It follows the match 60 times
 </tr>
 <tr>
 <td><img src="docs/images/en/feat_pitch.png" alt="Tactical pitch"></td>
-<td><b>A tactical board, not a radar.</b><br>Readable shirt numbers on every kit, a heading arrow on the players near the ball, a 1.5 s trail for the two players of the play and a dotted one for the ball, the offside line, and tags that sit where they cover nobody.</td>
+<td><b>A tactical board, not a radar.</b><br>Framed on the play and gliding with it, readable shirt numbers on every kit, a heading arrow on the players near the ball, a 1.5 s trail for the two players of the play and a dotted one for the ball, arrows that show which way each team attacks, the offside line, and tags that sit where they cover nobody.</td>
 </tr>
 </table>
 
-**Also new in v4.4.9**
+**Also new in v4.4.9 and v4.4.10**
 
 - **The camera follows the jump.** Click a play on the bar and the 3D replay camera goes to the new frame, keeping its angle and distance.
-- **Replay after the decision.** A decision applied with the ball in play is shown again by the engine itself, after the card cutscene. It can be turned off in **OPTIONS**.
+- **Replay after the decision.** A foul or penalty given with the ball in play is shown again by the engine itself, after the stoppage cutscenes. It can be turned off in **OPTIONS**.
 - **Readable on any screen.** Minimum text and token sizes at 720p, 4:3 and 800x600.
-- **Lighter.** Smaller font atlas with no copy left in RAM, a cheaper panel shadow and a DLL 186 KB smaller.
+- **Lighter.** Smaller font atlas with no copy left in RAM, a cheaper panel shadow and a smaller DLL.
 
 ## The panel
 
 <table>
 <tr>
 <td align="center" width="33%"><img src="docs/images/en/revisao.png" alt="Review"><br><b>Review</b><br><sub>The incident bar, the play in focus and the tactical pitch with the contact between offender and fouled player.</sub></td>
-<td align="center" width="33%"><img src="docs/images/en/decisao.png" alt="Decision"><br><b>Decision</b><br><sub>Adjust player, card, team and spot. The cross on the pitch is the restart, one click moves it.</sub></td>
+<td align="center" width="33%"><img src="docs/images/en/decisao.png" alt="Decision"><br><b>Decision</b><br><sub>Adjust player, card, team and spot. The white cross labelled RESTART is where the play restarts, one click moves it.</sub></td>
 <td align="center" width="33%"><img src="docs/images/en/pool.png" alt="Decision pool"><br><b>Decision pool</b><br><sub>One play and up to 32 card edits, applied together and in order when you leave the replay.</sub></td>
 </tr>
 <tr>
@@ -99,7 +99,7 @@ The panel finds the moments that matter by itself. It follows the match 60 times
 | --- | --- |
 | **See** | The match recorded at 60 Hz, one frame per simulation frame, so the pitch follows the replay frame by frame and blends positions in slow motion. Incidents come from the engine's own contact model, and a foul whistled after an advantage sits at the moment of contact. Names, numbers and kits come from game memory, including patch-edited ones. |
 | **Decide** | Award a foul or penalty on an earlier play, overturn the foul or penalty given, upgrade to penalty, reverse the foul, edit cards and award a corner, goal kick or throw-in, even with the kicker already over the ball. |
-| **Apply** | The card goes through the engine's own commit, which counts it once, and the sending off follows the engine's flow. If the game does not set up the restart, the mod undoes everything it wrote at that moment. With the ball in play, the engine then replays the reviewed moment through its own replay of past plays. |
+| **Apply** | The card goes through the engine's own commit, which counts it once, and the sending off follows the engine's flow. If the game does not set up the restart, the mod undoes everything it wrote at that moment. For a foul or penalty given with the ball in play, the engine then replays the reviewed moment through its own replay of past plays. |
 | **Remember** | Cards and fouls follow the player of the play, not the slot, even after a substitution. A decision about a stoppage that has already passed is never applied out of time. |
 | **Respect** | Never a third yellow or a second red. No game file is modified. The panel takes the same share of the screen from 720p to 4K, ultrawide and 4:3, in Compact, Default and Large sizes. |
 
@@ -108,12 +108,12 @@ The panel finds the moments that matter by itself. It follows the match 60 times
 - It only works on **Steam PES 2021 `v1.7.2.0`**. Other executable versions use other addresses and are not supported.
 - **Offline matches only**: Exhibition, Master League, Become a Legend and Cups. Nothing related to network, DRM or online modes is touched.
 - It does not rewind the match. A decision applies to the stoppage it was made in, and **goals cannot be overturned**.
-- The replay after the decision needs the ball in play when the decision is applied and the reviewed moment still in the game's replay memory, about 11 s of play. The engine may show its own instant replay first. When any condition is missing, the decision is applied without the extra replay.
+- The replay after the decision is for a foul or penalty given with the ball in play, with the reviewed moment still in the game's replay memory (about 11 s of play). The engine may show its own instant replay first. When any condition is missing, the decision is applied without the extra replay.
 - The gamepad opens and collapses the panel and keeps controlling the replay. Inside the panel, navigation is keyboard and mouse.
 
 ## Installation
 
-1. Download **`PES2021_VAR_Mod_v4.4.9.zip`** from [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) and extract it anywhere.
+1. Download **`PES2021_VAR_Mod_v4.4.10.zip`** from [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) and extract it anywhere.
 2. With the game closed, run **`VAR_Mod_Gerenciar.bat`** and pick **`1 - Instalar ou atualizar`** (install or update).
 3. Launch the game through **Sider** (with a patch, through the patch launcher). Done.
 
@@ -164,7 +164,7 @@ All remappable in **OPTIONS > Controls**. While the panel is focused, keyboard a
 | --- | --- |
 | **The Sider menu shows `Status: ERROR (...)`** | The DLL did not load and the text gives the reason. Check that `var_core.dll` is in `<sider folder>\modules\var_mod\`, that `lua.enabled = 1` and `luajit.ext.enabled = 1` are in `sider.ini`, and look at `sider.log`. |
 | **The panel does not open in the replay** | Make sure the match is offline and the VAR is on (key `7` in the Sider menu). `V`, `F7` or `R3` reopen a collapsed panel. |
-| **No replay after a decision** | The log says why (`Decision replay: ...`): the ball was not in play, the moment had left the replay memory or the engine queued no replay for that stoppage. It can also be off in **OPTIONS**. |
+| **No replay after a decision** | It only follows a foul or penalty given with the ball in play, and it can be off in **OPTIONS**. Otherwise the log says why in a `Decision replay: ...` line (the moment had left the replay memory, the engine queued no replay for that stoppage or its replay slot was busy). |
 | **Something went wrong in a match** | The log is at `<sider folder>\modules\var_mod\var_core.log` and is recreated every time the game starts. Copy it before relaunching and attach it to an [issue](https://github.com/Joao-Spala/pes21-var-mod/issues). |
 | **Back to defaults** | Delete `<sider folder>\modules\var_mod\var_mod.ini`. |
 
@@ -197,7 +197,7 @@ sequenceDiagram
 
 | | |
 | --- | --- |
-| **Native** | C++20 x64 DLL of 763 KB, a single render hook on `GrSwapChain::Present0`, no extra DX11 device and no UI work outside the replay. Measured cost in live play: 3 to 6 µs per simulation tick and 2 µs per frame. |
+| **Native** | C++20 x64 DLL of about 780 KB, a single render hook on `GrSwapChain::Present0`, no extra DX11 device and no UI work outside the replay. Measured on the real code paths in a benchmark: 3 to 6 µs per simulation tick and 2 µs per frame. |
 | **In the engine** | Decisions go through the match state machine (`MatchFSM`) and the engine's own card commit, in both buffers it uses. The replay after the decision is the engine's own pending clip, filled field by field like its builder does. |
 | **Atomic** | The restart is verified in the same tick and, if the game did not set it up, cards and match data are rolled back. A replay request nobody consumes goes back to idle on its own. |
 | **Safe** | Hooks installed with the other threads frozen, writes only to validated structures, a fix for a game allocator bug that crashed PES after the final whistle and a cache that keeps that fix cheap during loading. |

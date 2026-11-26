@@ -163,7 +163,7 @@ def feature_cards(snap, lang):
     out = {}
     for name in ('card', 'pitch'):
         out[name] = crop_frac(full, REGIONS[name])
-    seq = os.path.join(snap, f'seq_{lang}_010.bmp')
+    seq = os.path.join(snap, f'seq_{lang}_040.bmp')  # cursor between markers, suspect pulsing
     if os.path.exists(seq):
         tl = crop_frac(Image.open(seq).convert('RGB'), REGIONS['timeline'])
         out['timeline'] = tl.resize((tl.width * 2, tl.height * 2), Image.LANCZOS)

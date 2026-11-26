@@ -19,7 +19,7 @@ Extracted directly from `<patch folder>\modules\goal_pyro.lua` and `PESCustomCel
 
 ---
 
-## 2. Final Native Hook Architecture (`var_core.dll` v4.0)
+## 2. Final Native Hook Architecture (`var_core.dll`)
 
 To eliminate any fragility from volatile registers and guarantee instant startup (zero static imports of `d3d11.dll` / `dxgi.dll`, zero dummy DX11 device), v4.0 uses exclusively Microsoft x64 ABI function-entry hooks with atomic writes (`InterlockedExchange64` / `cmpxchg16b`) and prior trampoline publication with a memory barrier.
 
@@ -30,7 +30,7 @@ To eliminate any fragility from volatile registers and guarantee instant startup
   `48 89 5C 24 20 4C 89 44 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 60`
 - **Stolen bytes (5 bytes, 0 NOPs):** `48 89 5C 24 20` (`mov qword ptr [rsp + 0x20], rbx`)
 - **Sider/patch conflicts:** none (`[]`)
-- **Role in the VAR Mod:** captures `MatchFSM*`, resolves `GMATCH` (`0x143702208`) at `MainTick + 0x30`, runs physical detection at 60 Hz (`PlayerAction + 0x01 / +0x08` and `BallState + 0x2601C`), records tactical snapshots at 60 Hz, one per simulation frame (90 s), synchronizes real names (`#N NAME`), shirt numbers, substitutions and kit colors (licensed and patch-edited) and applies the verdicts of Scenarios 1, 2 and 4.
+- **Role in the VAR Mod:** captures `MatchFSM*`, resolves `GMATCH` (`0x143702208`) at `MainTick + 0x30`, runs physical detection at 60 Hz (`PlayerAction + 0x01 / +0x08` and `BallState + 0x2601C`), records tactical snapshots at 60 Hz, one per simulation frame (30 s, about 0.87 MB), synchronizes real names (`#N NAME`), shirt numbers, substitutions and kit colors (licensed and patch-edited) and applies the verdicts of Scenarios 1, 2 and 4.
 
 ### Hook 2: `Judge::FinalizeFrame` (Native Injection of Scenario 3 in `InPlay`)
 
@@ -58,7 +58,7 @@ To eliminate any fragility from volatile registers and guarantee instant startup
 - **Stolen bytes (5 bytes, 0 NOPs, zero RIP-relative):** `40 53 55 56 57` (`push rbx`, `push rbp`, `push rsi`, `push rdi`)
 - **Sider/patch conflicts:** none (`[]`)
 - **Role in the VAR Mod:** runs on the Replay thread itself, immediately before mirroring the state into `ReplayManager`, executing commands queued by the interface:
-  - **Native seek:** finds the exact frame in the circular window `[winStart..winEnd]` of the `ReplaySingleton` (`0x143703558`, `+0x6A8 -> +0x40`, stride `0x1FB0`) matching the match half, calls `ReplayPlayer::SetFrame` (`0x14217E800`), optionally pauses (`ctrl + 0x5C = 0`, `ctrl + 0x310 = 0.0f`) and updates the 3D camera `LookAtPos`.
+  - **Native seek:** finds the exact frame in the circular window `[winStart..winEnd]` of the `ReplaySingleton` (`0x143703558`, `+0x6A8 -> +0x40`, stride `0x1FB0`) matching the match half, calls `ReplayPlayer::SetFrame` (`0x14217E800`) and optionally pauses (`ctrl + 0x5C = 0`, `ctrl + 0x310 = 0.0f`). SetFrame only stores the frame index (`+0x238`, float `+0x14`) and tail-calls `0x14217BF20` with speed 0, which poses no actor, so the camera is re-centred over the next 8 calls while paused: target in the camera state (`camera + 0x18 -> +0x00`) and in the follow controller's own copy (`*(camera + 0x00) + 0x34`, vtables `0x142BDFB40` / `0x142BDFB88` for modes 0 and 1, which use it while paused). The engine rebuilds the camera position (`+0x0C`) around the target.
   - **Play/Pause:** toggles `ctrl + 0x5C` (`0`/`1`) and `ctrl + 0x310` (`0.0f`/`1.0f`).
   - **3D Camera Focus:** toggles `ctrl + 0x64D` (`FocusSelector`), `ctrl + 0x80` (`ReplayPlayer + 0x30`), leaves Free Cam if `ctrl + 0x64C == 3` and updates `ReplayCamera` (`+0x18 -> +0x00 / +0x44`) via `ReplayPlayer::GetFocusPos` (`0x14217EC70`).
 
@@ -69,6 +69,16 @@ To eliminate any fragility from volatile registers and guarantee instant startup
   `48 8B 49 20 45 33 C0 48 8B 01 48 FF 60 40`
 - **Stolen bytes (7 bytes):** `48 8B 49 20 45 33 C0`
 - **Role in the VAR Mod:** intercepts the real `IDXGISwapChain*` at `[rcx + 0x20]`, with a lock-free fast path outside the Replay and a transient per-frame RTV (compatible with `ResizeBuffers`, Alt+Tab, Sider and Steam Overlay).
+
+### Hook 6: `FoulSnapshotPool::Find` (Foul Snapshot Guard)
+
+- **VA:** `0x140A82120`
+- **Role in the VAR Mod:** for the three callers of the foul event consumer that dereference the result without a NULL check (`0x1404B4870` and helpers), a missing snapshot of an injected foul resolves to a zeroed stand-in instead of NULL. Every other caller keeps the native NULL.
+
+### Hook 7: dlmalloc `win32munmap` (Atomic Heap Segment Release)
+
+- **VA / RVA:** `0x1403FC0D0` / `0x3FC0D0`
+- **Role in the VAR Mod:** replaces the engine's segment release, which freed a segment with mixed page protection halfway and crashed after the final whistle (`PES2021.exe+0x3FE31D`). The range is released allocation by allocation or not at all, and a refused range is refused again in O(1) for 2 s (see `07_engine_heap_segment_release.md`).
 
 ### Input Hooks in the Manual Replay (Keyboard/Mouse Blocking and `R3` Shortcut on the Controller)
 

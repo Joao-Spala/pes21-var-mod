@@ -2,7 +2,7 @@
 
 <img src="docs/images/hero_pt.png" alt="VAR para PES 2021: pause, reveja, decida. O jogo obedece." width="100%">
 
-![Version](https://img.shields.io/badge/Version-v4.4.9-38BDF8?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-v4.4.10-38BDF8?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Sider](https://img.shields.io/badge/Sider_7.3+-Compatible-F59E0B?style=for-the-badge)
 ![Native](https://img.shields.io/badge/Native-C%2B%2B20_%2B_DX11_%2B_ImGui-84CC16?style=for-the-badge)
@@ -21,7 +21,7 @@
 
 ## O que é
 
-O **VAR para PES 2021** adiciona uma revisão manual de vídeo às partidas offline. Você pausa, abre o replay, escolhe o lance e decide. A decisão é aplicada dentro da engine do PES, então a cobrança, o cartão e a expulsão seguem como se o árbitro tivesse tomado aquela decisão desde o começo. Depois a engine mostra o lance de novo.
+O **VAR para PES 2021** adiciona uma revisão manual de vídeo às partidas offline. Você pausa, abre o replay, escolhe o lance e decide. A decisão é aplicada dentro da engine do PES, então a cobrança, o cartão e a expulsão seguem como se o árbitro tivesse tomado aquela decisão desde o começo. Quando é uma falta ou um pênalti com a bola rolando, a engine depois mostra o lance de novo.
 
 É um módulo do Sider (DLL nativa x64 e Lua) para a versão Steam do jogo.
 
@@ -65,23 +65,23 @@ O painel encontra sozinho os momentos que importam. Ele acompanha a partida 60 v
 </tr>
 <tr>
 <td><img src="docs/images/pt/feat_pitch.png" alt="Campinho tático"></td>
-<td><b>Uma prancheta tática, não um radar.</b><br>Número da camisa legível em qualquer uniforme, seta de direção nos jogadores perto da bola, rastro de 1,5 s dos dois jogadores do lance e um rastro pontilhado da bola, linha de impedimento e rótulos que ficam onde não cobrem ninguém.</td>
+<td><b>Uma prancheta tática, não um radar.</b><br>Enquadrada no lance e acompanhando o movimento, com número da camisa legível em qualquer uniforme, seta de direção nos jogadores perto da bola, rastro de 1,5 s dos dois jogadores do lance e um rastro pontilhado da bola, setas que mostram para onde cada time ataca, linha de impedimento e rótulos que ficam onde não cobrem ninguém.</td>
 </tr>
 </table>
 
-**Também novo na v4.4.9**
+**Também novo na v4.4.9 e v4.4.10**
 
 - **A câmera acompanha o salto.** Clique num lance da barra e a câmera 3D do replay vai para o novo quadro, mantendo ângulo e distância.
-- **Replay depois da decisão.** Uma decisão aplicada com a bola rolando é mostrada de novo pela própria engine, depois da cena do cartão. Dá para desligar em **OPÇÕES**.
+- **Replay depois da decisão.** Uma falta ou um pênalti marcado com a bola rolando é mostrado de novo pela própria engine, depois das cenas da parada. Dá para desligar em **OPÇÕES**.
 - **Legível em qualquer tela.** Tamanho mínimo de texto e de ficha em 720p, 4:3 e 800x600.
-- **Mais leve.** Atlas de fonte menor e sem cópia na RAM, sombra do painel mais barata e DLL 186 KB menor.
+- **Mais leve.** Atlas de fonte menor e sem cópia na RAM, sombra do painel mais barata e DLL menor.
 
 ## O painel
 
 <table>
 <tr>
 <td align="center" width="33%"><img src="docs/images/pt/revisao.png" alt="Revisão"><br><b>Revisão</b><br><sub>A barra de lances, o lance em foco e o campinho tático com o contato entre infrator e vítima.</sub></td>
-<td align="center" width="33%"><img src="docs/images/pt/decisao.png" alt="Decisão"><br><b>Decisão</b><br><sub>Ajuste jogador, cartão, time e local. O X no campo é a cobrança, um clique a move.</sub></td>
+<td align="center" width="33%"><img src="docs/images/pt/decisao.png" alt="Decisão"><br><b>Decisão</b><br><sub>Ajuste jogador, cartão, time e local. O X branco com o rótulo COBRANÇA é onde o jogo recomeça, um clique o move.</sub></td>
 <td align="center" width="33%"><img src="docs/images/pt/pool.png" alt="Pool de decisões"><br><b>Pool de decisões</b><br><sub>Um lance e até 32 ajustes de cartão, aplicados juntos e em ordem ao sair do replay.</sub></td>
 </tr>
 <tr>
@@ -99,7 +99,7 @@ O painel encontra sozinho os momentos que importam. Ele acompanha a partida 60 v
 | --- | --- |
 | **Ver** | A partida gravada a 60 Hz, um quadro por quadro da simulação, então o campinho acompanha o replay quadro a quadro e suaviza as posições em câmera lenta. Os lances vêm do modelo de contato da própria engine, e a falta apitada depois de uma vantagem fica no momento do contato. Nomes, números e uniformes vêm da memória do jogo, inclusive os editados por patches. |
 | **Decidir** | Marcar falta ou pênalti num lance anterior, anular a falta ou o pênalti marcado, converter em pênalti, inverter a falta, ajustar cartões e dar escanteio, tiro de meta ou lateral, mesmo com o cobrador já posicionado. |
-| **Aplicar** | O cartão passa pelo registro da própria engine, que conta uma vez só, e a expulsão sai pelo fluxo dela. Se o jogo não montar a cobrança, o mod desfaz tudo o que escreveu naquele instante. Com a bola rolando, a engine depois repete o momento revisado pelo seu próprio replay de lances passados. |
+| **Aplicar** | O cartão passa pelo registro da própria engine, que conta uma vez só, e a expulsão sai pelo fluxo dela. Se o jogo não montar a cobrança, o mod desfaz tudo o que escreveu naquele instante. Numa falta ou num pênalti marcado com a bola rolando, a engine depois repete o momento revisado pelo seu próprio replay de lances passados. |
 | **Lembrar** | Cartões e faltas seguem o jogador do lance, não a posição, mesmo depois de uma substituição. Uma decisão sobre uma parada que já passou nunca é aplicada fora de hora. |
 | **Respeitar** | Nunca terceiro amarelo nem segundo vermelho. Nenhum arquivo do jogo é alterado. O painel ocupa a mesma fração da tela de 720p a 4K, em ultrawide e 4:3, nos tamanhos Compacto, Padrão e Grande. |
 
@@ -108,12 +108,12 @@ O painel encontra sozinho os momentos que importam. Ele acompanha a partida 60 v
 - Funciona só no **PES 2021 `v1.7.2.0` da Steam**. Outras versões do executável têm outros endereços e não são suportadas.
 - **Só partidas offline**: Exibição, Master Liga, Rumo ao Estrelato e Copas. Nada de rede, DRM ou modo online é tocado.
 - Não volta o jogo no tempo. Uma decisão vale para a parada em que foi tomada, e **gols não podem ser anulados**.
-- O replay depois da decisão precisa da bola rolando no momento em que a decisão é aplicada e do lance revisado ainda na memória de replay do jogo, cerca de 11 s de jogo. A engine pode mostrar antes o replay instantâneo dela. Se faltar alguma condição, a decisão é aplicada sem o replay extra.
+- O replay depois da decisão vale para falta ou pênalti marcado com a bola rolando, com o lance revisado ainda na memória de replay do jogo (cerca de 11 s de jogo). A engine pode mostrar antes o replay instantâneo dela. Se faltar alguma condição, a decisão é aplicada sem o replay extra.
 - O controle abre e recolhe o painel e continua controlando o replay. Dentro do painel, a navegação é por teclado e mouse.
 
 ## Instalação
 
-1. Baixe o **`PES2021_VAR_Mod_v4.4.9.zip`** em [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
+1. Baixe o **`PES2021_VAR_Mod_v4.4.10.zip`** em [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
 2. Com o jogo fechado, rode o **`VAR_Mod_Gerenciar.bat`** e escolha **`1 - Instalar ou atualizar`**.
 3. Abra o jogo pelo **Sider** (num patch, pelo atalho do próprio patch). Pronto.
 
@@ -164,7 +164,7 @@ Todos remapeáveis em **OPÇÕES > Controles**. Enquanto o painel está em foco,
 | --- | --- |
 | **O menu do Sider mostra `Status: ERRO (...)`** | A DLL não carregou e o texto diz o motivo. Confira se `var_core.dll` está em `<pasta do sider>\modules\var_mod\`, se `lua.enabled = 1` e `luajit.ext.enabled = 1` estão no `sider.ini` e veja o `sider.log`. |
 | **O painel não abre no replay** | Confirme que a partida é offline e que o VAR está ligado (tecla `7` no menu do Sider). `V`, `F7` ou `R3` reabrem o painel recolhido. |
-| **Não houve replay depois da decisão** | O log diz o motivo (`Decision replay: ...`): a bola não estava rolando, o lance já tinha saído da memória de replay ou a engine não enfileirou replay naquela parada. Também pode estar desligado em **OPÇÕES**. |
+| **Não houve replay depois da decisão** | Ele só acontece numa falta ou pênalti marcado com a bola rolando, e pode estar desligado em **OPÇÕES**. Fora isso, o log diz o motivo numa linha `Decision replay: ...` (o lance já tinha saído da memória de replay, a engine não enfileirou replay naquela parada ou o espaço de replay dela estava ocupado). |
 | **Algo deu errado numa partida** | O log fica em `<pasta do sider>\modules\var_mod\var_core.log` e é recriado a cada abertura do jogo. Copie antes de abrir de novo e anexe numa [issue](https://github.com/Joao-Spala/pes21-var-mod/issues). |
 | **Voltar ao padrão** | Apague `<pasta do sider>\modules\var_mod\var_mod.ini`. |
 
@@ -197,7 +197,7 @@ sequenceDiagram
 
 | | |
 | --- | --- |
-| **Nativo** | DLL x64 em C++20 com 763 KB, um único gancho de render em `GrSwapChain::Present0`, sem dispositivo DX11 extra e sem trabalho de interface fora do replay. Custo medido no jogo ao vivo: 3 a 6 µs por tick da simulação e 2 µs por quadro. |
+| **Nativo** | DLL x64 em C++20 com cerca de 780 KB, um único gancho de render em `GrSwapChain::Present0`, sem dispositivo DX11 extra e sem trabalho de interface fora do replay. Medido nos caminhos reais do código num benchmark: 3 a 6 µs por tick da simulação e 2 µs por quadro. |
 | **Na engine** | Decisões entram pela máquina de estados da partida (`MatchFSM`) e pelo registro de cartões da própria engine, nos dois buffers que ela usa. O replay depois da decisão é o clipe pendente da própria engine, preenchido campo a campo como o construtor dela faz. |
 | **Atômico** | A cobrança é conferida no mesmo tick e, se o jogo não a montou, cartões e dados da partida voltam ao estado anterior. Um pedido de replay que ninguém consome volta sozinho ao estado ocioso. |
 | **Seguro** | Ganchos instalados com as outras threads congeladas, escrita só em estruturas validadas, correção de um defeito do alocador do jogo que derrubava o PES depois do apito final e um cache que mantém essa correção barata no loading. |

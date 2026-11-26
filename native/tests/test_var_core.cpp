@@ -9,6 +9,7 @@
 #include "match_hooks.h"
 #include "var_hud.h"
 #include "var_state.h"
+#include "version.h"
 
 #include <windows.h>
 #include <cmath>
@@ -1227,8 +1228,16 @@ void TestV4BroadcastHudAndRadar() {
     const float aspect = 452.0f / 184.0f;
 
     // 1. PitchRadarViewport: Full pitch & Auto Penalty-Box Zoom (strict 1:1 metric scale + round-trip)
-    const PitchRadarViewport vpFull = PitchRadarViewport::Compute(dims, Vec3{ 0.0f, 0.0f, 0.0f }, true, -1, aspect);
-    EXPECT_TRUE(!vpFull.isZoomed && vpFull.zoomSide == 0, "Center pitch must stay in Full Pitch mode");
+    const PitchRadarViewport vpFull = PitchRadarViewport::Compute(dims, Vec3{ 0.0f, 0.0f, 0.0f }, true, 0, aspect);
+    EXPECT_TRUE(!vpFull.isZoomed && !vpFull.isPlayView && vpFull.zoomSide == 0, "Full pitch override must show the whole pitch");
+    const PitchRadarViewport vpPlay = PitchRadarViewport::Compute(dims, Vec3{ -10.0f, 0.0f, 5.0f }, true, -1, aspect);
+    EXPECT_TRUE(vpPlay.isPlayView && !vpPlay.isZoomed, "Away from the boxes the automatic view frames the play");
+    EXPECT_TRUE(std::fabs((vpPlay.maxX - vpPlay.minX) / (vpPlay.maxZ - vpPlay.minZ) - aspect) < 0.02f ||
+                (vpPlay.maxX - vpPlay.minX) >= 2.0f * (dims.halfLength + 3.0f) - 0.01f, "Play view keeps the 1:1 metric aspect");
+    EXPECT_TRUE(vpPlay.minX <= -10.0f && vpPlay.maxX >= -10.0f && vpPlay.minZ <= 5.0f && vpPlay.maxZ >= 5.0f,
+                "Play view contains the play");
+    const PitchRadarViewport vpNoAuto = PitchRadarViewport::Compute(dims, Vec3{ -10.0f, 0.0f, 5.0f }, false, -1, aspect);
+    EXPECT_TRUE(!vpNoAuto.isPlayView && !vpNoAuto.isZoomed, "Automatic zoom off keeps the whole pitch");
     const float fullRatio = (vpFull.maxX - vpFull.minX) / (vpFull.maxZ - vpFull.minZ);
     EXPECT_TRUE(std::fabs(fullRatio - aspect) < 0.02f, "Full pitch viewport must preserve exact 1:1 metric aspect");
 
@@ -2247,6 +2256,7 @@ void TestHudRenderSmoke() {
             c.language = lang;
             st.SetHudConfig(c, false);
             PatchReplayTelemetryForTest(true, 0, kSuspect, kWinStart, kWinEnd);
+            st.SetPostApplyBanner("", 0); // the previous resolution's "applied" banner must not leak into these shots
             VarHudRenderer::RequestReset();
             io.DisplaySize = ImVec2(sz[0], sz[1]);
             VarHudRenderer::EnsureFonts(sz[0], sz[1]);
@@ -3181,7 +3191,7 @@ void TestFinalReviewRegressions() {
 } // namespace
 
 int main() {
-    std::printf("=== PES 2021 VAR Mod v4.0 - Test Suite ===\n");
+    std::printf("=== PES 2021 VAR Mod v" VAR_MOD_VERSION " - Test Suite ===\n");
     TestAobScannerBasic();
     TestRealPes2021BinaryAobs();
     TestInlineHookEflagsAndRestore();

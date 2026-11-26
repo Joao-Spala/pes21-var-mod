@@ -58,8 +58,9 @@ struct PitchRadarViewport {
     float maxX     =  54.5f;
     float minZ     = -36.0f;
     float maxZ     =  36.0f;
-    bool  isZoomed = false;
-    int   zoomSide = 0; // -1 = left goal (-X), +1 = right goal (+X), 0 = full pitch
+    bool  isZoomed = false; // penalty box zoom
+    int   zoomSide = 0; // -1 = left goal (-X), +1 = right goal (+X), 0 = full pitch or play view
+    bool  isPlayView = false; // automatic close-up of the play away from the boxes (tokens readable)
 
     static PitchRadarViewport Compute(const PitchDims& dims, const Vec3& focusSpot,
                                       bool autoZoomBox, int zoomOverride, float aspectRatio = 1.65f);

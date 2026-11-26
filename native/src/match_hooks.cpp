@@ -1018,6 +1018,7 @@ struct ExecCtx {
     int32_t     expectOffender = -1;
     uint32_t    expectSnapId   = 0;
     bool        injected       = false; // the request was written into the JudgeResult
+    bool        clipQueued     = false; // this injection queued the replay of its reviewed moment
     bool        playOrigRevoked = false; // the play's original card was revoked by hand
     // Undo data of a SetPlayReady injection, verified right after this tick's MainTick (before the commit)
     bool        verifyAfterTick = false;
@@ -1414,16 +1415,23 @@ uint8_t* ClipRequestIn(uint8_t* mi) {
 }
 
 // Decision applied on this tick with the ball in play: remember the reviewed moment, armed once 0x1F is queued
-void QueueDecisionReplayClip(uint8_t* matchInfo, const ExecRequest& req) {
-    if (!req.wantClip || req.stopReason != StoppageReason::Foul || !IsValidPtr(matchInfo)) return;
-    if (!VarState::Instance().GetHudConfig().replayAfterDecision) return;
-    if (g_decisionClip.stage != DecisionClipState::Stage::Idle) return;
+bool QueueDecisionReplayClip(uint8_t* matchInfo, const ExecRequest& req) {
+    if (!req.wantClip || req.stopReason != StoppageReason::Foul || !IsValidPtr(matchInfo)) return false;
+    if (!VarState::Instance().GetHudConfig().replayAfterDecision) {
+        VAR_LOG_INF("Decision replay: off in the options, skipped");
+        return false;
+    }
+    if (g_decisionClip.stage != DecisionClipState::Stage::Idle) {
+        VAR_LOG_INF("Decision replay: a previous one is still in progress, skipped");
+        return false;
+    }
     g_decisionClip = DecisionClipState{};
     g_decisionClip.stage = DecisionClipState::Stage::Pending;
     g_decisionClip.clipPhase = req.clipPhase;
     g_decisionClip.clipTime60Hz = req.clipTime60Hz;
     g_decisionClip.sinceTick = g_mainTickCount;
     g_decisionClip.matchInfo = matchInfo;
+    return true;
 }
 
 // Window of the reviewed moment in the live ring, in frames back from its newest frame. The live ring is buffer 0,
@@ -1590,7 +1598,7 @@ void PerformInjection(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo) {
     g_exec.expectOffender = IsValidSlot(req.offenderSlot) ? req.offenderSlot : 0xFF;
     g_exec.expectSnapId = req.snapId;
     g_exec.injected = true;
-    QueueDecisionReplayClip(matchInfo, req);
+    g_exec.clipQueued = QueueDecisionReplayClip(matchInfo, req);
     VAR_LOG_INF("VAR request injected (fsmState=0x%X): sp=%d reason=%d team=%d off=%d vic=%d card=%d snap=%u pos=(%.1f, %.1f)",
                 g_exec.startFsmState, static_cast<int>(req.spKind), static_cast<int>(req.stopReason),
                 req.benefitedTeam, req.offenderSlot, req.victimSlot, static_cast<int>(req.card),
@@ -1650,6 +1658,7 @@ void ExecCommitLedger() {
 }
 
 void ExecFinish(bool applied, const char* failBannerPt) {
+    if (!applied && g_exec.clipQueued) CancelDecisionReplayClip(); // never replay a decision that did not happen
     if (applied) {
         if (g_exec.redInvolved) g_exec.bannerStyle = BannerStyle::RedCard;
         ExecCommitLedger();
@@ -2278,7 +2287,7 @@ void ExecVerifyAfterMainTick(uint8_t* fsm) {
             VAR_LOG_ERR("Rollback: MatchControl working copy not where expected, its JudgeResult was not restored");
         }
     }
-    CancelDecisionReplayClip(); // the decision of this tick is undone: so is its replay request
+    if (g_exec.clipQueued) CancelDecisionReplayClip(); // the decision of this tick is undone: so is its replay
     VAR_LOG_WRN("VAR pool seq=%u: SetPlayReady left without EnterOutOfPlay (queue reason 0x%X), tick undone",
                 g_exec.poolSeq, reason);
     const VerdictPool pool = g_exec.pool;

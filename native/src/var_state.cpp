@@ -1374,6 +1374,7 @@ void VarState::RequestReplaySeekToTime(int32_t phase, float time60Hz, float fall
     pendingReplayCmd_.targetTime60Hz = time60Hz;
     pendingReplayCmd_.targetNorm     = std::clamp(fallbackNorm, 0.0f, 1.0f);
     pendingReplayCmd_.pauseAfterSeek = pauseAfterSeek;
+    if (pauseAfterSeek) pendingReplayCmd_.hasPlayToggle = false; // the latest intent wins: jump and stay paused
     hasPendingReplayCmd_.store(true, std::memory_order_release);
 }
 
@@ -1384,6 +1385,7 @@ void VarState::RequestReplaySeekToNorm(float norm, bool pauseAfterSeek) {
     pendingReplayCmd_.seekByTime     = false;
     pendingReplayCmd_.targetNorm     = std::clamp(norm, 0.0f, 1.0f);
     pendingReplayCmd_.pauseAfterSeek = pauseAfterSeek;
+    if (pauseAfterSeek) pendingReplayCmd_.hasPlayToggle = false; // the latest intent wins: jump and stay paused
     hasPendingReplayCmd_.store(true, std::memory_order_release);
 }
 

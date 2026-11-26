@@ -40,6 +40,25 @@ PitchRadarViewport PitchRadarViewport::Compute(const PitchDims& dims, const Vec3
                         : (zoomOverride == 0) ? false
                         : (autoZoomBox && nearBox);
 
+    // Away from the boxes the automatic view frames the play (about 44 m of the pitch width) instead of the
+    // whole pitch, where 22 tokens on a 100 m pitch are too small to read
+    if (!wantZoom && zoomOverride == -1 && autoZoomBox) {
+        vp.isZoomed = false;
+        vp.isPlayView = true;
+        vp.zoomSide = 0;
+        const float halfZ = 22.0f;
+        const float fullHalfX = dims.halfLength + 3.0f;
+        const float halfX = std::min(halfZ * safeAspect, fullHalfX);
+        const float cx = std::clamp(focusSpot.x, -fullHalfX + halfX, fullHalfX - halfX);
+        const float maxCenterZ = std::max(0.0f, (dims.halfWidth + 2.2f) - halfZ);
+        const float cz = std::clamp(focusSpot.z, -maxCenterZ, maxCenterZ);
+        vp.minX = cx - halfX;
+        vp.maxX = cx + halfX;
+        vp.minZ = cz - halfZ;
+        vp.maxZ = cz + halfZ;
+        return vp;
+    }
+
     if (!wantZoom) {
         vp.isZoomed = false;
         vp.zoomSide = 0;
@@ -670,8 +689,12 @@ bool VarHudController::GetLockedMarkerTime(int32_t& outPhase, float& outTime) co
 }
 
 void VarHudController::ToggleRadarZoom() {
-    const bool currentlyZoomed = IsEffectiveRadarZoomed();
-    radarZoomOverride_ = currentlyZoomed ? 0 : 1;
+    // Automatic (play or box) <-> whole pitch. With automatic zoom off in the options, whole pitch <-> box.
+    if (radarZoomOverride_ == 0) {
+        radarZoomOverride_ = config_.autoZoomBox ? -1 : 1;
+    } else {
+        radarZoomOverride_ = 0;
+    }
 }
 
 bool VarHudController::IsEffectiveRadarZoomed() const {
@@ -1550,15 +1573,15 @@ std::string VarHudController::FormatSummaryOf(const VarVerdict& v) const {
     if (v.action == VarAction::OverturnCancel) {
         std::snprintf(buf, sizeof(buf), Tr("Anular lance · posse %s"), teamStr);
     } else if (v.action == VarAction::RestartCorner) {
-        std::snprintf(buf, sizeof(buf), Tr("Escanteio · %s"), teamStr);
+        std::snprintf(buf, sizeof(buf), Tr("Escanteio para %s"), teamStr);
     } else if (v.action == VarAction::RestartGoalKick) {
-        std::snprintf(buf, sizeof(buf), Tr("Tiro de meta · %s"), teamStr);
+        std::snprintf(buf, sizeof(buf), Tr("Tiro de meta para %s"), teamStr);
     } else if (v.action == VarAction::RestartThrowIn) {
-        std::snprintf(buf, sizeof(buf), Tr("Lateral · %s"), teamStr);
+        std::snprintf(buf, sizeof(buf), Tr("Lateral para %s"), teamStr);
     } else if (v.action == VarAction::ConvertToPenalty || v.action == VarAction::RetroactivePenalty) {
-        std::snprintf(buf, sizeof(buf), Tr("Pênalti · %s · %s"), teamStr, CardLabel(v.targetCard));
+        std::snprintf(buf, sizeof(buf), Tr("Pênalti para %s · %s"), teamStr, CardLabel(v.targetCard));
     } else if (v.action == VarAction::ConvertToFreeKick || v.action == VarAction::RetroactiveFreeKick) {
-        std::snprintf(buf, sizeof(buf), Tr("Falta · %s · %s"), teamStr, CardLabel(v.targetCard));
+        std::snprintf(buf, sizeof(buf), Tr("Falta para %s · %s"), teamStr, CardLabel(v.targetCard));
     } else if (v.action == VarAction::EditCard) {
         // No "Cartão ·" prefix: the pool row already carries the CARTÃO tag, so the result stays visible
         const std::string offName = FormatPlayerBroadcast(v.offenderSlot);

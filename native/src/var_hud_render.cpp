@@ -1056,8 +1056,14 @@ void RenderIncidentCard(ImDrawList* dl, float contentW, VarState& state) {
     } else {
         std::snprintf(zone, sizeof(zone), "%s", Tr("MEIO-CAMPO"));
     }
+    // The suspect play says so in words (the gold pulse alone is not self-explanatory)
+    const auto& zoneMarkers = g_controller.ReplayMarkers();
+    const int zoneSel = g_controller.SelectedMarkerIndex();
+    const bool zoneSuspect = zoneSel >= 0 && zoneSel < static_cast<int>(zoneMarkers.size()) &&
+                             zoneMarkers[static_cast<size_t>(zoneSel)].topSuspect;
+    if (zoneSuspect) std::snprintf(zone, sizeof(zone), "%s", Tr("PROVÁVEL FALTA NÃO MARCADA"));
     const float zoneW = TrackedW(zone);
-    Tracked(dl, ImVec2(e.x - pad - zoneW, y1), inBox ? C::Red : C::Text3, zone);
+    Tracked(dl, ImVec2(e.x - pad - zoneW, y1), zoneSuspect ? C::Suspect : inBox ? C::Red : C::Text3, zone);
     // The play under review is the suspect of this replay: gold dot with a ring, matching its timeline marker
     const auto& cardMarkers = g_controller.ReplayMarkers();
     const int cardSel = g_controller.SelectedMarkerIndex();
@@ -1085,14 +1091,23 @@ void RenderIncidentCard(ImDrawList* dl, float contentW, VarState& state) {
     const float colW = std::max(U(60), (namesR - namesL - arrowW) * 0.5f);
     const float y2 = y1 + row1H + U(12);
     auto person = [&](float x0, const char* role, ImU32 roleCol, int32_t slot) {
-        dl->AddCircleFilled(ImVec2(x0 + U(3), y2 + LineH(Txt::Caption) * 0.5f), U(3), roleCol, 10);
-        Tracked(dl, ImVec2(x0 + U(10), y2), C::Text3, role);
+        Tracked(dl, ImVec2(x0, y2), roleCol, role);
         const float ny = y2 + LineH(Txt::Caption) + U(4);
         if (IsValidSlot(slot)) {
             const auto& t = teams[players[slot].team == 1 ? 1 : 0];
             PlayerChip(dl, ImVec2(x0 + U(6), ny + nameH * 0.5f), U(6), t);
             char name[80];
             g_controller.FormatPlayerBroadcastBuf(slot, name, sizeof(name));
+            // "#8 ANDREAS PEREIRA" too long for the column: "#8 PEREIRA" instead of a cut name
+            if (Measure(Txt::Strong, name) > colW - U(18)) {
+                const char* lastSpace = std::strrchr(name, ' ');
+                const char* firstSpace = std::strchr(name, ' ');
+                if (lastSpace && firstSpace && lastSpace != firstSpace) {
+                    char shortName[80];
+                    std::snprintf(shortName, sizeof(shortName), "%.*s%s", static_cast<int>(firstSpace - name + 1), name, lastSpace + 1);
+                    std::snprintf(name, sizeof(name), "%s", shortName);
+                }
+            }
             TextFit(dl, Txt::Strong, ImVec2(x0 + U(18), ny), colW - U(18), C::Text, name);
         } else {
             Text(dl, Txt::Body, ImVec2(x0, ny), C::Text3, Tr("Não definido"));
@@ -1137,8 +1152,29 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     const auto& sync = *syncPtr;
 
     const Vec3 spot = g_controller.EffectivePreviewSpot();
-    const PitchRadarViewport vp = PitchRadarViewport::Compute(d, spot, g_controller.Config().autoZoomBox,
-                                                              g_controller.RadarZoomOverride(), contentW / std::max(60.0f, radarH));
+    const float radarAspect = contentW / std::max(60.0f, radarH);
+    const PitchRadarViewport vpTarget = PitchRadarViewport::Compute(d, spot, g_controller.Config().autoZoomBox,
+                                                                    g_controller.RadarZoomOverride(), radarAspect);
+    // The framing glides to its target (about 150 ms) instead of cutting: zoom changes and the play view
+    // following the play read as camera moves. A new panel size snaps.
+    static PitchRadarViewport s_vpShown{};
+    static float s_vpAspect = -1.0f;
+    if (std::fabs(radarAspect - s_vpAspect) > 0.01f) {
+        s_vpShown = vpTarget;
+        s_vpAspect = radarAspect;
+    } else {
+        const float k = 1.0f - std::exp(-std::max(0.0f, ImGui::GetIO().DeltaTime) * 20.0f);
+        s_vpShown.minX += (vpTarget.minX - s_vpShown.minX) * k;
+        s_vpShown.maxX += (vpTarget.maxX - s_vpShown.maxX) * k;
+        s_vpShown.minZ += (vpTarget.minZ - s_vpShown.minZ) * k;
+        s_vpShown.maxZ += (vpTarget.maxZ - s_vpShown.maxZ) * k;
+    }
+    PitchRadarViewport vp = s_vpShown;
+    vp.isZoomed = vpTarget.isZoomed;
+    vp.isPlayView = vpTarget.isPlayView;
+    vp.zoomSide = vpTarget.zoomSide;
+    // Token and ball sizes follow the real scale (pixels per metre), with readable minimums in pixels
+    const float pxPerM = contentW / std::max(1.0f, vp.maxX - vp.minX);
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 end(pos.x + contentW, pos.y + radarH);
 
@@ -1147,7 +1183,7 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     const bool radarClicked = ImGui::IsItemClicked(0);
     const bool radarDragging = (g_controller.Page() == HudPage::Configure) && ImGui::IsItemActive() && ImGui::IsMouseDragging(0, 2.0f);
 
-    const char* zoomTxt = vp.isZoomed ? Tr("ÁREA") : Tr("CAMPO");
+    const char* zoomTxt = vp.isZoomed ? Tr("ÁREA") : vp.isPlayView ? Tr("LANCE") : Tr("CAMPO");
     const float zoomW = TrackedW(zoomTxt) + U(16);
     const float zoomH = U(22);
     const ImVec2 zoomP(end.x - zoomW - U(8), end.y - zoomH - U(8));
@@ -1226,15 +1262,6 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
         }
     }
 
-    // Restart spot under the players: it marks the ground, the people stay readable on top of it
-    if (IsNonZeroVec(spot) && g_controller.Page() == HudPage::Configure) { // the restart spot of the decision being edited
-        const ImVec2 sp = toScreen(spot.x, spot.z);
-        const float cr = Uf(5.5f);
-        const float t = std::max(1.5f, Uf(1.8f));
-        dl->AddCircle(sp, cr + Uf(2.0f), C::Yellow, 20, t);
-        dl->AddLine(ImVec2(sp.x - cr, sp.y - cr), ImVec2(sp.x + cr, sp.y + cr), C::Yellow, t);
-        dl->AddLine(ImVec2(sp.x + cr, sp.y - cr), ImVec2(sp.x - cr, sp.y + cr), C::Yellow, t);
-    }
 
     // Team chips (which team defends each goal), under the players so they never hide a token or a tag
     {   // also in the zoomed view: which goal belongs to whom
@@ -1243,12 +1270,14 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
             const char* sn = g_controller.TeamShortName(teamIdx);
             const float maxTw = std::max(U(24), (end.x - pos.x) * 0.5f - U(16) - U(27));
             const float tw = std::min(TrackedW(sn), maxTw);
-            const float cw = U(8) + U(8) + tw + U(8);
+            const float cw = U(8) + U(8) + tw + U(6) + U(10) + U(6);
             const float ch = U(20);
             const ImVec2 a(left ? pos.x + U(8) : end.x - U(8) - cw, pos.y + U(8));
             dl->AddRectFilled(a, ImVec2(a.x + cw, a.y + ch), IM_COL32(8, 12, 18, 190), U(kRadChip));
             dl->AddCircleFilled(ImVec2(a.x + U(8) + U(3), a.y + ch * 0.5f), U(4), RgbToImU32(teams[teamIdx].primaryColor), 12);
             TrackedFit(dl, ImVec2(a.x + U(19), a.y + (ch - LineH(Txt::Caption)) * 0.5f), C::Text, sn, maxTw);
+            // The team defending the left goal attacks to the right, and the other way round
+            IconChevron(dl, ImVec2(a.x + cw - U(6) - U(5), a.y + ch * 0.5f), U(9), left ? Dir::Right : Dir::Left, C::Text2);
         };
         chip(true, leftDef);
         chip(false, 1 - leftDef);
@@ -1270,13 +1299,13 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
 
     const Vec3 ball = sync.hasSnapshot ? sync.snapshot.ballPos : tel.liveBallPos;
     const ImVec2 bp = toScreen(ball.x, ball.z);
-    const float br = vp.isZoomed ? Uf(4.6f) : Uf(3.8f);
+    const float br = std::clamp(pxPerM * 0.5f, std::max(Uf(3.6f), 3.0f), std::max(Uf(5.2f), 4.0f));
     if (sync.hasSnapshot) {
         const PlaySnapshot& sn = sync.snapshot;
         const bool focusPlay = IsValidSlot(activeOff) || IsValidSlot(activeVic);
         // Minimum sizes in pixels: below them a shirt number is not readable (720p, 4:3, 800x600)
-        const float rBase = std::max(vp.isZoomed ? Uf(8.2f) : Uf(5.8f), vp.isZoomed ? 7.5f : 5.5f);
-        const float rHero = std::max(vp.isZoomed ? Uf(9.6f) : Uf(7.0f), vp.isZoomed ? 8.5f : 7.5f);
+        const float rBase = std::clamp(pxPerM * 1.2f, std::max(Uf(5.8f), 6.5f), std::max(Uf(10.0f), 8.0f));
+        const float rHero = std::max(rBase * 1.17f, 7.5f);
         auto isHero = [&](int s) { return s == activeOff || s == activeVic; };
         // Shirt numbers come from the baked font closest in size above the target, so they are never blurred by a
         // strong downscale at small UI scales
@@ -1385,6 +1414,19 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
             return dx * dx + dz * dz < 20.0f * 20.0f;
         };
 
+        // Ball over its carrier's token would hide the shirt number: draw it on the token's edge, toward where it is
+        ImVec2 ballDraw = bp;
+        if (IsValidSlot(sn.ballOwnerSlot) && sn.playerOnPitch[sn.ballOwnerSlot]) {
+            const ImVec2 tc = tokenPos[sn.ballOwnerSlot];
+            const float rOwner = isHero(sn.ballOwnerSlot) ? rHero : rBase;
+            float dx = bp.x - tc.x, dy = bp.y - tc.y;
+            const float dd = std::sqrt(dx * dx + dy * dy);
+            if (dd < rOwner + br * 0.5f) {
+                if (dd < 0.5f) { dx = 0.7071f; dy = 0.7071f; } else { dx /= dd; dy /= dd; }
+                ballDraw = ImVec2(tc.x + dx * (rOwner + br * 0.6f), tc.y + dy * (rOwner + br * 0.6f));
+            }
+        }
+
         // 3. Everyone else: slightly dimmed while a play is in focus, so the eye goes to the contact
         const float dim = focusPlay ? 0.72f : 1.0f;
         for (int s = 0; s < 22; ++s) {
@@ -1410,15 +1452,15 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
         hero(activeOff, C::RoleOffender);
 
         // 5. Ball: soft glow, white body, dark rim
-        dl->AddCircleFilled(bp, br + Uf(4.0f), IM_COL32(255, 255, 255, 40), 0);
-        dl->AddCircleFilled(bp, br, IM_COL32(255, 255, 255, 255), 0);
-        dl->AddCircle(bp, br, IM_COL32(10, 14, 20, 235), 0, std::max(1.0f, Uf(1.3f)));
+        dl->AddCircleFilled(ballDraw, br + Uf(4.0f), IM_COL32(255, 255, 255, 40), 0);
+        dl->AddCircleFilled(ballDraw, br, IM_COL32(255, 255, 255, 255), 0);
+        dl->AddCircle(ballDraw, br, IM_COL32(10, 14, 20, 235), 0, std::max(1.0f, Uf(1.3f)));
 
         // 6. Role tags last, placed where they cover the fewest tokens, the ball and each other. A player outside
         // the visible part of the pitch gets no tag (it would point at nothing).
         ImVec2 tagMin[2], tagMax[2];
         int tagCount = 0;
-        if (vp.isZoomed || bothOn) {
+        if (vp.isZoomed || vp.isPlayView || bothOn) {
             ImVec2 placedMin(0, 0), placedMax(0, 0);
             bool placed = false;
             auto overlap = [](ImVec2 a0, ImVec2 a1, ImVec2 b0, ImVec2 b1) {
@@ -1426,7 +1468,13 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                 const float h = std::min(a1.y, b1.y) - std::max(a0.y, b0.y);
                 return (w > 0.0f && h > 0.0f) ? w * h : 0.0f;
             };
-            auto tag = [&](int32_t slot, const char* text, ImU32 col, bool preferBelow) {
+            static int s_tagPrev[2] = { -1, -1 };
+            // The restart spot and its label (decision page) are drawn on top: tags keep clear of them
+            const bool spotShown = IsNonZeroVec(spot) && g_controller.Page() == HudPage::Configure;
+            const ImVec2 spotScr = toScreen(spot.x, spot.z);
+            const ImVec2 spotMin(spotScr.x - U(36), spotScr.y - U(14));
+            const ImVec2 spotMax(spotScr.x + U(36), spotScr.y + U(14) + LineH(Txt::Caption) + U(12));
+            auto tag = [&](int role, int32_t slot, const char* text, ImU32 col, bool preferBelow) {
                 if (!IsValidSlot(slot) || !sn.playerOnPitch[slot]) return;
                 const ImVec2 pp = tokenPos[slot];
                 if (pp.x < pos.x || pp.x > end.x || pp.y < pos.y || pp.y > end.y) return;
@@ -1441,6 +1489,9 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                 };
                 float bestCost = 1e30f;
                 ImVec2 best = cands[0];
+                int bestIdx = 0;
+                float costs[4] = {};
+                ImVec2 placedAt[4];
                 for (int ci = 0; ci < 4; ++ci) {
                     ImVec2 a = cands[ci];
                     float cost = static_cast<float>(ci) * 4.0f; // keep the preferred order when costs tie
@@ -1454,10 +1505,19 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                         const float rr = (isHero(s) ? rHero + Uf(4.2f) : rBase + Uf(1.5f));
                         cost += overlap(a, b, ImVec2(tokenPos[s].x - rr, tokenPos[s].y - rr), ImVec2(tokenPos[s].x + rr, tokenPos[s].y + rr)) * (isHero(s) ? 6.0f : 1.0f);
                     }
-                    cost += overlap(a, b, ImVec2(bp.x - br, bp.y - br), ImVec2(bp.x + br, bp.y + br)) * 6.0f;
+                    cost += overlap(a, b, ImVec2(ballDraw.x - br, ballDraw.y - br), ImVec2(ballDraw.x + br, ballDraw.y + br)) * 6.0f;
                     if (placed) cost += overlap(a, b, placedMin, placedMax) * 20.0f;
-                    if (cost < bestCost) { bestCost = cost; best = a; }
+                    if (spotShown) cost += overlap(a, b, spotMin, spotMax) * 20.0f;
+                    costs[ci] = cost;
+                    placedAt[ci] = a;
+                    if (cost < bestCost) { bestCost = cost; best = a; bestIdx = ci; }
                 }
+                const int prev = s_tagPrev[role];
+                if (prev >= 0 && prev < 4 && prev != bestIdx && costs[prev] <= bestCost * 1.25f + 40.0f) {
+                    bestIdx = prev;
+                    best = placedAt[prev];
+                }
+                s_tagPrev[role] = bestIdx;
                 const ImVec2 bEnd(best.x + tw, best.y + th);
                 dl->AddRectFilled(best, bEnd, IM_COL32(8, 12, 18, 225), U(kRadChip));
                 EdgeAccent(dl, best, bEnd, col, U(kRadChip), U(3));
@@ -1468,8 +1528,8 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                 if (tagCount < 2) { tagMin[tagCount] = best; tagMax[tagCount] = bEnd; ++tagCount; }
             };
             const bool vicBelow = !bothOn || sn.playerPos[activeVic].z >= sn.playerPos[activeOff].z;
-            tag(activeOff, Tr("INFRATOR"), C::RoleOffender, !vicBelow);
-            tag(activeVic, Tr("VÍTIMA"), C::RoleFouled, vicBelow);
+            tag(0, activeOff, Tr("INFRATOR"), C::RoleOffender, !vicBelow);
+            tag(1, activeVic, Tr("VÍTIMA"), C::RoleFouled, vicBelow);
         }
 
         // 7. Offside label: beside the line (never across it), wherever it covers the fewest tokens, the ball and
@@ -1485,9 +1545,13 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                 const float h = std::min(a1.y, b1.y) - std::max(a0.y, b0.y);
                 return (w > 0.0f && h > 0.0f) ? w * h : 0.0f;
             };
+            static int s_offPrev = -1;
             float bestCost = 1e30f;
             ImVec2 best(0, 0);
             bool found = false;
+            int bestKey = -1;
+            float prevCost = -1.0f;
+            ImVec2 prevAt(0, 0);
             for (int side = 0; side < 2; ++side) {
                 const float x = side == 0 ? offsideLineX + U(6) : offsideLineX - U(6) - lw;
                 if (x < pos.x + U(4) || x + lw > end.x - U(4)) continue; // would cross the line once clamped
@@ -1501,11 +1565,17 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                         cost += overlapArea(a, b, ImVec2(tokenPos[s].x - rr, tokenPos[s].y - rr),
                                             ImVec2(tokenPos[s].x + rr, tokenPos[s].y + rr)) * (isHero(s) ? 6.0f : 1.0f);
                     }
-                    cost += overlapArea(a, b, ImVec2(bp.x - br, bp.y - br), ImVec2(bp.x + br, bp.y + br)) * 6.0f;
+                    cost += overlapArea(a, b, ImVec2(ballDraw.x - br, ballDraw.y - br), ImVec2(ballDraw.x + br, ballDraw.y + br)) * 6.0f;
                     for (int t = 0; t < tagCount; ++t) cost += overlapArea(a, b, tagMin[t], tagMax[t]) * 20.0f;
-                    if (cost < bestCost) { bestCost = cost; best = a; found = true; }
+                    if (side * 8 + row == s_offPrev) { prevCost = cost; prevAt = a; }
+                    if (cost < bestCost) { bestCost = cost; best = a; found = true; bestKey = side * 8 + row; }
                 }
             }
+            if (found && prevCost >= 0.0f && bestKey != s_offPrev && prevCost <= bestCost * 1.25f + 40.0f) {
+                best = prevAt;
+                bestKey = s_offPrev;
+            }
+            s_offPrev = bestKey;
             if (found) {
                 dl->AddRectFilled(best, ImVec2(best.x + lw, best.y + lh), IM_COL32(8, 12, 18, 215), U(kRadChip));
                 Tracked(dl, ImVec2(best.x + U(5), best.y + U(2)), C::OffsideText, txt);
@@ -1516,6 +1586,42 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
         dl->AddCircleFilled(bp, br + Uf(4.0f), IM_COL32(255, 255, 255, 40), 0);
         dl->AddCircleFilled(bp, br, IM_COL32(255, 255, 255, 255), 0);
         dl->AddCircle(bp, br, IM_COL32(10, 14, 20, 235), 0, std::max(1.0f, Uf(1.3f)));
+    }
+
+    // Restart spot of the decision being edited: on top of everything, white (yellow means a card), labelled
+    if (IsNonZeroVec(spot) && g_controller.Page() == HudPage::Configure) {
+        const ImVec2 sp = toScreen(spot.x, spot.z);
+        const float cr = std::max(Uf(6.0f), 5.0f);
+        const float t = std::max(1.8f, Uf(2.2f));
+        dl->AddCircleFilled(sp, cr + Uf(4.0f), IM_COL32(8, 12, 18, 150), 0);
+        dl->AddCircle(sp, cr + Uf(2.5f), IM_COL32(255, 255, 255, 240), 0, t);
+        dl->AddLine(ImVec2(sp.x - cr, sp.y - cr), ImVec2(sp.x + cr, sp.y + cr), IM_COL32(255, 255, 255, 255), t);
+        dl->AddLine(ImVec2(sp.x + cr, sp.y - cr), ImVec2(sp.x - cr, sp.y + cr), IM_COL32(255, 255, 255, 255), t);
+        const char* rt = Tr("COBRANÇA");
+        const float rtw = TrackedW(rt) + U(10);
+        const float rth = LineH(Txt::Caption) + U(4);
+        const float rx = std::clamp(sp.x - rtw * 0.5f, pos.x + U(4), end.x - U(4) - rtw);
+        // Below or above the cross, whichever covers fewer players (and stays inside the pitch)
+        const float below = sp.y + cr + Uf(7.0f);
+        const float above = sp.y - cr - Uf(7.0f) - rth;
+        auto coverCost = [&](float y) {
+            if (y < pos.y + U(4) || y + rth > end.y - U(4)) return 1e9f;
+            float c = 0.0f;
+            if (sync.hasSnapshot) {
+                for (int s2 = 0; s2 < 22; ++s2) {
+                    if (!sync.snapshot.playerOnPitch[s2]) continue;
+                    const ImVec2 tp = toScreen(sync.snapshot.playerPos[s2].x, sync.snapshot.playerPos[s2].z);
+                    const float rr = U(10);
+                    const float ow = std::min(rx + rtw, tp.x + rr) - std::max(rx, tp.x - rr);
+                    const float oh = std::min(y + rth, tp.y + rr) - std::max(y, tp.y - rr);
+                    if (ow > 0.0f && oh > 0.0f) c += ow * oh;
+                }
+            }
+            return c;
+        };
+        const float ry = (coverCost(above) < coverCost(below)) ? above : below;
+        dl->AddRectFilled(ImVec2(rx, ry), ImVec2(rx + rtw, ry + rth), IM_COL32(8, 12, 18, 225), U(kRadChip));
+        Tracked(dl, ImVec2(rx + U(5), ry + U(2)), C::Text, rt);
     }
 
     dl->AddRectFilled(zoomP, zoomE, overZoom ? IM_COL32(30, 38, 52, 230) : IM_COL32(8, 12, 18, 190), U(kRadChip));

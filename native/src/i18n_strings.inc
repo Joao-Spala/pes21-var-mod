@@ -138,11 +138,13 @@ I18N("Voltar", "Back")
 
 // ---- Verdict summaries (stored when armed)
 I18N("Anular lance · posse %s", "Overturn · possession %s")
-I18N("Escanteio · %s", "Corner kick · %s")
-I18N("Tiro de meta · %s", "Goal kick · %s")
-I18N("Lateral · %s", "Throw-in · %s")
-I18N("Pênalti · %s · %s", "Penalty · %s · %s")
-I18N("Falta · %s · %s", "Free kick · %s · %s")
+I18N("Escanteio para %s", "Corner kick to %s")
+I18N("Tiro de meta para %s", "Goal kick to %s")
+I18N("Lateral para %s", "Throw-in to %s")
+I18N("Pênalti para %s · %s", "Penalty to %s · %s")
+I18N("Falta para %s · %s", "Free kick to %s · %s")
+I18N("LANCE", "PLAY")
+I18N("COBRANÇA", "RESTART")
 I18N("Cartão · %s · %s", "Card · %s · %s")
 
 // ---- Armed verdict / Decision Pool / pill

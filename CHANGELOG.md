@@ -1,5 +1,20 @@
 # Changelog
 
+## v4.4.10
+
+Final review of v4.4.9 by four independent reviewers (requirements, bugs, interface, documentation).
+
+- **Tactical pitch framed on the play**: away from the boxes the automatic view now frames the play (about 44 m of the pitch width) instead of the whole pitch, where tokens were too small to read. The chip cycles between the automatic view (PLAY or BOX) and the whole pitch. The framing glides to its target instead of cutting, and token and ball sizes follow the real scale with readable minimums in pixels.
+- **Restart spot readable**: on the decision page the cross is white (yellow means a card), drawn on top and labelled RESTART, and the role tags keep clear of it.
+- **Which way each team attacks**: the team chips carry an arrow toward the goal they attack.
+- **Suspect play in words**: when the open play is the suspect, the incident card says "LIKELY MISSED FOUL" in gold, not only the mouse tooltip.
+- **Steadier labels**: role and offside labels keep their side from frame to frame unless another place is clearly better, so they no longer jump during playback. The ball is drawn on the edge of its carrier's token instead of over the shirt number.
+- **Clearer card and pool**: role labels in their colour (no second dot next to the team dot), "#8 PEREIRA" instead of a cut "#8 ANDREAS PERE...", and summaries that say who gets the restart ("Penalty to FLA").
+- **Fix: no replay for a decision that was not applied**: when the engine never applied a decision, its pending replay is cancelled. A rollback only cancels the replay of the decision it undoes.
+- **Fix: jump and stay paused**: a jump to a play now cancels a pending "play" request from the same frame.
+- **Log**: the replay after the decision also logs when it is off in the options or another one is in progress.
+- **Docs**: real DLL size, the replay after the decision described as fouls and penalties given with the ball in play, the hook list in `re_notes/04` completed, and the licenses inside the release package.
+
 ## v4.4.9
 
 - **Tactical pitch at 60 Hz**: the match is recorded once per simulation frame (60 Hz, the replay's own rate) instead of 10 Hz. In the replay the pitch follows the play frame by frame, with no 100 ms steps. A frame is recorded only when the simulation advanced, so a pause with the ball in play never overwrites the history.
@@ -13,11 +28,11 @@
 - **Motion in real time**: neighbours, gaps, trails and speeds use the mod's own simulation tick counter (60 per real second, one replay frame each, measured in a user log), not the match clock, which runs faster than real time with shorter match lengths (2.3 ticks per frame in the same log).
 - **Roles at a glance**: the offender is orange and the fouled player cyan, on the pitch, the tags and the incident card. Red was read as the red team and blue as the UI focus colour.
 - **Clearer pitch labels**: team chips also in the box view, a label on the offside line, the distance first ("7.8 m INSIDE THE BOX"), and the restart spot only on the decision page, where it is the restart being edited.
-- **Lighter on memory, GPU and disk**: the font atlas copy in RAM is released after the upload (2.5 MB at 1080p, 10 MB at 4K), the atlas covers Latin-1 and Latin Extended-A without horizontal oversampling (about a quarter of the size), the panel shadow blends only a band around the panel instead of six near full-panel layers (about 95% less GPU blending), a diagnostic probe stops reading the replay ring after its two log lines and the DLL is 186 KB smaller (949 KB to 763 KB). Measured cost in live play: about 3 to 6 us per simulation tick and 2 us per frame.
+- **Lighter on memory, GPU and disk**: the font atlas copy in RAM is released after the upload (2.5 MB at 1080p, 10 MB at 4K), the atlas covers Latin-1 and Latin Extended-A without horizontal oversampling (about a quarter of the size), the panel shadow blends only a band around the panel instead of six near full-panel layers (about 95% less GPU blending), a diagnostic probe stops reading the replay ring after its two log lines and the DLL is smaller (933 KB in v4.4.8, 772 KB in v4.4.9). Measured on the real code paths in a benchmark: about 3 to 6 us per simulation tick and 2 us per frame.
 - **Readable on small screens**: text has a minimum size at 720p, 4:3 and 800x600, and small captions no longer break into uneven letter gaps.
 - **Accent bars**: the coloured left edge of cards, selected rows, the pool and notices now runs the full height and bends with the container's rounded corners.
-- **Replay of the reviewed play after the decision**: a decision applied with the ball in play is shown again by the engine itself, through its own pending clip (request slot 3, played by FSM state 0x1F, the path the engine uses for the late advantage card). The request is written only once 0x1F is in the FSM queue, with the window counted in live ring frames back from the newest one and kept on the moment until the recorder commits it, and the minute and second computed like the engine does. A request nobody consumes goes back to idle after 2 s of 0x1F waiting. New option **OPTIONS > Replay the play after the decision** (on by default, `replay_after_decision` in `var_mod.ini`).
-- **Suspect play**: every play the referee let go gets a missed-foul score (challenge type, whether the opponent went down from that contact, inside or near the box, contact distance). The strongest one at or above the threshold pulses in gold on the replay bar until you open it yourself (click, arrows or [ ]; the automatic selection while the replay plays does not count), then keeps a quiet gold ring. Its tooltip reads "LIKELY MISSED FOUL" and the incident card shows a gold dot. Official decisions and dives never qualify.
+- **Replay of the reviewed play after the decision**: a foul or penalty given with the ball in play is shown again by the engine itself, through its own pending clip (request slot 3, played by FSM state 0x1F, the path the engine uses for the late advantage card). The request is written only once 0x1F is in the FSM queue, with the window counted in live ring frames back from the newest one and kept on the moment until the recorder commits it, and the minute and second computed like the engine does. A request nobody consumes goes back to idle after 2 s of 0x1F waiting. New option **OPTIONS > Replay the play after the decision** (on by default, `replay_after_decision` in `var_mod.ini`).
+- **Suspect play**: every play the referee let go gets a missed-foul score (challenge type, whether the opponent went down from that contact, inside or near the box, contact distance). The strongest one at or above the threshold pulses in gold on the replay bar until you open it yourself (click, arrows or [ ], not the automatic selection while the replay plays), then keeps a quiet gold ring. Its tooltip reads "LIKELY MISSED FOUL" and the incident card shows a gold dot. Official decisions and dives never qualify.
 
 ## v4.4.8
 
