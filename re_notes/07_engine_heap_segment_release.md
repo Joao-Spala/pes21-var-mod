@@ -1,37 +1,37 @@
-# Liberação de segmentos do heap da engine (crash pós-partida)
+# Engine heap segment release (post-match crash)
 
-Pesquisa da v4.4.1. Endereços do `PES2021.exe` Steam `1.7.2.0`. **[P]** comprovado por disassembly ou dump, **[I]** inferido.
+v4.4.1 research. Addresses of `PES2021.exe` Steam `1.7.2.0`. **[P]** proven by disassembly or dump, **[I]** inferred.
 
-## 1. Sintoma
+## 1. Symptom
 
-- Depois do apito final, ao avançar, o jogo travava e, ao ser fechado, gerava o dump. Os dois dumps (`PES2021.exe.4568.dmp` da v4.2.1 e `PES2021.exe.19524.dmp`, completo, da v4.2.4) têm a mesma falha: escrita em memória não mapeada em `PES2021.exe+0x3FE31D`, com o mesmo estado de heap `rsi = 0x56F0010` **[P]**.
-- O travamento é o próprio crash: o Windows grava um dump completo de cerca de 5 GB antes de encerrar o processo **[I]**.
+- After the final whistle, when advancing, the game froze and, when closed, produced the dump. Both dumps (`PES2021.exe.4568.dmp` from v4.2.1 and `PES2021.exe.19524.dmp`, full, from v4.2.4) show the same fault: a write to unmapped memory at `PES2021.exe+0x3FE31D`, with the same heap state `rsi = 0x56F0010` **[P]**.
+- The freeze is the crash itself: Windows writes a full dump of about 5 GB before terminating the process **[I]**.
 
-## 2. Onde
+## 2. Where
 
-- A thread que falha está na máquina de estados de cena (`0x141FE0A80` em diante), que chama `0x1403FB8B0`. Essa função percorre os 50 heaps em `*(0x1436FD708)` e chama o método `+0x50` de cada um, que compacta o heap **[P]**.
-- O heap é um dlmalloc: segmentos com rodapé `{base, tamanho, próximo, flags}` nos últimos `0x40` bytes, bins em `mstate + 0x258`, total em `+0x358` **[P]**.
-- `release_unused_segments` (laço em `0x1403FE1C0`) chama o `win32munmap` (`0x1403FC0D0`) para cada segmento livre. Se ele devolve `-1`, o código assume que nada foi liberado e reinsere o chunk nos bins escrevendo em `chunk + 0x38` (`0x1403FE31D`) **[P]**.
+- The faulting thread is in the scene state machine (`0x141FE0A80` onward), which calls `0x1403FB8B0`. That function walks the 50 heaps at `*(0x1436FD708)` and calls the `+0x50` method of each one, which compacts the heap **[P]**.
+- The heap is a dlmalloc: segments with a footer `{base, size, next, flags}` in the last `0x40` bytes, bins at `mstate + 0x258`, total at `+0x358` **[P]**.
+- `release_unused_segments` (loop at `0x1403FE1C0`) calls `win32munmap` (`0x1403FC0D0`) for each free segment. If it returns `-1`, the code assumes nothing was released and reinserts the chunk into the bins by writing to `chunk + 0x38` (`0x1403FE31D`) **[P]**.
 
-## 3. Por que o win32munmap falha depois de liberar
+## 3. Why win32munmap fails after releasing
 
-- O `win32munmap` percorre o intervalo com `VirtualQuery` e exige, em cada trecho, `BaseAddress == AllocationBase == endereço`, estado `MEM_COMMIT` e tamanho dentro do que falta. Para cada trecho chama `VirtualFree(MEM_RELEASE)` **[P]**.
-- `VirtualFree(MEM_RELEASE)` sempre libera a alocação inteira. Quando uma alocação tem páginas com proteções diferentes, o `VirtualQuery` devolve só o primeiro trecho. A função libera a alocação toda, consulta o trecho seguinte, encontra memória livre e devolve `-1` **[P]**.
-- No dump completo, a região imediatamente anterior ao segmento que caiu (`0x118500000`) tem páginas soltas `PAGE_EXECUTE_READWRITE` (`0x40`) dentro de um bloco `PAGE_READWRITE`. A própria página do `mstate` em `0x56F0000` está como `0x40` **[P]**.
-- O segmento que caiu (`0x118550000`, tamanho `0x50000`) estava mapeado antes da chamada, porque o laço lê `0x18(%rbx)` e `0x30(%rbx)` antes de chamar a liberação, e estava totalmente livre no dump. Isso confirma a liberação pela metade dentro da própria chamada **[P]**.
+- `win32munmap` walks the range with `VirtualQuery` and requires, in each region, `BaseAddress == AllocationBase == address`, state `MEM_COMMIT` and a size within what remains. For each region it calls `VirtualFree(MEM_RELEASE)` **[P]**.
+- `VirtualFree(MEM_RELEASE)` always releases the whole allocation. When an allocation has pages with different protections, `VirtualQuery` returns only the first region. The function releases the whole allocation, queries the next region, finds free memory and returns `-1` **[P]**.
+- In the full dump, the region immediately before the segment that crashed (`0x118500000`) has stray `PAGE_EXECUTE_READWRITE` (`0x40`) pages inside a `PAGE_READWRITE` block. The `mstate` page itself at `0x56F0000` is `0x40` **[P]**.
+- The segment that crashed (`0x118550000`, size `0x50000`) was mapped before the call, because the loop reads `0x18(%rbx)` and `0x30(%rbx)` before calling the release, and was completely free in the dump. This confirms a half-done release within the call itself **[P]**.
 
-## 4. Quem muda a proteção
+## 4. Who changes the protection
 
-- O `var_core.dll` só chama `VirtualProtect` em código (`.text`), vtables e IAT, nunca em dados de heap **[P]**.
-- Dezenas de módulos Lua de patches usam `memory.write` do Sider em endereços de dados do jogo **[P]**. Deixar páginas com proteção de execução é o efeito observado **[I]**.
-- O defeito independe do VAR. Mais atividade na partida só aumenta a chance de um segmento afetado ser liberado no trim **[I]**.
+- `var_core.dll` only calls `VirtualProtect` on code (`.text`), vtables and the IAT, never on heap data **[P]**.
+- Dozens of Lua patch modules use Sider `memory.write` on game data addresses **[P]**. Leaving pages with execute protection is the observed effect **[I]**.
+- The defect is independent of the VAR. More activity in the match only raises the chance that an affected segment is released during the trim **[I]**.
 
-## 5. Correção
+## 5. Fix
 
-- `heap_guard.cpp` substitui o `win32munmap` (AOB único, hint `0x3FC0D0`) por uma versão atômica:
-  - percorre o intervalo por alocação (`AllocationBase`), não por trecho de proteção
-  - valida o intervalo inteiro antes de liberar qualquer coisa: cada alocação começa onde a anterior termina, está toda em `MEM_COMMIT` e cabe no intervalo
-  - só então libera alocação por alocação e devolve `0`. Se a validação falha, devolve `-1` sem tocar em nada, e o dlmalloc mantém o chunk mapeado.
-- Os seis chamadores (`0x1403FC717`, `0x1403FC77A`, `0x1403FD410`, `0x1403FE2C3`, `0x1403FE6D3`, `0x1403FE7D8`) tratam `0` e `-1` com o mesmo contrato **[P]**.
-- O gancho é instalado no `var_init`, separado dos ganchos da partida, e fica ativo no processo inteiro.
-- Testes: padrão no binário real, planejamento com o layout do dump e liberação real com uma página `PAGE_EXECUTE_READWRITE` no meio da alocação.
+- `heap_guard.cpp` replaces `win32munmap` (unique AOB, hint `0x3FC0D0`) with an atomic version:
+  - walks the range by allocation (`AllocationBase`), not by protection region
+  - validates the whole range before releasing anything: each allocation starts where the previous one ends, is entirely in `MEM_COMMIT` and fits in the range
+  - only then releases allocation by allocation and returns `0`. If validation fails, it returns `-1` without touching anything, and dlmalloc keeps the chunk mapped.
+- The six callers (`0x1403FC717`, `0x1403FC77A`, `0x1403FD410`, `0x1403FE2C3`, `0x1403FE6D3`, `0x1403FE7D8`) handle `0` and `-1` under the same contract **[P]**.
+- The hook is installed in `var_init`, separate from the match hooks, and stays active for the whole process.
+- Tests: pattern on the real binary, planning with the dump layout and a real release with a `PAGE_EXECUTE_READWRITE` page in the middle of the allocation.

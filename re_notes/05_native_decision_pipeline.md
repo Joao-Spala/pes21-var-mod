@@ -1,55 +1,55 @@
-# Pipeline nativo de decisões (falta, cartão, expulsão e bola parada)
+# Native decision pipeline (foul, card, sending off and set pieces)
 
-Base do motor de execução da v4.3 (`match_hooks.cpp`, seção "Native-first VAR execution"). Endereços do `PES2021.exe` Steam `1.7.2.0`. **[P]** comprovado por disassembly, **[I]** inferido.
+Basis of the v4.3 execution engine (`match_hooks.cpp`, section "Native-first VAR execution"). Addresses of `PES2021.exe` Steam `1.7.2.0`. **[P]** proven by disassembly, **[I]** inferred.
 
-## 1. Commit do cartão
+## 1. Card commit
 
-- Todo frame a engine zera `MatchControl + 0x6E0` (`0x1404228D0` chama `0x140441810`) e o `JudgeResult` da FSM em `MatchFSM + 0x49C0` (`0x140444A20` chama `0x14050B2D0`), antes do `MainTick` chamado em `0x140422AFE` **[P]**.
-- O `CommitToRegistry` (`0x140422A3F`) roda depois do `MainTick`, na mesma função e na mesma thread. Ele chama `UpdateFoulCounters` (`0x1404231A8`) e logo em seguida aplica o cartão da falta comprometida (`0x1404231DC..0x140423202`) **[P]**:
-  - julgamento 3: `yellows++` e, se `yellows >= 2`, `reds++`
-  - julgamento 4: `reds++`
-- Como os buffers são zerados todo frame, um `JudgeResult` injetado recebe o cartão **uma única vez**, no tick da injeção **[P]**. A limpeza "no tick seguinte" que o mod fazia era redundante.
-- O mesmo commit copia o pool de snapshots de `MatchControl + 0x2A58` sobre `MatchInfo + 0x17AC` (`0x140423196` chama `0x140A3D3B0`) **[P]**.
+- Every frame the engine zeroes `MatchControl + 0x6E0` (`0x1404228D0` calls `0x140441810`) and the FSM `JudgeResult` at `MatchFSM + 0x49C0` (`0x140444A20` calls `0x14050B2D0`), before the `MainTick` called at `0x140422AFE` **[P]**.
+- `CommitToRegistry` (`0x140422A3F`) runs after `MainTick`, in the same function and on the same thread. It calls `UpdateFoulCounters` (`0x1404231A8`) and right after applies the card of the committed foul (`0x1404231DC..0x140423202`) **[P]**:
+  - judgment 3: `yellows++` and, if `yellows >= 2`, `reds++`
+  - judgment 4: `reds++`
+- Since the buffers are zeroed every frame, an injected `JudgeResult` gets the card **exactly once**, on the injection tick **[P]**. The "next tick" cleanup the mod used to do was redundant.
+- The same commit copies the snapshot pool from `MatchControl + 0x2A58` over `MatchInfo + 0x17AC` (`0x140423196` calls `0x140A3D3B0`) **[P]**.
 
-## 2. Quem tira o jogador de campo
+## 2. Who removes the player from the pitch
 
-- O estado `0x12` (inline em `0x14044D442`) chama `0x140449050`, que recalcula `MatchInfo + 0x1748` a partir dos cartões do `PlayerRecord`. Com vermelho ou dois amarelos, o jogador sai. Sem cartão de expulsão e sem lesão, volta conforme `PlayerRecord + 0x18` **[P]**.
-- O estado `0x13` (`0x1404485B0`) remove o ator (`0x1408C66C0`) e trata goleiro expulso (`0x140446480`) **[P]** para as chamadas, **[I]** para o efeito.
-- O mod nunca grava `PlayerOnPitch`. Só escreve cartões no `PlayerRecord` e deixa os estados `0x12` e `0x13` fazerem o resto.
+- State `0x12` (inline at `0x14044D442`) calls `0x140449050`, which recomputes `MatchInfo + 0x1748` from the cards in the `PlayerRecord`. With a red or two yellows, the player leaves. With no sending-off card and no injury, the player returns according to `PlayerRecord + 0x18` **[P]**.
+- State `0x13` (`0x1404485B0`) removes the actor (`0x1408C66C0`) and handles a sent-off goalkeeper (`0x140446480`) **[P]** for the calls, **[I]** for the effect.
+- The mod never writes `PlayerOnPitch`. It only writes cards to the `PlayerRecord` and lets states `0x12` and `0x13` do the rest.
 
-## 3. Filas de bola parada
+## 3. Set piece queues
 
-- `BuildOutOfPlayQueue` (`0x1404530C0`) lê o motivo em `MatchInfo + 0x1574` e o tipo em `+0x1554` **[P]**.
-- Motivo 7 (`SilentRestart`, tabela `0x14045333C`): todos os tipos montam `0x0F, 0x45, 0x16, 0x12, 0x13, [0x17 só falta], 0x14, 0x15, 0x0C, 0x19, 0x1A`. Sem cutscene, sem replay **[P]**.
-- Motivo 5 (falta, tabela `0x453354`): falta com cartão (julgamento 3 ou 4) ou pênalti não vira cobrança rápida (`0x140445740`) e passa por `0x140452F00`, que também enfileira `0x12` e `0x13` **[P]**.
-- `MatchFSM_RebuildSetPlay` (`0x140454280`) refaz a fila da mesma bola parada com `0x12` e `0x13` e não grava falta. A engine usa em `SetPlayReady` para troca de cobrador e mudança tática (`0x14044E286`, `0x14044E328`, `0x14044E3AF`) **[P]**.
+- `BuildOutOfPlayQueue` (`0x1404530C0`) reads the reason at `MatchInfo + 0x1574` and the type at `+0x1554` **[P]**.
+- Reason 7 (`SilentRestart`, table `0x14045333C`): every type builds `0x0F, 0x45, 0x16, 0x12, 0x13, [0x17 foul only], 0x14, 0x15, 0x0C, 0x19, 0x1A`. No cutscene, no replay **[P]**.
+- Reason 5 (foul, table `0x453354`): a foul with a card (judgment 3 or 4) or a penalty does not become a quick free kick (`0x140445740`) and goes through `0x140452F00`, which also enqueues `0x12` and `0x13` **[P]**.
+- `MatchFSM_RebuildSetPlay` (`0x140454280`) rebuilds the queue of the same set piece with `0x12` and `0x13` and does not record a foul. The engine uses it in `SetPlayReady` for taker changes and tactical changes (`0x14044E286`, `0x14044E328`, `0x14044E3AF`) **[P]**.
 
-## 4. Valores padrão das estruturas
+## 4. Default values of the structures
 
-Resets nativos `0x140A3CAE0` (FoulInfo) e `0x140A3CB50` (SetPlayInfo) **[P]**:
+Native resets `0x140A3CAE0` (FoulInfo) and `0x140A3CB50` (SetPlayInfo) **[P]**:
 
-| Campo | Padrão |
+| Field | Default |
 |---|---|
-| FoulInfo `+0x0C` / `+0x10` (infrator, vítima) | `0xFF` |
-| FoulInfo `+0x14` / `+0x18` (atores, sentinela) | `0x18` |
+| FoulInfo `+0x0C` / `+0x10` (offender, victim) | `0xFF` |
+| FoulInfo `+0x14` / `+0x18` (actors, sentinel) | `0x18` |
 | FoulInfo `+0x2C` (byte) | `9` |
 | FoulInfo `+0x30` | `4` |
-| SetPlayInfo `+0x04` (time) | `2` |
-| SetPlayInfo `+0x28` (jogador do evento) | `0xFF` |
+| SetPlayInfo `+0x04` (team) | `2` |
+| SetPlayInfo `+0x28` (event player) | `0xFF` |
 
-## 5. O que não existe nativamente
+## 5. What does not exist natively
 
-- Não há decremento de cartão **[I]** (busca de padrões sobre os 711 chamadores do getter `0x141032A40`). Revogar cartão é a única escrita manual de cartões que sobra no mod.
+- There is no card decrement **[I]** (pattern search over the 711 callers of the getter `0x141032A40`). Revoking a card is the only manual card write left in the mod.
 
-## 6. Como o mod aplica cada decisão
+## 6. How the mod applies each decision
 
-| Decisão | Caminho |
+| Decision | Path |
 |---|---|
-| Falta ou pênalti retroativo com a bola rolando | `JudgeResult` com motivo 5 no `Judge::FinalizeFrame`. A engine aplica o cartão e expulsa |
-| Converter, inverter ou anular na bola parada | Revoga manualmente o cartão já contado e injeta com motivo 7. A engine aplica o cartão novo |
-| Escanteio, tiro de meta ou lateral | Motivo 7 com o tipo do reinício e FoulInfo padrão |
-| Só cartão, sem mudar quem está em campo | Escrita no `PlayerRecord` |
-| Só cartão, expulsando ou reintegrando, na bola parada | Escrita no `PlayerRecord` e `RebuildSetPlay` |
-| Só cartão, expulsando ou reintegrando, com a bola rolando | Espera a próxima bola parada |
+| Retroactive foul or penalty with the ball rolling | `JudgeResult` with reason 5 in `Judge::FinalizeFrame`. The engine applies the card and sends the player off |
+| Convert, invert or cancel at a set piece | Manually revokes the already counted card and injects with reason 7. The engine applies the new card |
+| Corner, goal kick or throw-in | Reason 7 with the restart type and default FoulInfo |
+| Card only, without changing who is on the pitch | Write to the `PlayerRecord` |
+| Card only, sending off or reinstating, at a set piece | Write to the `PlayerRecord` and `RebuildSetPlay` |
+| Card only, sending off or reinstating, with the ball rolling | Waits for the next set piece |
 
-Cada passo é verificado lendo a FSM de volta: a decisão só conta como aplicada, e o histórico só é gravado, quando a FSM sai do estado em que o pedido foi feito.
+Each step is verified by reading the FSM back: the decision only counts as applied, and the history is only recorded, when the FSM leaves the state in which the request was made.

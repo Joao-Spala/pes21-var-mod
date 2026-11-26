@@ -1,50 +1,50 @@
-# Padrões Reais de Patches e do Sider 7.3.3
+# Real Patch and Sider 7.3.3 Patterns
 
-Estes padrões e endereços foram extraídos diretamente dos módulos instalados em `<pasta do patch>\modules\`.
+These patterns and addresses were extracted directly from the modules installed in `<patch folder>\modules\`.
 
-## 1. Endereços Já Validados no `PES2021.exe` (Steam 1.7.2.0)
+## 1. Addresses Already Validated in `PES2021.exe` (Steam 1.7.2.0)
 
-Extraídos de `<pasta do patch>/modules/goal_pyro.lua` (tabela `m._gp.MAP`, que converte endereços CPY/FL26 para Steam 1.7.2.0):
+Extracted from `<patch folder>/modules/goal_pyro.lua` (table `m._gp.MAP`, which converts CPY/FL26 addresses to Steam 1.7.2.0):
 
-| Símbolo / Função | VA Steam 1.7.2.0 | VA CPY/FL26 | O que representa |
+| Symbol / Function | VA Steam 1.7.2.0 | VA CPY/FL26 | What it represents |
 | :--- | :--- | :--- | :--- |
-| Assinatura de detecção do EXE | File offset `0x3FF480` (`4188800`) | File offset `0x3FF430` (`4188720`) | 32 bytes usados por `goal_pyro.lua` e `PESCustomCelebrationsReload.lua` para confirmar build Steam vs CPY no disco antes do unpack |
-| `GMATCH_GLOBAL` | `0x143702208` | `0x1436F3DC8` | Ponteiro global (`uint64_t*`) para o objeto ativo de partida (`GMATCH`) |
-| `GMATCH_REPLAY_MANAGER_OFF` | `GMATCH + 0x388` | `GMATCH + 0x388` | Ponteiro para o Replay Manager ativo da partida |
-| Replay Manager campos conhecidos | `+0x00` (state), `+0x0C` (seq), `+0x58` (source-current) | Mesmo | Estado e sequência do replay nativo da Fox Engine |
-| `SOURCE_RECORD_SITE` | `0x140423974` | `0x1404230D4` | Hook de bookmark de gravação de replay (`return = 0x140423984`, `writer = 0x140A8A4C0`) |
-| `native_get_scorer` call site | `0x140478C3F` | `0x14047826F` | Fluxo nativo de evento de gol (`call native_get_scorer`, `mov ebx, eax`, `call native_get_context` em `0x140478C46`, `mov rdx, [rax+0x438]`) |
+| EXE detection signature | File offset `0x3FF480` (`4188800`) | File offset `0x3FF430` (`4188720`) | 32 bytes used by `goal_pyro.lua` and `PESCustomCelebrationsReload.lua` to confirm the Steam vs CPY build on disk before unpacking |
+| `GMATCH_GLOBAL` | `0x143702208` | `0x1436F3DC8` | Global pointer (`uint64_t*`) to the active match object (`GMATCH`) |
+| `GMATCH_REPLAY_MANAGER_OFF` | `GMATCH + 0x388` | `GMATCH + 0x388` | Pointer to the active Replay Manager of the match |
+| Replay Manager known fields | `+0x00` (state), `+0x0C` (seq), `+0x58` (source-current) | Same | State and sequence of the native Fox Engine replay |
+| `SOURCE_RECORD_SITE` | `0x140423974` | `0x1404230D4` | Replay recording bookmark hook (`return = 0x140423984`, `writer = 0x140A8A4C0`) |
+| `native_get_scorer` call site | `0x140478C3F` | `0x14047826F` | Native goal event flow (`call native_get_scorer`, `mov ebx, eax`, `call native_get_context` at `0x140478C46`, `mov rdx, [rax+0x438]`) |
 
-**Nota crítica sobre `GMATCH+0x388`:** conforme documentado no próprio `goal_pyro.lua`, a Fox Engine limpa temporariamente `GMATCH+0x388` durante certas transições de câmera. Leituras em runtime devem sempre validar o ponteiro com `VirtualQuery` / checagem de faixa antes de dereferenciar.
+**Critical note on `GMATCH+0x388`:** as documented in `goal_pyro.lua` itself, the Fox Engine temporarily clears `GMATCH+0x388` during certain camera transitions. Runtime reads must always validate the pointer with `VirtualQuery` / a range check before dereferencing.
 
-## 2. Como Patches Fazem Hooks e UI no Sider 7.3.3
+## 2. How Patches Do Hooks and UI in Sider 7.3.3
 
-Existem dois padrões principais comprovados na pasta `modules\` de um patch completo:
+There are two main proven patterns in the `modules\` folder of a full patch:
 
-### Padrão A: LuaJIT + FFI puro com trampolim x64 (`goal_pyro.lua`, `PESCustomCelebrationsReload.lua`)
-- Usa `ffi` do LuaJIT com `VirtualAlloc(nil, PAGE_SIZE, 0x3000, 0x40)` e `VirtualProtect` para instalar detours x64 diretamente na memória do `PES2021.exe`.
-- Prós: arquivo único `.lua`, zero compilação extra.
-- Contras: muito limitado para UI rica (só tem o texto monoespaçado do overlay do Sider via `overlay_on`), difícil de manter código x64 complexo em strings hex e limite de 200 variáveis locais por escopo no LuaJIT.
+### Pattern A: Pure LuaJIT + FFI with an x64 trampoline (`goal_pyro.lua`, `PESCustomCelebrationsReload.lua`)
+- Uses LuaJIT `ffi` with `VirtualAlloc(nil, PAGE_SIZE, 0x3000, 0x40)` and `VirtualProtect` to install x64 detours directly in the memory of `PES2021.exe`.
+- Pros: a single `.lua` file, zero extra compilation.
+- Cons: very limited for rich UI (only the monospaced text of the Sider overlay via `overlay_on`), complex x64 code is hard to maintain in hex strings, and LuaJIT has a limit of 200 local variables per scope.
 
-### Padrão B: Módulo Sider Lua como controlador + DLL nativa x64 (DLLs de controle de campeonato e de inicialização)
-- Um `.lua` leve no Sider registra eventos (`init`, `set_teams`, `overlay_on`, `key_down`, `gamepad_input`) e carrega uma DLL C++ x64 via `ffi.load(...)`.
-- A DLL C++ x64 cuida de:
-  - Hooks x64 seguros (MinHook ou trampolins estruturados em C++ com mutex/ring-buffer lock-free).
-  - Hook de `IDXGISwapChain::Present` (DirectX 11) para renderizar uma **interface visual nativa de transmissão VAR com Dear ImGui** dentro da tela de Replay/Pausa do jogo, com controle completo por Gamepad (XInput) e Teclado.
-  - Estado persistente de gravação de decisões de arbitragem durante a partida, exposto via FFI ao módulo Sider.
-- **Avaliação para o VAR Mod:** o Padrão B (Sider Lua para liga/desliga, config e ciclo de vida + DLL C++ x64 para hooks de arbitragem/replay e HUD DX11 dentro do Replay) é drasticamente superior em estabilidade, manutenibilidade e qualidade visual.
+### Pattern B: Sider Lua module as controller + native x64 DLL (championship control and initialization DLLs)
+- A lightweight `.lua` in Sider registers events (`init`, `set_teams`, `overlay_on`, `key_down`, `gamepad_input`) and loads a C++ x64 DLL via `ffi.load(...)`.
+- The C++ x64 DLL handles:
+  - Safe x64 hooks (MinHook or structured C++ trampolines with a mutex/lock-free ring buffer).
+  - A hook of `IDXGISwapChain::Present` (DirectX 11) to render a **native VAR broadcast visual interface with Dear ImGui** inside the game's Replay/Pause screen, with full Gamepad (XInput) and Keyboard control.
+  - Persistent state for recording refereeing decisions during the match, exposed via FFI to the Sider module.
+- **Assessment for the VAR Mod:** Pattern B (Sider Lua for on/off, config and lifecycle + C++ x64 DLL for refereeing/replay hooks and DX11 HUD inside the Replay) is drastically superior in stability, maintainability and visual quality.
 
-## 3. Eventos e API do Sider 7.3.3 Relevantes
+## 3. Relevant Sider 7.3.3 Events and API
 
-Verificados em `ReplayCam.lua`, `goal_pyro.lua` e `doc\scripting.html`:
-- `overlay_on`: menu textual do Sider (`Espaço`) para ativar/desativar o mod, configurar atalhos, modo de exibição e diagnósticos.
-- `key_down` / `key_up`: captura de teclado.
-- `gamepad_input`: captura de controle no Sider.
-- `set_teams`: dispara ao preparar cada partida (ideal para zerar o histórico de lances do VAR e revalidar ponteiros de `GMATCH`).
-- `memory.read`, `memory.write`, `memory.search`: utilitários nativos do Sider para AOB e memória.
+Verified in `ReplayCam.lua`, `goal_pyro.lua` and `doc\scripting.html`:
+- `overlay_on`: Sider text menu (`Espaço`) to enable/disable the mod, configure shortcuts, display mode and diagnostics.
+- `key_down` / `key_up`: keyboard capture.
+- `gamepad_input`: controller capture in Sider.
+- `set_teams`: fires when each match is prepared (ideal for clearing the VAR play history and revalidating `GMATCH` pointers).
+- `memory.read`, `memory.write`, `memory.search`: native Sider utilities for AOB and memory.
 
-## 4. Padrão de Patches para Instalação e Ativação/Desativação
+## 4. Patch Pattern for Installation and Activation/Deactivation
 
-Verificado em `<pasta do patch>/GoalPyro_Opcional.ps1` e `<pasta do patch>/Comemoracoes_Opcional.ps1`:
-- O pacote fornece `VAR_Mod_Gerenciar.bat` + `VAR_Mod_Gerenciar.ps1` para instalar, ativar, desativar ou remover o módulo (`luajit.ext.enabled = 1` e `lua.module = "var_mod.lua"` nos arquivos `sider*.ini` com encoding Latin-1 `28591`), verificando se `PES2021.exe` está fechado e criando backup datado antes da edição.
-- Além disso, dentro do jogo, o usuário pode ligar/desligar o VAR em tempo real pelo menu do Sider (`overlay_on`).
+Verified in `<patch folder>/GoalPyro_Opcional.ps1` and `<patch folder>/Comemoracoes_Opcional.ps1`:
+- The package provides `VAR_Mod_Gerenciar.bat` + `VAR_Mod_Gerenciar.ps1` to install, enable, disable or remove the module (`luajit.ext.enabled = 1` and `lua.module = "var_mod.lua"` in the `sider*.ini` files with Latin-1 encoding `28591`), checking that `PES2021.exe` is closed and creating a dated backup before editing.
+- Additionally, in game, the user can toggle the VAR in real time through the Sider menu (`overlay_on`).

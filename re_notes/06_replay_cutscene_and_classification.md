@@ -1,59 +1,59 @@
-# Replay, cutscene do cartão e classificação de lances
+# Replay, card cutscene and play classification
 
-Pesquisa da v4.4. Endereços do `PES2021.exe` Steam `1.7.2.0`. **[P]** comprovado por disassembly, **[I]** inferido.
+v4.4 research. Addresses of `PES2021.exe` Steam `1.7.2.0`. **[P]** proven by disassembly, **[I]** inferred.
 
-## 1. Anel do replay
+## 1. Replay ring
 
-- O sistema de replay em `*(0x143703558)` (ctor `0x140A8A800`) tem 21 buffers de `0x50` bytes em `+0x8`. O índice do slot ativo fica em `+0x698` e o ponteiro do buffer ativo em `+0x6A8` (`SelectBuffer` em `0x140A8C440`). O slot 0 é o anel ao vivo e os slots 3 a 20 guardam clipes salvos **[P]**.
-- Campos do buffer:
+- The replay system at `*(0x143703558)` (ctor `0x140A8A800`) has 21 buffers of `0x50` bytes at `+0x8`. The active slot index is at `+0x698` and the active buffer pointer at `+0x6A8` (`SelectBuffer` at `0x140A8C440`). Slot 0 is the live ring and slots 3 to 20 hold saved clips **[P]**.
+- Buffer fields:
 
-  | Offset | Conteúdo |
+  | Offset | Contents |
   |---|---|
-  | `+0x10` | u16 índice de escrita |
-  | `+0x12` | u16 capacidade |
-  | `+0x14` | tick da última escrita |
-  | `+0x40` | quadros, passo `0x1FB0` |
+  | `+0x10` | u16 write index |
+  | `+0x12` | u16 capacity |
+  | `+0x14` | tick of the last write |
+  | `+0x40` | frames, stride `0x1FB0` |
 
-- O gravador `0x1404655C0` roda a cada tick quando `MatchInfo + 0x11B0 == 0x16` **[P]**.
-- A capacidade vem de `0x140A8A710`: `*(u32*)0x143703554` ou `660` quadros quando é zero. Nada no jogo escreve esse valor **[P]**.
-- Quadro: `+0x00` tempo, fase no nibble baixo de `+0x07`, `+0x24C == 0x7FFF` marca quadro inválido, 25 entidades de `0x12C` bytes a partir de `+0x264` **[P]**.
-- A janela do replay manual é recalculada a cada abertura a partir dos quadros válidos (`0x14217D2A0` -> `0x14217D3C0`, `0x140A8D580`, `0x140A8D3E0`) **[P]**. Mover o início da janela não recupera nada.
-- Limpeza: quando `MatchInfo + 0x11B8` está ativo, o tick do controlador (`0x14042E9F0`) chama `0x140A8F310`, que invalida todos os quadros **[P]**. Quem ativa `+0x11B8` não foi encontrado.
-- Os quadros não têm ponteiros, e a engine os copia como blocos brutos entre slots (`0x140A8EE70`) **[P]**. Guardar uma cópia própria e reinjetar é viável, mas depende de validar ao vivo qual slot o replay manual toca e se o elenco bate depois de substituições. A v4.4 grava esses dados no `var_core.log` (linhas `ReplayDiag`), só com leitura.
+- The recorder `0x1404655C0` runs every tick when `MatchInfo + 0x11B0 == 0x16` **[P]**.
+- The capacity comes from `0x140A8A710`: `*(u32*)0x143703554`, or `660` frames when it is zero. Nothing in the game writes this value **[P]**.
+- Frame: `+0x00` time, phase in the low nibble of `+0x07`, `+0x24C == 0x7FFF` marks an invalid frame, 25 entities of `0x12C` bytes starting at `+0x264` **[P]**.
+- The manual replay window is recomputed on every open from the valid frames (`0x14217D2A0` -> `0x14217D3C0`, `0x140A8D580`, `0x140A8D3E0`) **[P]**. Moving the window start recovers nothing.
+- Cleanup: when `MatchInfo + 0x11B8` is active, the controller tick (`0x14042E9F0`) calls `0x140A8F310`, which invalidates all frames **[P]**. What activates `+0x11B8` was not found.
+- The frames have no pointers, and the engine copies them as raw blocks between slots (`0x140A8EE70`) **[P]**. Keeping a private copy and reinjecting it is feasible, but depends on validating live which slot the manual replay reads and whether the roster matches after substitutions. v4.4 writes this data to `var_core.log` (`ReplayDiag` lines), read-only.
 
-## 2. Cutscene do cartão
+## 2. Card cutscene
 
-- Motivo 5 com falta comum enfileira `0x03`, `0x05`, `0x45` (`0x140452C80`) **[P]**.
-- O estado `0x05` escolhe a demo em `0x14047FB40`. A demo depende do julgamento do evento de falta mais recente no histórico (categoria 4, gravado pelo observador `0x140A141F0` na transição de status 1 para 2 com motivo 5) e dos amarelos **já gravados** no `PlayerRecord` no momento da escolha **[P]**.
+- Reason 5 with an ordinary foul enqueues `0x03`, `0x05`, `0x45` (`0x140452C80`) **[P]**.
+- State `0x05` picks the demo at `0x14047FB40`. The demo depends on the judgment of the most recent foul event in the history (category 4, recorded by the observer `0x140A141F0` on the status transition 1 to 2 with reason 5) and on the yellows **already recorded** in the `PlayerRecord` at the moment of the choice **[P]**.
 
-  | Caso | Falta | Pênalti |
+  | Case | Foul | Penalty |
   |---|---|---|
-  | amarelo simples | `0x20019` | `0x2000F` |
-  | segundo amarelo | `0x2001C` | `0x20012` |
-  | vermelho de quem já tinha amarelo | `0x2001D` | `0x20013` |
-  | vermelho direto | `0x2001A` | `0x20010` |
+  | single yellow | `0x20019` | `0x2000F` |
+  | second yellow | `0x2001C` | `0x20012` |
+  | red for someone who already had a yellow | `0x2001D` | `0x20013` |
+  | straight red | `0x2001A` | `0x20010` |
 
-- Como a engine grava o cartão no tick da injeção (v4.3), a falta marcada pelo VAR com a bola rolando escolhe a demo correta, inclusive o segundo amarelo **[P]**. As versões até a v4.2 neutralizavam esse commit, e por isso tocavam o amarelo simples **[I]**.
-- A partir de `SetPlayReady` o mod usa motivo 7, que não tem cutscene. Usar motivo 5 ali exigiria: corrigir a demo (o observador não dispara na transição 3 para 2 e a escolha leria a falta antiga), evitar a cobrança rápida das faltas sem cartão (`0x140445740`) e entender a flag `MatchFSM + 0x904` lida pelo estado `0x23` **[P]** para os requisitos, sem validação ao vivo.
+- Since the engine records the card on the injection tick (v4.3), a foul called by the VAR with the ball rolling picks the correct demo, including the second yellow **[P]**. Versions up to v4.2 neutralized this commit, and therefore played the single yellow **[I]**.
+- From `SetPlayReady` onward the mod uses reason 7, which has no cutscene. Using reason 5 there would require: fixing the demo (the observer does not fire on the 3 to 2 transition and the choice would read the old foul), avoiding the quick free kick for fouls without a card (`0x140445740`) and understanding the `MatchFSM + 0x904` flag read by state `0x23` **[P]** for the requirements, without live validation.
 
-## 3. Replay automático da falta
+## 3. Automatic foul replay
 
-- No caminho de falta comum, `0x1D` e `0x1F` são enfileirados logo depois de `0x11`, a menos que `MatchInfo + 0x177F` esteja ativo **[P]**.
-- O estado `0x1D` (`0x14044BC30`) não lê `FoulInfo` nem tick de snapshot **[P]**. A janela que ele toca não foi provada. A v4.4 registra no log a janela real de cada `0x1D` comparada ao tick da parada.
+- On the ordinary foul path, `0x1D` and `0x1F` are enqueued right after `0x11`, unless `MatchInfo + 0x177F` is active **[P]**.
+- State `0x1D` (`0x14044BC30`) reads neither `FoulInfo` nor the snapshot tick **[P]**. The window it plays was not proven. v4.4 logs the real window of each `0x1D` compared to the stoppage tick.
 
-## 4. IDs de ação e classificação
+## 4. Action IDs and classification
 
-- `PlayerAction + 0x01` é o enum `ANIME_*`, lido como byte com sinal. Tabela de nomes em `0x1434B3470`, categorias em `0x142651590` **[P]**:
+- `PlayerAction + 0x01` is the `ANIME_*` enum, read as a signed byte. Name table at `0x1434B3470`, categories at `0x142651590` **[P]**:
 
-  | ID | Nome |
+  | ID | Name |
   |---|---|
-  | 11, 12 | `ANIME_SLIDING` (carrinho) |
-  | 13 | `ANIME_TACKLE` (bote em pé) |
+  | 11, 12 | `ANIME_SLIDING` (slide tackle) |
+  | 13 | `ANIME_TACKLE` (standing tackle) |
   | 14 | `ANIME_BLOCK` |
-  | 15 | `ANIME_DIVE` (fora do filtro do Judge) |
+  | 15 | `ANIME_DIVE` (outside the Judge filter) |
   | 16, 17 | `ANIME_STAGGER`, `ANIME_FALL_DOWN` |
-  | 55 a 71 | goleiro |
+  | 55 to 71 | goalkeeper |
   | 72 | `ANIME_JOSTLE` |
 
-- `ObserverFallDownOrStagger` (`0x140A1AF50`) dispara para a vítima com reação de contato e lê o causador em `(int8)PlayerAction + 0x3D` **[P]**. A v4.4 usa esse mesmo modelo.
-- `TeamTactics + 0x254` é o lado do time como byte com sinal (`movsbl` em `0x140438475`), e inverte no intervalo **[P]**. O mod lia como float, o sinal saía de `+0x257` e nunca invertia. A convenção é calibrada em cada saída de bola pelas posições dos jogadores.
+- `ObserverFallDownOrStagger` (`0x140A1AF50`) fires for the victim with a contact reaction and reads the culprit at `(int8)PlayerAction + 0x3D` **[P]**. v4.4 uses this same model.
+- `TeamTactics + 0x254` is the team side as a signed byte (`movsbl` at `0x140438475`), and it flips at half time **[P]**. The mod used to read it as a float, the sign came from `+0x257` and it never flipped. The convention is calibrated at every kickoff from the player positions.
