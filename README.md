@@ -1,62 +1,105 @@
 <div align="center">
 
-<img src="docs/assets/logo.png" alt="PES 2021 - VAR Mod" width="144" height="144">
-
-# PES 2021 - VAR Mod
-
-**Árbitro de vídeo para as partidas offline do eFootball PES 2021**<br>
-**Video assistant referee for eFootball PES 2021 offline matches**
+<img src="docs/images/hero_pt.png" alt="VAR para PES 2021: pause, reveja, decida. O jogo obedece." width="100%">
 
 ![Version](https://img.shields.io/badge/Version-v4.4.8-38BDF8?style=for-the-badge)
-![Native](https://img.shields.io/badge/Native-C%2B%2B20_%2B_DX11_%2B_ImGui-84CC16?style=for-the-badge)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
-![Languages](https://img.shields.io/badge/Languages-PT--BR_%7C_English-2EA043?style=for-the-badge)
 ![Sider](https://img.shields.io/badge/Sider_7.3+-Compatible-F59E0B?style=for-the-badge)
+![Native](https://img.shields.io/badge/Native-C%2B%2B20_%2B_DX11_%2B_ImGui-84CC16?style=for-the-badge)
+![Languages](https://img.shields.io/badge/Languages-PT--BR_%7C_English-2EA043?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-8B5CF6?style=for-the-badge)
 
-**[Português (PT-BR)](#português-pt-br)** · **[English](#english)** · **[Build & Testes / Build & Tests](#build--testes--build--tests)**
+**[Português](#português)** · **[English](#english)** · **[Por dentro / Under the hood](#por-dentro--under-the-hood)** · **[Build](#build--testes--build--tests)**
 
-[**Baixar a última versão / Download the latest release**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest)
+### [Baixar a última versão / Download the latest release](https://github.com/Joao-Spala/pes21-var-mod/releases/latest)
 
 </div>
 
-<p align="center"><img src="docs/images/painel.png" alt="Painel VAR: revisão, decisão e opções" width="900"></p>
-
 ---
 
-## Português (PT-BR)
+## Português
 
-Módulo **Sider** independente (**DLL nativa x64 em C++20 + DirectX 11 + Dear ImGui**, menos de 1 MB, mais um módulo Lua) que coloca um **árbitro de vídeo** dentro do **eFootball PES 2021 (`v1.7.2.0`, Steam)**. Você revisa o lance no **Replay Manual** e aplica ou reverte faltas, pênaltis, cartões e bolas paradas **direto na engine do jogo**, como se o próprio árbitro tivesse decidido. Feito por engenharia reversa e compatível com **Sider 7.3+**, sozinho ou dentro dos grandes patches que usam o Sider.
+### O lance que você não podia contestar
 
-Somente partidas offline. Nenhum arquivo do jogo é alterado e nada de rede, DRM ou modo online é tocado.
+Todo mundo que joga PES já viveu isso. O atacante cai na área, o árbitro manda seguir, o replay mostra a chuteira do zagueiro no tornozelo e não resta nada além de aceitar. Ou o contrário: um amarelo para o jogador errado, um pênalti que não existiu, um carrinho por trás que passou batido.
 
-### Requisitos
+O **VAR para PES 2021** coloca a última palavra nas suas mãos. Você pausa, abre o replay, escolhe o lance e decide. Não é uma tela por cima do jogo fingindo arbitrar. A decisão entra **na própria engine** do PES, que muda a cobrança, dá ou tira o cartão e expulsa ou devolve o jogador como se o árbitro tivesse decidido assim desde o começo.
 
-| Item | Versão |
+### Três lances, três respostas
+
+| Quando acontece isto | O VAR faz isto |
 | --- | --- |
-| **Jogo** | eFootball PES 2021 **`v1.7.2.0` da Steam** (outras versões do executável não são suportadas) |
-| **Sider** | **7.3+** com LuaJIT, sozinho ou dentro de um patch que use o Sider |
-| **Sistema** | Windows 10 ou 11 (x64) |
+| **O pênalti que não foi marcado.** Seu atacante foi derrubado e o jogo seguiu. | Volte ao lance no replay e escolha **Marcar pênalti**. A partida vai para a marca da cal, com o cartão que você decidir. |
+| **A marcação injusta.** O árbitro deu falta e amarelo num lance limpo. | Escolha **Anular falta**. A falta some, o cartão é retirado e a posse volta para o time certo. |
+| **O cartão errado.** Era o segundo amarelo e o jogador ficou em campo, ou o contrário. | Ajuste o cartão de qualquer jogador na aba **CARTÕES**. A engine tira ou devolve o jogador na bola parada. |
+
+### Do lance à decisão
+
+```mermaid
+flowchart LR
+    A["Lance polêmico"] --> B["Pause e abra o<br/>Replay Manual"]
+    B --> C["O painel VAR abre<br/>com os lances marcados"]
+    C --> D["Escolha o lance<br/>e a decisão"]
+    D --> E["Pool de decisões"]
+    E --> F["Saia do replay"]
+    F --> G["A engine aplica<br/>tudo de uma vez"]
+```
+
+O painel encontra sozinho os momentos que importam. Ele acompanha a partida 60 vezes por segundo e marca na barra do replay carrinhos, botes, trancos, quedas e simulações, além das faltas, cartões e vantagens do árbitro. Cada marcador já chega com infrator, vítima, local e zona (dentro ou fora da área). Você confere, ajusta o que quiser e aperta **Confirmar decisão**.
+
+### O painel
+
+<table>
+<tr>
+<td align="center" width="33%"><img src="docs/images/pt/revisao.png" alt="Revisão"><br><b>Revisão</b><br><sub>A barra de lances, o lance em foco e o campo tático com o contato entre infrator e vítima.</sub></td>
+<td align="center" width="33%"><img src="docs/images/pt/decisao.png" alt="Decisão"><br><b>Decisão</b><br><sub>Ajuste jogador, cartão, time e local. Um clique no campo move a cobrança.</sub></td>
+<td align="center" width="33%"><img src="docs/images/pt/pool.png" alt="Pool de decisões"><br><b>Pool de decisões</b><br><sub>Um lance e até 32 ajustes de cartão, aplicados juntos e em ordem ao sair do replay.</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/images/pt/cartoes.png" alt="Cartões"><br><b>Cartões</b><br><sub>Os 22 jogadores com nomes e números reais. Corrija o cartão de qualquer um, mesmo sem lance.</sub></td>
+<td align="center"><img src="docs/images/pt/opcoes.png" alt="Opções"><br><b>Opções</b><br><sub>Lado da tela, tamanho, campo tático, avisos e idioma, salvos para a próxima partida.</sub></td>
+<td align="center"><img src="docs/images/pt/controles.png" alt="Controles"><br><b>Controles</b><br><sub>Duas teclas por ação, troca automática em conflito e nenhum atalho essencial perdido.</sub></td>
+</tr>
+</table>
+
+<p align="center"><img src="docs/images/pt/recolhido.png" alt="Painel recolhido com o pool pronto"><br><sub>Recolhido, o painel vira uma pílula que lembra o que vai ser aplicado.</sub></p>
+
+### Ver, decidir, aplicar, lembrar
+
+| | |
+| --- | --- |
+| **Ver** | Detecção de lances a 60 Hz com o modelo de contato da própria engine. A falta apitada depois de uma vantagem fica no momento do contato, não no apito. Nomes, números e uniformes vêm da memória do jogo, inclusive os editados por patches. |
+| **Decidir** | Marcar falta ou pênalti num lance anterior, anular a falta ou o pênalti marcado, converter em pênalti, inverter a falta, ajustar cartões e dar escanteio, tiro de meta ou lateral, mesmo com o cobrador já posicionado. |
+| **Aplicar** | O cartão passa pelo registro da própria engine, que conta uma vez só, e a expulsão sai pelo fluxo dela. Se o jogo não montar a cobrança, o mod desfaz tudo o que escreveu naquele instante. |
+| **Lembrar** | Cartões e faltas seguem o jogador do lance, não a posição, mesmo depois de uma substituição. Uma decisão sobre uma parada que já passou nunca é aplicada fora de hora. |
+| **Respeitar** | Nunca terceiro amarelo nem segundo vermelho. Nenhum arquivo do jogo é alterado. O painel ocupa a mesma fração da tela de 720p a 4K, em ultrawide e 4:3, nos tamanhos Compacto, Padrão e Grande. |
+
+### Limites honestos
+
+- Funciona só no **PES 2021 `v1.7.2.0` da Steam**. Outras versões do executável têm outros endereços e não são suportadas.
+- **Só partidas offline**: Exibição, Master Liga, Rumo ao Estrelato e Copas. Nada de rede, DRM ou modo online é tocado.
+- Não volta o jogo no tempo. Uma decisão vale para a parada em que foi tomada, e **gols não podem ser anulados**.
+- O controle abre e recolhe o painel e continua controlando o replay. Dentro do painel, a navegação é por teclado e mouse.
 
 ### Instalação
 
 1. Baixe o **`PES2021_VAR_Mod_v4.4.8.zip`** em [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) e extraia em qualquer pasta.
-2. Feche o jogo e rode o **`VAR_Mod_Gerenciar.bat`**. No menu, escolha **`1 - Instalar ou atualizar`**.
-3. Abra o jogo pelo **Sider** (num patch, pelo atalho do próprio patch).
+2. Com o jogo fechado, rode o **`VAR_Mod_Gerenciar.bat`** e escolha **`1 - Instalar ou atualizar`**.
+3. Abra o jogo pelo **Sider** (num patch, pelo atalho do próprio patch). Pronto.
 
-O instalador acha a pasta do Sider ou do patch (ou pede o caminho), copia os arquivos, ativa `lua.enabled = 1` e `luajit.ext.enabled = 1` e registra `lua.module = "var_mod.lua"` no `sider.ini`, sempre com backup datado antes. Se o jogo estiver aberto, ele avisa e não mexe em nada. A DLL só carrega na primeira partida (ou ao abrir o menu do Sider), então a abertura do jogo não fica mais lenta.
+O instalador acha o Sider sozinho (ou pergunta o caminho), faz backup datado do `sider.ini` antes de qualquer mudança e não mexe em nada com o jogo aberto. A DLL só carrega na primeira partida, então a abertura do jogo continua igual.
 
-| Opção do instalador | O que faz |
+<details>
+<summary><b>Opções do instalador, instalação manual e requisitos</b></summary>
+
+| Opção | O que faz |
 | --- | --- |
 | **1 - Instalar ou atualizar** | Copia a versão nova e ativa o mod no `sider.ini` |
 | **2 - Ativar** | Volta a ligar o mod sem copiar nada |
 | **3 - Desativar** | Desliga o mod e mantém os arquivos |
 | **4 - Desinstalar** | Guarda seu `var_mod.ini` (atalhos e idioma) ao lado do `sider.ini`, apaga os arquivos e a linha do mod e mantém `luajit.ext.enabled = 1`, que outros módulos também usam |
 
-<details>
-<summary><b>Instalação manual</b></summary>
-
-Copie `modules\var_mod.lua` para `<pasta do sider>\modules\` e `modules\var_mod\var_core.dll` para `<pasta do sider>\modules\var_mod\`. Depois adicione ao `sider.ini`:
+**Manual:** copie `modules\var_mod.lua` para `<pasta do sider>\modules\` e `modules\var_mod\var_core.dll` para `<pasta do sider>\modules\var_mod\`. Depois adicione ao `sider.ini`:
 
 ```ini
 lua.enabled = 1
@@ -64,101 +107,125 @@ luajit.ext.enabled = 1
 lua.module = "var_mod.lua"
 ```
 
+**Requisitos:** PES 2021 `v1.7.2.0` (Steam), Sider 7.3+ com LuaJIT (sozinho ou dentro de um patch) e Windows 10 ou 11 x64.
+
 </details>
 
-### Como usar
-
-1. Jogue uma partida **offline** (Exibição, Master Liga, Rumo ao Estrelato ou Copas).
-2. Num lance polêmico, **pause** e abra o **Replay Manual**. O painel VAR abre sozinho na lateral.
-3. Na aba **`REVISÃO`**, escolha o lance na barra de lances (clique, ou `[` e `]`). O replay vai até o momento e o painel já preenche infrator, vítima, local e zona.
-4. Escolha a decisão e ajuste infrator, cartão, time e local com as setas ou o mouse (clique no campo tático para mover a cobrança).
-5. Aperte **`Confirmar decisão`**. Um aviso confirma que ela foi para o **pool de decisões**, onde você pode juntar uma decisão de lance com vários ajustes de cartão.
-6. **Saia do replay**. O pool inteiro é aplicado na engine de uma vez e um aviso mostra o resultado.
-
-### Funcionalidades
-
-| Área | O que faz |
-| --- | --- |
-| **Painel no Replay Manual** | Abas `REVISÃO`, `CARTÕES` e `OPÇÕES`, barra de lances clicável, `Seek` nativo do replay 3D, `Play / Pause` e foco da câmera no infrator, na vítima ou na bola. |
-| **Detecção de lances a 60 Hz** | Carrinhos, botes, trancos, quedas, simulação e os eventos oficiais de falta, pênalti, cartão e vantagem viram marcadores com infrator, vítima, local e zona (`DENTRO` ou `FORA DA ÁREA`). A falta apitada depois de uma vantagem fica no momento do contato. |
-| **Decisões** | Marcar falta ou pênalti num lance anterior, anular a falta ou o pênalti marcado, converter em pênalti, inverter a falta, alterar ou retirar cartão de qualquer jogador e bola parada (escanteio, tiro de meta ou lateral), inclusive com o cobrador já posicionado. |
-| **Pool de decisões** | Uma decisão de lance mais até 32 ajustes de cartão, aplicados juntos e em ordem. Anular a falta atual e marcar uma falta anterior cabem no mesmo pacote. Uma decisão sobre uma parada que já passou nunca é aplicada fora de hora. |
-| **Engine nativa (`MatchFSM`)** | O cartão passa pelo registro da própria engine, que conta uma vez só, e a expulsão sai pelo fluxo dela. Se a engine não montar a bola parada, o mod desfaz tudo o que escreveu naquele instante. |
-| **Jogador certo, sempre** | Cartões e faltas seguem o jogador do lance, não a posição, mesmo depois de substituições. Nunca há terceiro amarelo nem segundo vermelho. |
-| **Nomes, números e uniformes** | Lidos da memória do jogo, com substituições ao vivo, avatar do Rumo ao Estrelato e uniformes licenciados ou editados por patches. |
-| **Campo tático 2D** | Escala real com zoom automático na área, lados corretos em cada tempo, contato infrator x vítima e clique para mover o local da cobrança. |
-| **Atalhos e idioma** | Remap de cada ação com 2 teclas, troca automática em conflito, proteção contra ficar sem atalho essencial e interface em **Português (BR)** ou **English**, trocada na hora e salva. |
-
-### Atalhos padrão
-
-Todos remapeáveis em `OPÇÕES > Controles`.
+### Atalhos
 
 | Ação | Teclado | Controle |
 | --- | --- | --- |
 | Abrir ou recolher o painel | `V` ou `F7` | `R3` |
-| Confirmar | `Enter` | |
-| Voltar | `Esc` ou `Backspace` | |
-| Limpar pool | `Delete` | |
+| Confirmar / Voltar | `Enter` / `Esc` ou `Backspace` | |
 | Aba anterior / próxima | `Page Up` ou `Q` / `Page Down` ou `E` | |
-| Inverter papéis / trocar time | `Tab` | |
 | Lance anterior / próximo | `[` / `]` | |
+| Inverter papéis ou trocar time | `Tab` | |
 | Play / Pause do replay | `P` | |
 | Navegar | Setas ou `W` `A` `S` `D` | |
+| Limpar o pool | `Delete` | |
 | Telemetria | `F10` | |
 
-O controle só abre e recolhe o painel e continua controlando o replay normalmente. Enquanto o painel está em foco, teclado e mouse não chegam ao jogo. No menu do Sider, a tecla **`7`** liga e desliga o VAR e a **`8`** mostra a telemetria ao vivo.
+Todos remapeáveis em **OPÇÕES > Controles**. Enquanto o painel está em foco, teclado e mouse não chegam ao jogo. No menu do Sider, a tecla **`7`** liga e desliga o VAR e a **`8`** mostra a telemetria ao vivo.
 
-### Interface e estabilidade
-
-- **Visual de transmissão:** dark mode, selo `VAR`, cores dos times, avisos de decisão e confirmação animados e textos nítidos.
-- **Qualquer resolução:** o painel ocupa a mesma fração da tela de 720p a 4K, em ultrawide, 4:3 e 5:4, com três tamanhos (`Compacto`, `Padrão`, `Grande`) por cima. Nomes longos e acentos (inclusive Latin Extended, como Modrić) cabem com reticências.
-- **Leve:** um único hook em `GrSwapChain::Present0`, sem dispositivo DX11 extra, e nenhum trabalho de interface fora do replay.
-- **Seguro:** escritas na memória do jogo só nas estruturas validadas e nos dois buffers que a engine usa, ganchos instalados com as outras threads congeladas, correção de um defeito do alocador do jogo que derrubava o PES depois do apito final, e suíte de testes validada com AddressSanitizer e UndefinedBehaviorSanitizer.
-
-### Solução de problemas
+<details>
+<summary><b>Solução de problemas</b></summary>
 
 | Sintoma | O que fazer |
 | --- | --- |
-| **Menu do Sider mostra `Status: ERRO (...)`** | A DLL não carregou e o texto diz o motivo. Confira se `var_core.dll` está em `<pasta do sider>\modules\var_mod\`, se `lua.enabled = 1` e `luajit.ext.enabled = 1` estão no `sider.ini` e veja o `sider.log`. |
-| **O painel não abre no replay** | Confirme que a partida é offline e que o VAR está ligado (tecla `7` no menu do Sider). Use `V`, `F7` ou `R3` para reabrir o painel recolhido. |
-| **Algo deu errado numa partida** | O log fica em `<pasta do sider>\modules\var_mod\var_core.log` e é recriado a cada abertura do jogo. Copie o arquivo antes de abrir o jogo de novo e anexe numa [issue](https://github.com/Joao-Spala/pes21-var-mod/issues). |
-| **Voltar ao padrão** | Atalhos, idioma e estado ficam em `<pasta do sider>\modules\var_mod\var_mod.ini`. Apagar o arquivo restaura o padrão. |
+| **O menu do Sider mostra `Status: ERRO (...)`** | A DLL não carregou e o texto diz o motivo. Confira se `var_core.dll` está em `<pasta do sider>\modules\var_mod\`, se `lua.enabled = 1` e `luajit.ext.enabled = 1` estão no `sider.ini` e veja o `sider.log`. |
+| **O painel não abre no replay** | Confirme que a partida é offline e que o VAR está ligado (tecla `7` no menu do Sider). `V`, `F7` ou `R3` reabrem o painel recolhido. |
+| **Algo deu errado numa partida** | O log fica em `<pasta do sider>\modules\var_mod\var_core.log` e é recriado a cada abertura do jogo. Copie antes de abrir de novo e anexe numa [issue](https://github.com/Joao-Spala/pes21-var-mod/issues). |
+| **Voltar ao padrão** | Apague `<pasta do sider>\modules\var_mod\var_mod.ini`. |
+
+</details>
 
 ---
 
 ## English
 
-Standalone **Sider** module (**native x64 DLL in C++20 + DirectX 11 + Dear ImGui**, under 1 MB, plus a Lua module) that brings a **video assistant referee** to **eFootball PES 2021 (`v1.7.2.0`, Steam)**. Review the play in the **Manual Replay** and apply or overturn fouls, penalties, cards and set pieces **straight in the game engine**, as if the referee had made the call. Built through reverse engineering and compatible with **Sider 7.3+**, standalone or inside the major patches built on Sider.
+<div align="center"><img src="docs/images/hero_en.png" alt="VAR for PES 2021: pause, review, decide. The game obeys." width="100%"></div>
 
-Offline matches only. No game file is modified and nothing related to network, DRM or online modes is touched.
+### The call you could never challenge
 
-### Requirements
+Everyone who plays PES has been there. Your striker goes down in the box, the referee waves play on, the replay shows the defender's boot on the ankle and there is nothing left but to accept it. Or the opposite: a yellow for the wrong player, a penalty that never happened, a tackle from behind that went unpunished.
 
-| Item | Version |
+**VAR for PES 2021** puts the final word in your hands. Pause, open the replay, pick the play and decide. It is not an overlay pretending to referee. The decision goes **into the PES engine itself**, which changes the restart, gives or removes the card and sends off or brings back the player as if the referee had called it that way from the start.
+
+### Three plays, three answers
+
+| When this happens | The VAR does this |
 | --- | --- |
-| **Game** | eFootball PES 2021 **Steam `v1.7.2.0`** (other executable versions are not supported) |
-| **Sider** | **7.3+** with LuaJIT, standalone or inside a patch that uses Sider |
-| **System** | Windows 10 or 11 (x64) |
+| **The penalty that was not given.** Your striker was brought down and play went on. | Go back to the play in the replay and pick **Award penalty**. The match goes to the spot, with the card you choose. |
+| **The unfair call.** The referee gave a foul and a yellow on a clean tackle. | Pick **Overturn foul**. The foul disappears, the card is removed and possession goes back to the right team. |
+| **The wrong card.** It was a second yellow and the player stayed on, or the other way round. | Fix any player's card in the **CARDS** tab. The engine removes or restores the player at the stoppage. |
+
+### From play to decision
+
+```mermaid
+flowchart LR
+    A["Controversial play"] --> B["Pause and open<br/>the Manual Replay"]
+    B --> C["The VAR panel opens<br/>with the plays marked"]
+    C --> D["Pick the play<br/>and the decision"]
+    D --> E["Decision pool"]
+    E --> F["Leave the replay"]
+    F --> G["The engine applies<br/>everything at once"]
+```
+
+The panel finds the moments that matter by itself. It follows the match 60 times per second and marks slide tackles, standing tackles, shoulder charges, falls and simulation on the replay bar, along with the referee's fouls, cards and advantages. Every marker arrives with offender, fouled player, spot and zone (inside or outside the box). Check it, adjust anything and press **Confirm decision**.
+
+### The panel
+
+<table>
+<tr>
+<td align="center" width="33%"><img src="docs/images/en/revisao.png" alt="Review"><br><b>Review</b><br><sub>The incident bar, the play in focus and the tactical pitch with the contact between offender and fouled player.</sub></td>
+<td align="center" width="33%"><img src="docs/images/en/decisao.png" alt="Decision"><br><b>Decision</b><br><sub>Adjust player, card, team and spot. One click on the pitch moves the restart.</sub></td>
+<td align="center" width="33%"><img src="docs/images/en/pool.png" alt="Decision pool"><br><b>Decision pool</b><br><sub>One play and up to 32 card edits, applied together and in order when you leave the replay.</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/images/en/cartoes.png" alt="Cards"><br><b>Cards</b><br><sub>All 22 players with real names and numbers. Fix anyone's card, even with no play attached.</sub></td>
+<td align="center"><img src="docs/images/en/opcoes.png" alt="Options"><br><b>Options</b><br><sub>Screen side, size, tactical pitch, alerts and language, saved for the next match.</sub></td>
+<td align="center"><img src="docs/images/en/controles.png" alt="Controls"><br><b>Controls</b><br><sub>Two keys per action, automatic swap on conflict and no essential shortcut ever lost.</sub></td>
+</tr>
+</table>
+
+<p align="center"><img src="docs/images/en/recolhido.png" alt="Collapsed panel with the pool ready"><br><sub>Collapsed, the panel becomes a pill that reminds you what is about to be applied.</sub></p>
+
+### See, decide, apply, remember
+
+| | |
+| --- | --- |
+| **See** | 60 Hz incident detection using the engine's own contact model. A foul whistled after an advantage sits at the moment of contact, not at the whistle. Names, numbers and kits come from game memory, including patch-edited ones. |
+| **Decide** | Award a foul or penalty on an earlier play, overturn the foul or penalty given, upgrade to penalty, reverse the foul, edit cards and award a corner, goal kick or throw-in, even with the kicker already over the ball. |
+| **Apply** | The card goes through the engine's own commit, which counts it once, and the sending off follows the engine's flow. If the game does not set up the restart, the mod undoes everything it wrote at that moment. |
+| **Remember** | Cards and fouls follow the player of the play, not the slot, even after a substitution. A decision about a stoppage that has already passed is never applied out of time. |
+| **Respect** | Never a third yellow or a second red. No game file is modified. The panel takes the same share of the screen from 720p to 4K, ultrawide and 4:3, in Compact, Default and Large sizes. |
+
+### Honest limits
+
+- It only works on **Steam PES 2021 `v1.7.2.0`**. Other executable versions use other addresses and are not supported.
+- **Offline matches only**: Exhibition, Master League, Become a Legend and Cups. Nothing related to network, DRM or online modes is touched.
+- It does not rewind the match. A decision applies to the stoppage it was made in, and **goals cannot be overturned**.
+- The gamepad opens and collapses the panel and keeps controlling the replay. Inside the panel, navigation is keyboard and mouse.
 
 ### Installation
 
 1. Download **`PES2021_VAR_Mod_v4.4.8.zip`** from [**Releases**](https://github.com/Joao-Spala/pes21-var-mod/releases/latest) and extract it anywhere.
-2. Close the game and run **`VAR_Mod_Gerenciar.bat`**. In the menu, pick **`1 - Instalar ou atualizar`** (install or update).
-3. Launch the game through **Sider** (with a patch, through the patch launcher).
+2. With the game closed, run **`VAR_Mod_Gerenciar.bat`** and pick **`1 - Instalar ou atualizar`** (install or update).
+3. Launch the game through **Sider** (with a patch, through the patch launcher). Done.
 
-The installer finds your Sider or patch folder (or asks for the path), copies the files, enables `lua.enabled = 1` and `luajit.ext.enabled = 1` and registers `lua.module = "var_mod.lua"` in `sider.ini`, always with a timestamped backup first. If the game is open, it says so and changes nothing. The DLL only loads on the first match (or when the Sider menu opens), so game startup is not slowed down.
+The installer finds Sider by itself (or asks for the path), makes a timestamped backup of `sider.ini` before any change and touches nothing while the game is open. The DLL only loads on the first match, so game startup stays the same.
 
-| Installer option | What it does |
+<details>
+<summary><b>Installer options, manual install and requirements</b></summary>
+
+| Option | What it does |
 | --- | --- |
 | **1 - Install or update** | Copies the new version and enables the mod in `sider.ini` |
 | **2 - Enable** | Turns the mod back on without copying anything |
 | **3 - Disable** | Turns the mod off and keeps the files |
 | **4 - Uninstall** | Keeps your `var_mod.ini` (shortcuts and language) next to `sider.ini`, deletes the files and the mod's line and keeps `luajit.ext.enabled = 1`, which other modules also use |
 
-<details>
-<summary><b>Manual install</b></summary>
-
-Copy `modules\var_mod.lua` to `<sider folder>\modules\` and `modules\var_mod\var_core.dll` to `<sider folder>\modules\var_mod\`. Then add to `sider.ini`:
+**Manual:** copy `modules\var_mod.lua` to `<sider folder>\modules\` and `modules\var_mod\var_core.dll` to `<sider folder>\modules\var_mod\`. Then add to `sider.ini`:
 
 ```ini
 lua.enabled = 1
@@ -166,95 +233,97 @@ luajit.ext.enabled = 1
 lua.module = "var_mod.lua"
 ```
 
+**Requirements:** Steam PES 2021 `v1.7.2.0`, Sider 7.3+ with LuaJIT (standalone or inside a patch) and Windows 10 or 11 x64.
+
 </details>
 
-### How to use
-
-1. Play an **offline** match (Exhibition, Master League, Become a Legend or Cups).
-2. On a controversial play, **pause** and open the **Manual Replay**. The VAR panel opens by itself on the side.
-3. In the **`REVIEW`** tab, pick the play on the incident bar (click it, or `[` and `]`). The replay seeks to that moment and the panel fills in offender, fouled player, spot and zone.
-4. Choose the decision and adjust offender, card, team and spot with the arrow keys or the mouse (click the tactical pitch to move the restart).
-5. Press **`Confirm decision`**. A toast confirms it went into the **decision pool**, where one play decision can be combined with several card edits.
-6. **Leave the replay**. The whole pool is applied to the engine at once and a banner shows the result.
-
-### Features
-
-| Area | What it does |
-| --- | --- |
-| **Manual Replay panel** | `REVIEW`, `CARDS` and `OPTIONS` tabs, clickable incident bar, native 3D replay `Seek`, `Play / Pause` and camera focus on the offender, the fouled player or the ball. |
-| **60 Hz incident detection** | Slide tackles, standing tackles, shoulder charges, falls, simulation and the official foul, penalty, card and advantage events become markers with offender, fouled player, spot and zone (`INSIDE` or `OUTSIDE THE BOX`). A foul whistled after an advantage sits at the moment of contact. |
-| **Decisions** | Give a foul or penalty on an earlier play, overturn the foul or penalty given, upgrade to penalty, reverse the foul, change or remove any player's card and award a set piece (corner, goal kick or throw-in), even with the kicker already standing over the ball. |
-| **Decision pool** | One play decision plus up to 32 card edits, applied together and in order. Overturning the current foul and giving an earlier one fit in the same pool. A decision about a stoppage that has already passed is never applied out of time. |
-| **Native engine (`MatchFSM`)** | The card goes through the engine's own commit, which counts it once, and the sending off follows the engine's flow. If the engine does not set up the restart, the mod undoes everything it wrote at that moment. |
-| **Always the right player** | Cards and fouls follow the player of the play, not the slot, even after substitutions. Never a third yellow or a second red. |
-| **Names, numbers and kits** | Read from game memory, with live substitutions, Become a Legend avatar and licensed or patch-edited kits. |
-| **2D tactical pitch** | True scale with automatic box zoom, correct sides in each half, offender vs fouled contact and click-to-move restart spot. |
-| **Shortcuts and language** | Remap every action with 2 keys, automatic swap on conflict, a guard that never leaves an essential action unbound, and a UI in **English** or **Português (BR)**, switched instantly and saved. |
-
-### Default shortcuts
-
-All remappable in `OPTIONS > Controls`.
+### Shortcuts
 
 | Action | Keyboard | Gamepad |
 | --- | --- | --- |
 | Open or collapse the panel | `V` or `F7` | `R3` |
-| Confirm | `Enter` | |
-| Back | `Esc` or `Backspace` | |
-| Clear pool | `Delete` | |
+| Confirm / Back | `Enter` / `Esc` or `Backspace` | |
 | Previous / next tab | `Page Up` or `Q` / `Page Down` or `E` | |
-| Swap roles / switch team | `Tab` | |
 | Previous / next incident | `[` / `]` | |
+| Swap roles or switch team | `Tab` | |
 | Replay Play / Pause | `P` | |
 | Navigate | Arrow keys or `W` `A` `S` `D` | |
+| Clear the pool | `Delete` | |
 | Telemetry | `F10` | |
 
-The gamepad only opens and collapses the panel and keeps controlling the replay. While the panel is focused, keyboard and mouse never reach the game. In the Sider menu, key **`7`** turns the VAR on or off and **`8`** shows live telemetry.
+All remappable in **OPTIONS > Controls**. While the panel is focused, keyboard and mouse never reach the game. In the Sider menu, key **`7`** turns the VAR on or off and **`8`** shows live telemetry.
 
-### Interface and stability
-
-- **Broadcast look:** dark mode, `VAR` badge, team colours, animated decision banners and confirmation toasts, crisp text.
-- **Any resolution:** the panel takes the same share of the screen from 720p to 4K, ultrawide, 4:3 and 5:4, with three sizes (`Compact`, `Default`, `Large`) on top. Long names and accents (including Latin Extended, such as Modrić) fit with ellipses.
-- **Light:** a single `GrSwapChain::Present0` hook, no extra DX11 device and no UI work outside the replay.
-- **Safe:** game memory is only written in validated structures and in both buffers the engine uses, hooks are installed with the other threads frozen, a game allocator bug that crashed PES after the final whistle is fixed, and the test suite is validated under AddressSanitizer and UndefinedBehaviorSanitizer.
-
-### Troubleshooting
+<details>
+<summary><b>Troubleshooting</b></summary>
 
 | Symptom | What to do |
 | --- | --- |
-| **Sider menu shows `Status: ERROR (...)`** | The DLL did not load and the text gives the reason. Check that `var_core.dll` is in `<sider folder>\modules\var_mod\`, that `lua.enabled = 1` and `luajit.ext.enabled = 1` are in `sider.ini`, and look at `sider.log`. |
-| **The panel does not open in the replay** | Make sure the match is offline and the VAR is on (key `7` in the Sider menu). Use `V`, `F7` or `R3` to reopen a collapsed panel. |
+| **The Sider menu shows `Status: ERROR (...)`** | The DLL did not load and the text gives the reason. Check that `var_core.dll` is in `<sider folder>\modules\var_mod\`, that `lua.enabled = 1` and `luajit.ext.enabled = 1` are in `sider.ini`, and look at `sider.log`. |
+| **The panel does not open in the replay** | Make sure the match is offline and the VAR is on (key `7` in the Sider menu). `V`, `F7` or `R3` reopen a collapsed panel. |
 | **Something went wrong in a match** | The log is at `<sider folder>\modules\var_mod\var_core.log` and is recreated every time the game starts. Copy it before relaunching and attach it to an [issue](https://github.com/Joao-Spala/pes21-var-mod/issues). |
-| **Back to defaults** | Shortcuts, language and on/off state live in `<sider folder>\modules\var_mod\var_mod.ini`. Deleting it restores the defaults. |
+| **Back to defaults** | Delete `<sider folder>\modules\var_mod\var_mod.ini`. |
+
+</details>
 
 ---
 
+## Por dentro / Under the hood
+
+Um mod que escreve na memória de um jogo fechado só merece confiança se for previsível. Estas são as escolhas de engenharia que sustentam isso.<br>
+A mod that writes into the memory of a closed game only deserves trust if it is predictable. These are the engineering choices behind it.
+
+```mermaid
+sequenceDiagram
+    participant P as Painel / Panel
+    participant Pool as Pool
+    participant X as Executor
+    participant E as Engine (MatchFSM)
+    P->>Pool: Confirmar decisão / Confirm decision
+    Note over Pool: Um lance + até 32 cartões<br/>One play + up to 32 cards
+    X->>Pool: Na parada certa / At the right stoppage
+    X->>E: Resultado do árbitro / Referee result
+    E->>E: Monta a cobrança e registra o cartão<br/>Sets up the restart and commits the card
+    X-->>E: Confere no mesmo tick / Verifies in the same tick
+    Note over X,E: Cobrança não montada? Tudo é desfeito<br/>Restart not set up? Everything is undone
+```
+
+| | PT-BR | English |
+| --- | --- | --- |
+| **Nativo / Native** | DLL x64 em C++20 com menos de 1 MB, um único gancho de render em `GrSwapChain::Present0`, sem dispositivo DX11 extra e sem trabalho de interface fora do replay | C++20 x64 DLL under 1 MB, a single render hook on `GrSwapChain::Present0`, no extra DX11 device and no UI work outside the replay |
+| **Na engine / In the engine** | Decisões entram pela máquina de estados da partida (`MatchFSM`) e pelo registro de cartões da própria engine, nos dois buffers que ela usa | Decisions go through the match state machine (`MatchFSM`) and the engine's own card commit, in both buffers it uses |
+| **Atômico / Atomic** | A cobrança é conferida no mesmo tick e, se o jogo não a montou, cartões e dados da partida voltam ao estado anterior | The restart is verified in the same tick and, if the game did not set it up, cards and match data are rolled back |
+| **Seguro / Safe** | Ganchos instalados com as outras threads congeladas, escrita só em estruturas validadas e correção de um defeito do alocador do jogo que derrubava o PES depois do apito final | Hooks installed with the other threads frozen, writes only to validated structures and a fix for a game allocator bug that crashed PES after the final whistle |
+| **Testado / Tested** | 20 suítes, contratos conferidos no executável real, painel desenhado em 7 resoluções e tudo validado com AddressSanitizer e UndefinedBehaviorSanitizer | 20 suites, contracts checked against the real executable, the panel rendered at 7 resolutions and everything validated under AddressSanitizer and UndefinedBehaviorSanitizer |
+
+As notas de engenharia reversa (structs, ganchos, assinaturas e a máquina de estados da partida) estão em [`re_notes/`](re_notes) e o histórico em [`CHANGELOG.md`](CHANGELOG.md).<br>
+Reverse engineering notes (structs, hooks, signatures and the match state machine) are in [`re_notes/`](re_notes) and the history is in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Build & Testes / Build & Tests
 
-Requer / Requires **LLVM-MinGW UCRT x86_64** (`x86_64-w64-mingw32-clang++`). O build compila a DLL, roda a suíte de testes e só então gera o pacote em `dist/` / The build compiles the DLL, runs the test suite and only then stages the package in `dist/`.
+Requer / Requires **LLVM-MinGW UCRT x86_64** (`x86_64-w64-mingw32-clang++`). O build compila a DLL, roda os testes e só então gera o pacote em `dist/`.<br>
+The build compiles the DLL, runs the tests and only then stages the package in `dist/`.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File native\build.ps1
 ```
 
-Saída / Output: `dist/modules/var_mod/var_core.dll`, `dist/modules/var_mod.lua` e/and `dist/VAR_Mod_Gerenciar.bat`.
-
-Opcional / Optional:
+Com o executável do jogo, os testes conferem as assinaturas e os contratos da engine. Com uma pasta de capturas, eles desenham o painel em 7 resoluções nos dois idiomas, e `docs/assets/make_readme_art.py` monta as imagens deste README a partir delas.<br>
+With the game executable, the tests check the signatures and engine contracts. With a snapshot folder, they render the panel at 7 resolutions in both languages, and `docs/assets/make_readme_art.py` builds this README's images from them.
 
 ```powershell
 $env:PES2021_EXE = "C:\Program Files (x86)\Steam\steamapps\common\eFootball PES 2021\PES2021.exe"
 $env:VAR_HUD_SNAPSHOT_DIR = "$env:TEMP\var_hud"
 native\build_tmp\test_var_core.exe
+python docs\assets\make_readme_art.py "$env:TEMP\var_hud"
 ```
 
-Com `PES2021_EXE`, os testes conferem as assinaturas e os contratos da engine no executável real. Com `VAR_HUD_SNAPSHOT_DIR`, eles salvam capturas do painel em 7 resoluções e nos dois idiomas.<br>
-With `PES2021_EXE`, the tests check the signatures and engine contracts against the real executable. With `VAR_HUD_SNAPSHOT_DIR`, they save panel snapshots at 7 resolutions in both languages.
+---
 
-Notas de engenharia reversa (structs, hooks, assinaturas e a máquina de estados da partida) em [`re_notes/`](re_notes) e histórico em [`CHANGELOG.md`](CHANGELOG.md). O logo é gerado por `docs/assets/make_logo.py`.<br>
-Reverse engineering notes (structs, hooks, signatures and the match state machine) are in [`re_notes/`](re_notes) and the history is in [`CHANGELOG.md`](CHANGELOG.md). The logo is generated by `docs/assets/make_logo.py`.
+<div align="center">
 
 Projeto independente, sem afiliação com a Konami. Nenhum arquivo do jogo é distribuído ou alterado.<br>
 Independent project, not affiliated with Konami. No game file is distributed or modified.
 
-## Licença / License
+[MIT](LICENSE) · Inclui / Includes [Dear ImGui](https://github.com/ocornut/imgui) ([MIT](native/third_party/imgui/LICENSE.txt))
 
-[MIT](LICENSE). Inclui / Includes [Dear ImGui](https://github.com/ocornut/imgui) ([MIT](native/third_party/imgui/LICENSE.txt)).
+</div>
