@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.4.1
+
+Análise do dump completo do travamento ao avançar depois do fim da partida. Evidências em `re_notes/07_engine_heap_segment_release.md`.
+
+- **Travamento e crash depois do apito final corrigidos**: na troca de cena do pós-jogo a engine compacta os heaps e devolve ao Windows os blocos livres. A rotina nativa de liberação (`0x1403FC0D0`) liberava a alocação inteira, falhava no meio e em seguida escrevia no bloco que tinha acabado de liberar. O jogo travava enquanto o Windows gravava o dump e caía em `PES2021.exe+0x3FE31D`.
+- **Gatilho**: módulos Lua do BMPES escrevem na memória do jogo pelo Sider e deixam páginas soltas do heap com proteção de execução. Uma única página assim dentro de um bloco basta para a rotina nativa se perder. O defeito existe com ou sem o VAR.
+- **Correção**: o mod substitui essa rotina por uma versão atômica que valida o bloco inteiro antes de liberar e libera por alocação do sistema. Ou o bloco sai inteiro ou nada é tocado. A proteção vale para o processo todo, inclusive com o VAR desligado.
+
 ## v4.4.0
 
 Pesquisa e evidências em `re_notes/06_replay_cutscene_and_classification.md`.

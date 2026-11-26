@@ -1,5 +1,6 @@
 #include "aob_scanner.h"
 #include "game_structs.h"
+#include "heap_guard.h"
 #include "i18n.h"
 #include "imgui.h"
 #include "inline_hook.h"
@@ -138,6 +139,7 @@ void TestRealPes2021BinaryAobs() {
         { "DInputMouse_Poll",           Aobs::DInputMouse_Poll,           AobHints::DInputMouse_Poll,           0x141B63950ULL },
         { "PesPad_Update",              Aobs::PesPad_Update,              AobHints::PesPad_Update,              0x1403F86E0ULL },
         { "FoulSnapshotPool_Find",      Aobs::FoulSnapshotPool_Find,      AobHints::FoulSnapshotPool_Find,      0x140A82120ULL },
+        { "HeapGuard_Win32Munmap",      HeapGuardAob::Win32Munmap,        HeapGuardAob::Win32MunmapHintRva,     0x1403FC0D0ULL },
         { "VanishingSpray_NativeReset", Aobs::VanishingSpray_NativeReset, AobHints::VanishingSpray_NativeReset, 0x140452EB0ULL },
         { "ReplayCtrl_SyncToManager",   Aobs::ReplayCtrl_SyncToManager,   AobHints::ReplayCtrl_SyncToManager,   0x1420C16A0ULL },
         { "ReplayPlayer_SetFrame",      Aobs::ReplayPlayer_SetFrame,      AobHints::ReplayPlayer_SetFrame,      0x14217E800ULL },
@@ -2309,6 +2311,86 @@ void TestCompositeVerdictPoolAndRcuOffsets() {
     MarkPass("TestCompositeVerdictPoolAndRcuOffsets");
 }
 
+// ---------------------------------------------------------------------------
+// v4.4.1: atomic release of engine heap segments (post-match crash at PES2021.exe+0x3FE31D)
+// ---------------------------------------------------------------------------
+struct FakeRun { uintptr_t base; uintptr_t allocBase; size_t size; uint32_t state; };
+struct FakeMap { std::vector<FakeRun> runs; };
+
+bool FakeQuery(uintptr_t addr, HeapRegionInfo& out, void* ctx) {
+    const auto* m = static_cast<const FakeMap*>(ctx);
+    for (const auto& r : m->runs) {
+        if (addr >= r.base && addr < r.base + r.size) {
+            out.base = r.base; out.allocBase = r.allocBase; out.size = r.size; out.state = r.state;
+            return true;
+        }
+    }
+    out = HeapRegionInfo{};
+    out.base = addr; out.allocBase = 0; out.size = 0x1000; out.state = MEM_FREE;
+    return true;
+}
+
+void TestHeapGuardAtomicSegmentRelease() {
+    // Crash dump layout: one 0x50000 allocation with a PAGE_EXECUTE_READWRITE page in the middle
+    FakeMap split{{ { 0x118550000, 0x118550000, 0x16000, MEM_COMMIT },
+                    { 0x118566000, 0x118550000, 0x1000,  MEM_COMMIT },
+                    { 0x118567000, 0x118550000, 0x39000, MEM_COMMIT } }};
+    HeapSegmentPlan p = PlanHeapSegmentRelease(0x118550000, 0x50000, &FakeQuery, &split);
+    EXPECT_TRUE(p.ok, "Allocation with mixed protection must be releasable as one allocation");
+    EXPECT_EQ(p.allocations, static_cast<size_t>(1), "Mixed protection: one allocation");
+    EXPECT_EQ(p.splitAllocations, static_cast<size_t>(1), "Mixed protection must be reported");
+
+    // dlmalloc merged segment made of three adjacent 0x10000 allocations (0x100A60000 in the dump)
+    FakeMap merged{{ { 0x100A60000, 0x100A60000, 0x10000, MEM_COMMIT },
+                     { 0x100A70000, 0x100A70000, 0x10000, MEM_COMMIT },
+                     { 0x100A80000, 0x100A80000, 0x10000, MEM_COMMIT } }};
+    p = PlanHeapSegmentRelease(0x100A60000, 0x30000, &FakeQuery, &merged);
+    EXPECT_TRUE(p.ok && p.allocations == 3 && p.splitAllocations == 0, "Merged segment of 3 allocations");
+
+    // Range that ends inside an allocation: refused before anything is freed
+    p = PlanHeapSegmentRelease(0x100A60000, 0x18000, &FakeQuery, &merged);
+    EXPECT_TRUE(!p.ok, "Range ending inside an allocation must be refused");
+
+    // Range that does not start an allocation, or contains reserved or free pages: refused
+    p = PlanHeapSegmentRelease(0x100A68000, 0x8000, &FakeQuery, &merged);
+    EXPECT_TRUE(!p.ok, "Range not starting an allocation must be refused");
+    FakeMap reserved{{ { 0x200000000, 0x200000000, 0x10000, MEM_COMMIT },
+                       { 0x200010000, 0x200000000, 0x10000, MEM_RESERVE } }};
+    p = PlanHeapSegmentRelease(0x200000000, 0x20000, &FakeQuery, &reserved);
+    EXPECT_TRUE(!p.ok, "Partly reserved allocation must be refused");
+    p = PlanHeapSegmentRelease(0x100A60000, 0x40000, &FakeQuery, &merged);
+    EXPECT_TRUE(!p.ok, "Range running into free memory must be refused");
+
+    // Live: the native routine frees the whole allocation and then fails on the next run. The atomic one
+    // releases it completely and reports success.
+    SYSTEM_INFO si{};
+    GetSystemInfo(&si);
+    const size_t page = si.dwPageSize;
+    auto* mem = static_cast<uint8_t*>(VirtualAlloc(nullptr, 0x50000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    EXPECT_TRUE(mem != nullptr, "VirtualAlloc failed");
+    DWORD oldProt = 0;
+    EXPECT_TRUE(VirtualProtect(mem + 0x16000, page, PAGE_EXECUTE_READWRITE, &oldProt), "VirtualProtect failed");
+    MEMORY_BASIC_INFORMATION mbi{};
+    VirtualQuery(mem, &mbi, sizeof(mbi));
+    EXPECT_TRUE(mbi.RegionSize < 0x50000, "Setup: first run must be shorter than the allocation");
+    EXPECT_EQ(HeapGuard::ReleaseSegmentAtomic(mem, 0x50000), 0, "Mixed protection allocation must be released");
+    VirtualQuery(mem, &mbi, sizeof(mbi));
+    EXPECT_EQ(mbi.State, static_cast<DWORD>(MEM_FREE), "Allocation must be gone after release");
+
+    // Live: a range that stops inside the allocation is refused and stays fully usable
+    mem = static_cast<uint8_t*>(VirtualAlloc(nullptr, 0x20000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    EXPECT_TRUE(mem != nullptr, "VirtualAlloc failed");
+    EXPECT_EQ(HeapGuard::ReleaseSegmentAtomic(mem, 0x10000), -1, "Partial range must be refused");
+    mem[0x1FFFF] = 0x5A; // still mapped and writable: this write is what crashed the game
+    EXPECT_EQ(mem[0x1FFFF], 0x5A, "Refused range must stay mapped");
+    VirtualQuery(mem, &mbi, sizeof(mbi));
+    EXPECT_EQ(mbi.State, static_cast<DWORD>(MEM_COMMIT), "Refused range must stay committed");
+    VirtualFree(mem, 0, MEM_RELEASE);
+
+    EXPECT_EQ(HeapGuard::ReleaseSegmentAtomic(nullptr, 0), 0, "Zero size is a native no-op success");
+    MarkPass("TestHeapGuardAtomicSegmentRelease");
+}
+
 } // namespace
 
 int main() {
@@ -2331,6 +2413,7 @@ int main() {
     TestRemapAndLanguage();
     TestHudRenderSmoke();
     TestCompositeVerdictPoolAndRcuOffsets();
+    TestHeapGuardAtomicSegmentRelease();
 
     std::printf("\nResumo: %d PASS, %d FAIL\n", g_passed, g_failed);
     return (g_failed == 0) ? 0 : 1;

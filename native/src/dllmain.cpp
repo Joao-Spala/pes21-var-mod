@@ -3,6 +3,7 @@
 #include "inline_hook.h"
 #include "input_manager.h"
 #include "logger.h"
+#include "heap_guard.h"
 #include "match_hooks.h"
 #include "var_hud.h"
 #include "var_state.h"
@@ -104,6 +105,10 @@ __declspec(dllexport) int __cdecl var_init(const char* logDirUtf8) {
 
     var_mod::VarState::Instance().SetIniPath(baseDir.empty() ? L"var_mod.ini" : (baseDir + L"var_mod.ini"));
     var_mod::VarState::Instance().LoadHudConfig();
+
+    // Engine heap fix, independent from the VAR itself: makes the dlmalloc segment release atomic so the
+    // post-match heap trim cannot write into a segment it has just released (crash at PES2021.exe+0x3FE31D).
+    var_mod::HeapGuard::Install();
 
     // Install XInput IAT hook immediately (< 1 ms); defer all AOB scans and DX11 hooking
     // to the async background worker so Sider / BMPES startup never stalls the main thread.
