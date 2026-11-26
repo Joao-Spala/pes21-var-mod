@@ -55,8 +55,11 @@ void MaybeLogPeriodicPerf() {
     if (s_lastMs == 0) s_lastMs = now;
     if (now - s_lastMs < 10000) return;
     s_lastMs = now;
-    if (HeapGuard::PendingCalls() == 0) return;
-    const HeapGuard::Stats hs = HeapGuard::TakeStats();
+    static HeapGuard::Stats s_prev{};
+    const HeapGuard::Stats totals = HeapGuard::Totals();
+    const HeapGuard::Stats hs = HeapGuard::Delta(totals, s_prev);
+    s_prev = totals;
+    if (hs.calls == 0) return;
     VAR_LOG_INF("Perf last 10 s: heap release %llu call(s) (%llu released, %llu refused, %llu refused from cache) in %llu us",
                 static_cast<unsigned long long>(hs.calls), static_cast<unsigned long long>(hs.released),
                 static_cast<unsigned long long>(hs.refused), static_cast<unsigned long long>(hs.cacheHits),

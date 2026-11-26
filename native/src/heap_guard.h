@@ -54,21 +54,25 @@ struct Stats {
     uint64_t cacheHits = 0;    // ranges refused again from the cache (no page walk)
     uint64_t microseconds = 0; // total time spent inside the replacement
 };
-Stats TakeStats();           // returns the counters since the previous call and resets them
-uint64_t PendingCalls();     // calls counted since the last TakeStats (no reset)
+Stats Totals();              // cumulative since start: each reporter keeps its own previous value
+Stats Delta(const Stats& now, const Stats& before);
 void ClearRefusedCache();    // forget refused ranges (new match: allocations may have changed)
 // Pure cache used by the replacement, exposed for tests
 class RefusedRangeCache {
 public:
     static constexpr size_t kCapacity = 64;
+    static constexpr uint64_t kRefusalTtlMs = 2000;
     bool Contains(uintptr_t base, size_t size) const;
-    void Add(uintptr_t base, size_t size); // oldest entry is replaced when full
+    // Same range refused less than kRefusalTtlMs ago (the trim loop retries within milliseconds)
+    bool ContainsFresh(uintptr_t base, size_t size, uint64_t nowMs) const;
+    void Add(uintptr_t base, size_t size, uint64_t nowMs = 0); // oldest entry is replaced when full
     void RemoveOverlapping(uintptr_t base, size_t size);
     void Clear();
     size_t Count() const { return count_; }
 private:
     uintptr_t base_[kCapacity] = {};
     size_t size_[kCapacity] = {};
+    uint64_t addedMs_[kCapacity] = {};
     size_t count_ = 0;
     size_t next_ = 0;
 };

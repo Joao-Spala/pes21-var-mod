@@ -83,6 +83,9 @@ std::atomic<void*> g_lastMatchControl{ nullptr };
 uint64_t g_mainTickCount = 0;
 uint64_t g_finalizeFrameCount = 0;
 uint64_t g_foulCommitCount = 0;
+uint32_t g_lastSnapshotTick = 0;
+float    g_lastSnapshotTime = 0.0f;
+bool     g_hasSnapshotTick = false;
 uint32_t g_lastSeenMatchTick = 0;
 bool     g_lastAdvActive = false;
 bool     g_lastFoulValidEdge = false;
@@ -890,6 +893,7 @@ void SampleInPlayFrame(uint8_t* gmatch, uint8_t* matchInfo, int32_t matchPhase, 
     snap.matchPhase          = matchPhase;
     snap.time60Hz            = time60Hz;
     snap.matchTick           = matchTick;
+    snap.simFrame            = static_cast<uint32_t>(g_mainTickCount);
     snap.ballOwnerSlot       = realOwner;
     snap.recentBallOwnerSlot = g_recentBallOwnerSlot;
 
@@ -2316,6 +2320,7 @@ void OnManualReplayController(uint8_t* ctrl) {
 
 void ResetSimTrackersOnSimThread() {
     g_lastSeenMatchTick = 0;
+    g_hasSnapshotTick = false;
     g_lastAdvActive = false;
     g_lastFoulValidEdge = false;
     g_lastFoulOffenderEdge = -1;
@@ -2408,7 +2413,13 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
 
         // 60Hz physical incident detection + 60Hz spatial snapshot during InPlay: one snapshot per simulation
         // frame, the same rate the replay records, so the tactical pitch follows the replay frame by frame
-        if (matchStatus == static_cast<int32_t>(MatchStatus::InPlay)) {
+        // Only when the simulation frame advanced: the tick hook can run again on the same frame (a pause with the
+        // ball in play keeps InPlay), and identical copies would push the reviewed play out of the 90 s history
+        if (matchStatus == static_cast<int32_t>(MatchStatus::InPlay) &&
+            (!g_hasSnapshotTick || matchTick != g_lastSnapshotTick || time60Hz != g_lastSnapshotTime)) {
+            g_lastSnapshotTick = matchTick;
+            g_lastSnapshotTime = time60Hz;
+            g_hasSnapshotTick = true;
             SampleInPlayFrame(gmatch, matchInfo, matchPhase, time60Hz, matchTick);
         }
 
@@ -2771,7 +2782,8 @@ void __fastcall Detour_ReplayCtrlSync(void* replayCtrl) {
             --g_cameraFollowFramesLeft;
             uint8_t* player = ctrl + Offsets::ReplayCtrl_PlayerOffset;
             uint8_t* cam = *reinterpret_cast<uint8_t**>(ctrl + Offsets::ReplayCtrl_CameraPtr);
-            if (IsValidPtr(cam) && ctrl[Offsets::ReplayCtrl_CameraMode] != 3) {
+            // Paused only: while playing, mode 0 smooths +0x34 itself and a write would pin it, then spring back
+            if (IsValidPtr(cam) && ctrl[Offsets::ReplayCtrl_CameraMode] != 3 && ctrl[Offsets::ReplayCtrl_IsPlaying] == 0) {
                 uint8_t* camState = *reinterpret_cast<uint8_t**>(cam + Offsets::ReplayCam_StatePtr);
                 const int32_t curFocus = std::clamp(
                     *reinterpret_cast<const int32_t*>(ctrl + Offsets::ReplayCtrl_FocusSlotDword), 0, 22);

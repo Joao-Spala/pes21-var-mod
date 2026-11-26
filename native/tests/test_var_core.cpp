@@ -1475,6 +1475,7 @@ void TestSnapshotInterpolation() {
         sn.matchPhase = 0;
         sn.time60Hz = time;
         sn.matchTick = tick;
+        sn.simFrame = tick;
         sn.ballPos = Vec3{ bx, 0.2f, 1.0f };
         sn.playerPos[0] = Vec3{ px, 0.0f, 2.0f };
         sn.playerOnPitch[0] = onPitch;
@@ -1539,6 +1540,7 @@ void TestSnapshotInterpolation() {
         sn.matchPhase = 2;
         sn.time60Hz = 5000.0f + 2.3f * static_cast<float>(i);
         sn.matchTick = 9000u + static_cast<uint32_t>(i);
+        sn.simFrame = sn.matchTick;
         sn.playerOnPitch[0] = 1;
         sn.playerPos[0] = Vec3{ 0.1f * static_cast<float>(i), 0.0f, 0.0f }; // 6 m/s
         st.PushSnapshot(sn);
@@ -1550,7 +1552,7 @@ void TestSnapshotInterpolation() {
     bool histOk = true;
     for (int k = 0; k < VarState::kMotionSamples; ++k) {
         const uint32_t wantTick = 9150u - static_cast<uint32_t>(k + 1) * VarState::kMotionStepFrames;
-        histOk = histOk && hist[k].valid && hist[k].matchTick == wantTick &&
+        histOk = histOk && hist[k].valid && hist[k].simFrame == wantTick &&
                  std::fabs(hist[k].pos[0].x - 0.1f * static_cast<float>(wantTick - 9000u)) < 1e-3f;
     }
     EXPECT_TRUE(histOk, "Motion history must step back 9 simulation frames per sample");
@@ -2088,6 +2090,7 @@ void TestHudRenderSmoke() {
         sn.matchPhase = 0;
         sn.time60Hz = kWinStart + static_cast<float>(i);
         sn.matchTick = static_cast<uint32_t>(50000 + i);
+        sn.simFrame = sn.matchTick;
         sceneAt(sn.time60Hz, sn);
         VarState::ComputeClosestContact(sn);
         st.PushSnapshot(sn);
@@ -2243,6 +2246,7 @@ void TestHudRenderSmoke() {
             frame();
             frame();
             EXPECT_EQ(VarHudRenderer::CurrentPage(), HudPage::Configure, "Confirm must open the decision page");
+            for (int f = 0; f < 6; ++f) frame(); // page change settles like a resolution change
             std::snprintf(shotName, sizeof(shotName), "%s_%dx%d_1b_decisao", langTag, static_cast<int>(sz[0]), resTag);
             DumpDrawDataBmp(shotName, px, tw, th);
             InputManager::QueueKeyboardAction(NavAction::Back);
@@ -2748,6 +2752,12 @@ void TestHeapGuardAtomicSegmentRelease() {
         EXPECT_TRUE(!cache.Contains(0x1711D0000ULL, 0x60000), "Oldest entry is replaced when full");
         cache.Clear();
         EXPECT_EQ(cache.Count(), static_cast<size_t>(0), "Clear forgets every range");
+        cache.Add(0x500000ULL, 0x10000, 10000);
+        EXPECT_TRUE(cache.ContainsFresh(0x500000ULL, 0x10000, 11999), "Refusal holds within its time to live");
+        EXPECT_TRUE(!cache.ContainsFresh(0x500000ULL, 0x10000, 12000), "Refusal expires so the range is checked again");
+        cache.Add(0x500000ULL, 0x10000, 12000);
+        EXPECT_TRUE(cache.ContainsFresh(0x500000ULL, 0x10000, 13000) && cache.Count() == 1, "Refused again: refreshed, not duplicated");
+        cache.Clear();
         cache.Add(0x100000ULL, 0x10000);
         cache.Add(0x200000ULL, 0x10000);
         cache.Add(0x300000ULL, 0x10000);
@@ -2759,7 +2769,7 @@ void TestHeapGuardAtomicSegmentRelease() {
     }
     // A real refused range: second call comes from the cache, both refuse, counters move
     {
-        (void)HeapGuard::TakeStats();
+        const HeapGuard::Stats before = HeapGuard::Totals();
         HeapGuard::ClearRefusedCache();
         void* blk = VirtualAlloc(nullptr, 0x20000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
         EXPECT_TRUE(blk != nullptr, "VirtualAlloc for the cache test");
@@ -2767,7 +2777,7 @@ void TestHeapGuardAtomicSegmentRelease() {
             // Asking for half of an allocation can never be released as a whole
             EXPECT_EQ(HeapGuard::ReleaseSegmentAtomic(blk, 0x10000), -1, "Partial allocation must be refused");
             EXPECT_EQ(HeapGuard::ReleaseSegmentAtomic(blk, 0x10000), -1, "Cached refusal must still refuse");
-            const HeapGuard::Stats st = HeapGuard::TakeStats();
+            const HeapGuard::Stats st = HeapGuard::Delta(HeapGuard::Totals(), before);
             EXPECT_TRUE(st.calls == 2 && st.refused == 1 && st.cacheHits == 1, "Second refusal must come from the cache");
             HeapGuard::ClearRefusedCache();
             EXPECT_EQ(HeapGuard::ReleaseSegmentAtomic(blk, 0x20000), 0, "Whole allocation must still be released");

@@ -244,7 +244,19 @@ private:
     bool     manualMarkerLock_      = false;
 public:
     bool IsMarkerManuallySelected() const { return manualMarkerLock_; }
+    // Plays the user opened this match (click on the bar, arrows, [ ]): the suspect stops pulsing once opened
+    bool WasPlayOpened(const ReplayMarker& m) const {
+        for (int i = 0; i < openedCount_; ++i) {
+            if (openedPhase_[i] == m.matchPhase && std::fabs(openedTime_[i] - m.time60Hz) < 1.0f) return true;
+        }
+        return false;
+    }
 private:
+    static constexpr int kOpenedPlays = 16;
+    int32_t openedPhase_[kOpenedPlays] = {};
+    float   openedTime_[kOpenedPlays] = {};
+    int     openedCount_ = 0;
+    int     openedNext_ = 0;
     bool     restoreMarkerAfterLive_ = false; // context was switched to the stopped-for foul
     bool     detectedOffenderUnknown_ = false; // roles inverted with no known opponent: offender to be picked
     float    lastTrackedCursorTime_ = -1000.0f;

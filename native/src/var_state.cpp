@@ -605,7 +605,7 @@ void VarState::PushSnapshot(const PlaySnapshot& snap) {
         snapKeys_.resize(kMaxSnapshots);
     }
     snapshots_[snapHead_] = snap;
-    snapKeys_[snapHead_] = SnapKey{ snap.matchPhase, snap.time60Hz, snap.matchTick };
+    snapKeys_[snapHead_] = SnapKey{ snap.matchPhase, snap.time60Hz, snap.simFrame };
     snapHead_ = (snapHead_ + 1) % kMaxSnapshots;
     if (snapCount_ < kMaxSnapshots) {
         ++snapCount_;
@@ -961,7 +961,7 @@ void VarState::SampleMotionHistory(int32_t phase, float time60Hz, MotionSample (
         const PlaySnapshot& sn = snapshots_[idx];
         MotionSample& m = out[k];
         m.valid = true;
-        m.matchTick = key.tick;
+        m.simFrame = key.tick;
         m.ball = sn.ballPos;
         for (int s = 0; s < 22; ++s) {
             m.pos[s] = sn.playerPos[s];

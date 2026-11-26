@@ -96,8 +96,9 @@ uint64_t QpcFrequency() {
 int ReleaseSegmentAtomicCore(void* ptr, size_t size) {
     if (size == 0) return 0; // native: nothing to do, success
     const uintptr_t base = reinterpret_cast<uintptr_t>(ptr);
+    const uint64_t nowMs = GetTickCount64();
     AcquireSRWLockShared(&g_cacheLock);
-    const bool known = g_refusedCache.Contains(base, size);
+    const bool known = g_refusedCache.ContainsFresh(base, size, nowMs);
     ReleaseSRWLockShared(&g_cacheLock);
     if (known) {
         g_statCacheHits.fetch_add(1, std::memory_order_relaxed);
@@ -106,7 +107,7 @@ int ReleaseSegmentAtomicCore(void* ptr, size_t size) {
     const HeapSegmentPlan plan = PlanHeapSegmentRelease(base, size, &QueryLive, nullptr);
     if (!plan.ok) {
         AcquireSRWLockExclusive(&g_cacheLock);
-        g_refusedCache.Add(base, size);
+        g_refusedCache.Add(base, size, nowMs);
         ReleaseSRWLockExclusive(&g_cacheLock);
         g_statRefused.fetch_add(1, std::memory_order_relaxed);
         const uint64_t n = g_refused.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -214,10 +215,20 @@ bool RefusedRangeCache::Contains(uintptr_t base, size_t size) const {
     return false;
 }
 
-void RefusedRangeCache::Add(uintptr_t base, size_t size) {
-    if (Contains(base, size)) return;
+bool RefusedRangeCache::ContainsFresh(uintptr_t base, size_t size, uint64_t nowMs) const {
+    for (size_t i = 0; i < count_; ++i) {
+        if (base_[i] == base && size_[i] == size) return nowMs - addedMs_[i] < kRefusalTtlMs;
+    }
+    return false;
+}
+
+void RefusedRangeCache::Add(uintptr_t base, size_t size, uint64_t nowMs) {
+    for (size_t i = 0; i < count_; ++i) {
+        if (base_[i] == base && size_[i] == size) { addedMs_[i] = nowMs; return; } // refused again: refresh
+    }
     base_[next_] = base;
     size_[next_] = size;
+    addedMs_[next_] = nowMs;
     next_ = (next_ + 1) % kCapacity;
     if (count_ < kCapacity) ++count_;
 }
@@ -226,6 +237,7 @@ void RefusedRangeCache::RemoveOverlapping(uintptr_t base, size_t size) {
     size_t w = 0;
     uintptr_t keptBase[kCapacity];
     size_t keptSize[kCapacity];
+    uint64_t keptMs[kCapacity];
     // Keep insertion order (oldest first) so replacement stays FIFO
     for (size_t n = 0; n < count_; ++n) {
         const size_t i = (count_ < kCapacity) ? n : (next_ + n) % kCapacity;
@@ -233,12 +245,14 @@ void RefusedRangeCache::RemoveOverlapping(uintptr_t base, size_t size) {
         if (!overlaps) {
             keptBase[w] = base_[i];
             keptSize[w] = size_[i];
+            keptMs[w] = addedMs_[i];
             ++w;
         }
     }
     for (size_t i = 0; i < w; ++i) {
         base_[i] = keptBase[i];
         size_[i] = keptSize[i];
+        addedMs_[i] = keptMs[i];
     }
     count_ = w;
     next_ = w % kCapacity;
@@ -249,15 +263,24 @@ void RefusedRangeCache::Clear() {
     next_ = 0;
 }
 
-uint64_t PendingCalls() { return g_statCalls.load(std::memory_order_relaxed); }
-
-Stats TakeStats() {
+Stats Totals() {
     Stats s{};
-    s.calls = g_statCalls.exchange(0, std::memory_order_relaxed);
-    s.released = g_statReleased.exchange(0, std::memory_order_relaxed);
-    s.refused = g_statRefused.exchange(0, std::memory_order_relaxed);
-    s.cacheHits = g_statCacheHits.exchange(0, std::memory_order_relaxed);
-    s.microseconds = g_statTicks.exchange(0, std::memory_order_relaxed) * 1000000ULL / QpcFrequency();
+    s.calls = g_statCalls.load(std::memory_order_relaxed);
+    s.released = g_statReleased.load(std::memory_order_relaxed);
+    s.refused = g_statRefused.load(std::memory_order_relaxed);
+    s.cacheHits = g_statCacheHits.load(std::memory_order_relaxed);
+    s.microseconds = g_statTicks.load(std::memory_order_relaxed) * 1000000ULL / QpcFrequency();
+    return s;
+}
+
+Stats Delta(const Stats& now, const Stats& before) {
+    auto d = [](uint64_t a, uint64_t b) { return a >= b ? a - b : 0ULL; };
+    Stats s{};
+    s.calls = d(now.calls, before.calls);
+    s.released = d(now.released, before.released);
+    s.refused = d(now.refused, before.refused);
+    s.cacheHits = d(now.cacheHits, before.cacheHits);
+    s.microseconds = d(now.microseconds, before.microseconds);
     return s;
 }
 

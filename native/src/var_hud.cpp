@@ -548,6 +548,12 @@ void VarHudController::SelectReplayMarker(int markerIndex, VarState& state, bool
 
     const auto& m = replayMarkers_[markerIndex];
     ApplySelectedMarkerToContext(m);
+    if (!WasPlayOpened(m)) {
+        openedPhase_[openedNext_] = m.matchPhase;
+        openedTime_[openedNext_] = m.time60Hz;
+        openedNext_ = (openedNext_ + 1) % kOpenedPlays;
+        if (openedCount_ < kOpenedPlays) ++openedCount_;
+    }
 
     if (triggerSeek) {
         state.RequestReplaySeekToTime(m.matchPhase, m.time60Hz, m.timelineNorm, true);

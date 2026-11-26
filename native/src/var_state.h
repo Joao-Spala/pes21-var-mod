@@ -198,6 +198,9 @@ struct PlaySnapshot {
     int32_t  matchPhase          = 0;
     float    time60Hz            = 0.0f;
     uint32_t matchTick           = 0;
+    // The mod's own simulation tick counter (MainTick calls): 60 per real second, one replay frame each
+    // (user log: "600 frames recorded in 600 sim ticks" over 10.5 s). Neighbours, trails and speeds use it.
+    uint32_t simFrame            = 0;
     Vec3     ballPos{};
     Vec3     playerPos[22]{};
     uint8_t  playerOnPitch[22]{};
@@ -444,7 +447,7 @@ struct ReplayControlCommand {
 // Positions some time before the replay cursor, for the tactical pitch trails and heading arrows
 struct MotionSample {
     bool    valid = false;
-    uint32_t matchTick = 0;
+    uint32_t simFrame = 0;
     Vec3    ball{};
     Vec3    pos[22]{};
     uint8_t onPitch[22]{};
@@ -575,8 +578,9 @@ struct HudRenderSnapshot {
 class VarState {
 public:
     static constexpr size_t kMaxEvents    = 128;
-    // One snapshot per simulation frame (60 Hz, the replay's own frame rate): 90 s, about 2.6 MB
-    static constexpr size_t kMaxSnapshots = 5400;
+    // One snapshot per simulation frame of play (60 Hz, the replay's own frame rate). The engine replay keeps
+    // about 11 s (659 frames in a user log), so 30 s covers every window it can show with margin: about 0.87 MB.
+    static constexpr size_t kMaxSnapshots = 1800;
     static constexpr size_t kMaxIncidents = 160; // Clustered physical incidents
 
     static VarState& Instance();
@@ -763,8 +767,8 @@ private:
     static constexpr float kMaxInterpolationStepSq  = 9.0f;
     void InterpolateSnapshotLocked(size_t idx, size_t age, float cursorTime60Hz, PlaySnapshot& out) const;
     // time60Hz is the match clock, which runs faster than real time with shorter match lengths (2.3 ticks per
-    // simulation frame measured in a user log). Neighbours, gaps and speeds use matchTick, the 60 Hz simulation
-    // frame counter (MatchInfo + 0x1198), so they hold for any match length.
+    // simulation frame measured in a user log). Neighbours, gaps and speeds use simFrame (PlaySnapshot), the
+    // mod's own simulation tick counter, so they hold for any match length.
     struct SnapKey { int32_t phase; float time60Hz; uint32_t tick; };
     std::vector<SnapKey> snapKeys_;
     size_t snapHead_ = 0;

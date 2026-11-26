@@ -145,7 +145,10 @@ __declspec(dllexport) void __cdecl var_set_sider_overlay_open(int isOpen) {
 // One line per period with what the mod cost the game: heap release replacement and present hook.
 // Lets a slow loading be attributed (or not) to the mod from the user's log alone.
 static void LogPerfPeriod(const char* period) {
-    const var_mod::HeapGuard::Stats hs = var_mod::HeapGuard::TakeStats();
+    static var_mod::HeapGuard::Stats s_prev{};
+    const var_mod::HeapGuard::Stats now = var_mod::HeapGuard::Totals();
+    const var_mod::HeapGuard::Stats hs = var_mod::HeapGuard::Delta(now, s_prev);
+    s_prev = now;
     const var_mod::Dx11Hook::PresentStats ps = var_mod::Dx11Hook::TakePresentStats();
     VAR_LOG_INF("Perf %s: heap release %llu call(s) (%llu released, %llu refused, %llu refused from cache) in %llu us, "
                 "present hook %llu frame(s) in %llu us (max %llu us)",

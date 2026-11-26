@@ -213,9 +213,17 @@ float TextFit(ImDrawList* dl, Txt t, ImVec2 p, float maxW, ImU32 col, const char
     return w + ellW;
 }
 
+// Below this size the extra letter spacing is under a pixel and per-glyph pixel snapping makes the gaps uneven
+// ("INFRA TOR"): small captions are drawn as one run with the font's own spacing instead
+constexpr float kMinTrackedFontPx = 11.0f;
+
 // Uppercase caption with letter spacing (broadcast style). draw=false only measures.
 float Tracked(ImDrawList* dl, ImVec2 p, ImU32 col, const char* s, bool draw = true, Txt t = Txt::Caption) {
     const Face fc = FaceOf(t);
+    if (fc.size < kMinTrackedFontPx) {
+        if (draw && *s) dl->AddText(fc.font, fc.size, Snap(p), col, s);
+        return *s ? fc.font->CalcTextSizeA(fc.size, FLT_MAX, 0.0f, s).x : 0.0f;
+    }
     const float track = Uf(0.9f);
     float x = p.x;
     bool any = false;
@@ -235,6 +243,7 @@ float TrackedW(const char* s) { return Tracked(nullptr, ImVec2(0, 0), 0, s, fals
 float TrackedFit(ImDrawList* dl, ImVec2 p, ImU32 col, const char* s, float maxW, Txt t = Txt::Caption) {
     if (Tracked(nullptr, p, col, s, false, t) <= maxW) return Tracked(dl, p, col, s, true, t);
     const Face fc = FaceOf(t);
+    if (fc.size < kMinTrackedFontPx) return TextFit(dl, t, p, maxW, col, s); // one run, font spacing
     const float track = Uf(0.9f);
     static const char* kEll = "\xE2\x80\xA6";
     const float ellW = fc.font->CalcTextSizeA(fc.size, FLT_MAX, 0.0f, kEll).x;
@@ -625,10 +634,10 @@ void PitchToken(ImDrawList* dl, ImFont* numFont, ImVec2 c, float r, const TeamDi
         ring = (ColorHelpers::RelativeLuma(fill) > 140.0f) ? RgbColor{ 18, 24, 32 } : RgbColor{ 245, 248, 252 };
     }
     const float edge = std::max(1.0f, r * 0.16f);
-    dl->AddCircleFilled(ImVec2(c.x, c.y + std::max(1.0f, r * 0.14f)), r + edge + 1.0f, WithAlpha(IM_COL32(0, 0, 0, 120), alpha), 24);
-    dl->AddCircleFilled(c, r + edge + 0.8f, WithAlpha(IM_COL32(6, 10, 14, 235), alpha), 24);
-    dl->AddCircleFilled(c, r + edge, WithAlpha(RgbToImU32(ring), alpha), 24);
-    dl->AddCircleFilled(c, r, WithAlpha(RgbToImU32(fill), alpha), 24);
+    dl->AddCircleFilled(ImVec2(c.x, c.y + std::max(1.0f, r * 0.14f)), r + edge + 1.0f, WithAlpha(IM_COL32(0, 0, 0, 120), alpha), 0);
+    dl->AddCircleFilled(c, r + edge + 0.8f, WithAlpha(IM_COL32(6, 10, 14, 235), alpha), 0);
+    dl->AddCircleFilled(c, r + edge, WithAlpha(RgbToImU32(ring), alpha), 0);
+    dl->AddCircleFilled(c, r, WithAlpha(RgbToImU32(fill), alpha), 0);
     if (number == 0 || !numFont || r < 4.5f) return;
     char nb[8];
     std::snprintf(nb, sizeof(nb), "%u", static_cast<unsigned>(number));
@@ -639,6 +648,26 @@ void PitchToken(ImDrawList* dl, ImFont* numFont, ImVec2 c, float r, const TeamDi
     const ImU32 halo = WithAlpha((txt == IM_COL32(14, 20, 30, 255)) ? IM_COL32(255, 255, 255, 110) : IM_COL32(0, 0, 0, 150), alpha);
     dl->AddText(numFont, size, ImVec2(tp.x + 1.0f, tp.y + 1.0f), halo, nb);
     dl->AddText(numFont, size, tp, WithAlpha(txt, alpha), nb);
+}
+
+// Paints the area between a rectangle's square corners and its rounded corners with the colour behind the card,
+// so content drawn edge to edge (the pitch) follows the card radius
+void MaskOuterCorners(ImDrawList* dl, ImVec2 p, ImVec2 e, float radius, ImU32 bg) {
+    if (radius < 1.0f) return;
+    constexpr int kSeg = 8;
+    const ImVec2 corners[4] = { p, ImVec2(e.x, p.y), e, ImVec2(p.x, e.y) };
+    const ImVec2 centres[4] = { ImVec2(p.x + radius, p.y + radius), ImVec2(e.x - radius, p.y + radius),
+                                ImVec2(e.x - radius, e.y - radius), ImVec2(p.x + radius, e.y - radius) };
+    const float start[4] = { 3.14159265f, 1.5f * 3.14159265f, 0.0f, 0.5f * 3.14159265f };
+    for (int c = 0; c < 4; ++c) {
+        ImVec2 prev(centres[c].x + std::cos(start[c]) * radius, centres[c].y + std::sin(start[c]) * radius);
+        for (int i = 1; i <= kSeg; ++i) {
+            const float a = start[c] + 0.5f * 3.14159265f * static_cast<float>(i) / kSeg;
+            const ImVec2 cur(centres[c].x + std::cos(a) * radius, centres[c].y + std::sin(a) * radius);
+            dl->AddTriangleFilled(corners[c], prev, cur, bg);
+            prev = cur;
+        }
+    }
 }
 
 void PlayerChip(ImDrawList* dl, ImVec2 c, float r, const TeamDisplayInfo& t) {
@@ -913,18 +942,11 @@ void RenderTimeline(ImDrawList* dl, float contentW, VarState& state) {
 
     // The suspect pulses (two sonar rings) until the user opens it once in this replay window. Afterwards it
     // keeps a quiet gold ring, so it stays findable without competing with the selection.
-    static int32_t s_seenPhase = -999;
-    static float s_seenTime = -1e9f;
     int suspectIdx = -1;
     for (int i = 0; i < total; ++i) {
         if (markers[i].topSuspect) { suspectIdx = i; break; }
     }
-    const bool suspectSeen = suspectIdx >= 0 && markers[suspectIdx].matchPhase == s_seenPhase &&
-                             std::fabs(markers[suspectIdx].time60Hz - s_seenTime) < 1.0f;
-    if (suspectIdx >= 0 && suspectIdx == selIdx && g_controller.IsMarkerManuallySelected() && !suspectSeen) {
-        s_seenPhase = markers[suspectIdx].matchPhase;
-        s_seenTime = markers[suspectIdx].time60Hz;
-    }
+    const bool suspectSeen = suspectIdx >= 0 && g_controller.WasPlayOpened(markers[suspectIdx]);
 
     for (int i = 0; i < total; ++i) {
         const auto& m = markers[i];
@@ -936,7 +958,7 @@ void RenderTimeline(ImDrawList* dl, float contentW, VarState& state) {
                 const float t = static_cast<float>(ImGui::GetTime());
                 for (int k = 0; k < 2; ++k) {
                     const float ph = std::fmod(t / 1.6f + 0.5f * static_cast<float>(k), 1.0f);
-                    const float rr = r + Uf(2.0f) + ph * Uf(11.0f);
+                    const float rr = std::min(r + Uf(2.0f) + ph * Uf(11.0f), h * 0.5f - 1.0f);
                     const int a = static_cast<int>(200.0f * (1.0f - ph) * (1.0f - ph));
                     dl->AddCircle(ImVec2(mx, cy), rr, (C::Suspect & 0x00FFFFFFu) | (static_cast<ImU32>(a) << 24), 24,
                                   std::max(1.2f, Uf(1.6f)));
@@ -1217,13 +1239,31 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     }
 
     const Vec3 ball = sync.hasSnapshot ? sync.snapshot.ballPos : tel.liveBallPos;
+    const ImVec2 bp = toScreen(ball.x, ball.z);
+    const float br = vp.isZoomed ? Uf(4.6f) : Uf(3.8f);
     if (sync.hasSnapshot) {
-        ImFont* numFont = F.title ? F.title : (F.strong ? F.strong : ImGui::GetFont());
         const PlaySnapshot& sn = sync.snapshot;
         const bool focusPlay = IsValidSlot(activeOff) || IsValidSlot(activeVic);
         const float rBase = vp.isZoomed ? Uf(8.2f) : Uf(5.8f);
         const float rHero = vp.isZoomed ? Uf(9.6f) : Uf(7.0f);
         auto isHero = [&](int s) { return s == activeOff || s == activeVic; };
+        // Shirt numbers come from the baked font closest in size above the target, so they are never blurred by a
+        // strong downscale at small UI scales
+        auto numberFont = [&](float r) -> ImFont* {
+            const float want = r * 1.3f;
+            ImFont* cands[3] = { F.caption, F.strong, F.title };
+            ImFont* best = nullptr;
+            for (ImFont* f : cands) {
+                if (!f) continue;
+                if (f->FontSize >= want * 0.95f && (!best || f->FontSize < best->FontSize)) best = f;
+            }
+            if (!best) {
+                for (ImFont* f : cands) if (f && (!best || f->FontSize > best->FontSize)) best = f;
+            }
+            return best ? best : ImGui::GetFont();
+        };
+        ImFont* numFontBase = numberFont(rBase);
+        ImFont* numFontHero = numberFont(rHero);
         auto teamTint = [&](int s, float a) {
             const RgbColor pc = teams[SlotToTeam(s)].primaryColor;
             // Lightened kit colour so trails and arrows read on the dark grass (dark kits more)
@@ -1233,14 +1273,34 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                             static_cast<int>(pc.b + (255 - pc.b) * k), static_cast<int>(255.0f * a));
         };
 
-        // 1. Trails (1.5 s) of the ball and of the two players of the play
+        // Screen position of every token. In a contact the two players of the play are often closer than two
+        // tokens: they are spread apart on screen around their midpoint (never in the pitch data)
+        const bool bothOn = IsValidSlot(activeOff) && IsValidSlot(activeVic) && sn.playerOnPitch[activeOff] && sn.playerOnPitch[activeVic];
+        ImVec2 tokenPos[22];
+        for (int s = 0; s < 22; ++s) tokenPos[s] = toScreen(sn.playerPos[s].x, sn.playerPos[s].z);
+        if (bothOn) {
+            ImVec2& a = tokenPos[activeOff];
+            ImVec2& b = tokenPos[activeVic];
+            const float minD = 2.0f * rHero + Uf(10.0f);
+            float dx = b.x - a.x, dy = b.y - a.y;
+            float dd = std::sqrt(dx * dx + dy * dy);
+            if (dd < minD) {
+                if (dd < 0.5f) { dx = 1.0f; dy = 0.0f; dd = 1.0f; } // same spot: side by side
+                const ImVec2 mid((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+                const float h = minD * 0.5f;
+                a = ImVec2(mid.x - dx / dd * h, mid.y - dy / dd * h);
+                b = ImVec2(mid.x + dx / dd * h, mid.y + dy / dd * h);
+            }
+        }
+
+        // 1. Trails (1.5 s): the two players of the play (solid, kit colour) and the ball (dotted white, so a
+        // white kit's trail never reads as the ball's)
         auto trail = [&](int s, ImU32 col, float width) {
-            ImVec2 prev = toScreen(s >= 0 ? sn.playerPos[s].x : ball.x, s >= 0 ? sn.playerPos[s].z : ball.z);
+            ImVec2 prev = tokenPos[s];
             for (int k = 0; k < VarState::kMotionSamples; ++k) {
                 const MotionSample& m = s_motion[k];
-                if (!m.valid || (s >= 0 && !m.onPitch[s])) break;
-                const Vec3& w = (s >= 0) ? m.pos[s] : m.ball;
-                const ImVec2 p = toScreen(w.x, w.z);
+                if (!m.valid || !m.onPitch[s]) break;
+                const ImVec2 p = toScreen(m.pos[s].x, m.pos[s].z);
                 const float fade = 1.0f - static_cast<float>(k) / static_cast<float>(VarState::kMotionSamples);
                 dl->AddLine(prev, p, WithAlpha(col, 0.85f * fade), std::max(1.0f, width * (0.45f + 0.55f * fade)));
                 prev = p;
@@ -1248,21 +1308,29 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
         };
         if (IsValidSlot(activeVic) && sn.playerOnPitch[activeVic]) trail(activeVic, teamTint(activeVic, 1.0f), Uf(3.6f));
         if (IsValidSlot(activeOff) && sn.playerOnPitch[activeOff]) trail(activeOff, teamTint(activeOff, 1.0f), Uf(3.6f));
-        trail(-1, IM_COL32(255, 255, 255, 240), Uf(2.2f));
+        for (int k = 0; k < VarState::kMotionSamples; ++k) {
+            const MotionSample& m = s_motion[k];
+            if (!m.valid) break;
+            const float fade = 1.0f - static_cast<float>(k) / static_cast<float>(VarState::kMotionSamples);
+            dl->AddCircleFilled(toScreen(m.ball.x, m.ball.z), std::max(1.0f, Uf(1.8f) * (0.5f + 0.5f * fade)),
+                                IM_COL32(255, 255, 255, static_cast<int>(230.0f * fade)), 0);
+        }
 
-        // 2. Heading of every player: direction and speed over the last 0.3 s
+        // 2. Heading (direction and speed over the last 0.3 s) where it tells the story: the two players of the
+        // play, the ball carrier and anyone within 20 m of the ball. Everyone else stays quiet.
         constexpr int kHeadingSample = 1; // out[1] = 0.30 s earlier (real time)
         const MotionSample& past = s_motion[kHeadingSample];
         auto heading = [&](int s, float r, float a) {
-            if (!past.valid || !past.onPitch[s] || sn.matchTick <= past.matchTick) return;
+            if (!past.valid || !past.onPitch[s] || sn.simFrame <= past.simFrame) return;
             const float dx = sn.playerPos[s].x - past.pos[s].x;
             const float dz = sn.playerPos[s].z - past.pos[s].z;
             const float dist = std::sqrt(dx * dx + dz * dz);
-            const float speed = dist / (static_cast<float>(sn.matchTick - past.matchTick) / 60.0f); // m/s, real time
+            const float speed = dist / (static_cast<float>(sn.simFrame - past.simFrame) / 60.0f); // m/s, real time
             if (speed < 1.5f || speed > 14.0f) return; // standing, or a teleport
-            const ImVec2 c = toScreen(sn.playerPos[s].x, sn.playerPos[s].z);
+            const ImVec2 c = tokenPos[s];
+            const ImVec2 o = toScreen(sn.playerPos[s].x, sn.playerPos[s].z);
             const ImVec2 f = toScreen(sn.playerPos[s].x + dx / dist, sn.playerPos[s].z + dz / dist);
-            ImVec2 dir(f.x - c.x, f.y - c.y);
+            ImVec2 dir(f.x - o.x, f.y - o.y);
             const float dl2 = std::sqrt(dir.x * dir.x + dir.y * dir.y);
             if (dl2 < 1e-3f) return;
             dir = ImVec2(dir.x / dl2, dir.y / dl2);
@@ -1277,77 +1345,100 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                                   ImVec2(p1.x + nrm.x * hs * 0.75f, p1.y + nrm.y * hs * 0.75f),
                                   ImVec2(p1.x - nrm.x * hs * 0.75f, p1.y - nrm.y * hs * 0.75f), col);
         };
+        auto nearBall = [&](int s) {
+            const float dx = sn.playerPos[s].x - ball.x, dz = sn.playerPos[s].z - ball.z;
+            return dx * dx + dz * dz < 20.0f * 20.0f;
+        };
 
         // 3. Everyone else: slightly dimmed while a play is in focus, so the eye goes to the contact
         const float dim = focusPlay ? 0.72f : 1.0f;
         for (int s = 0; s < 22; ++s) {
             if (!sn.playerOnPitch[s] || isHero(s)) continue;
-            const ImVec2 pp = toScreen(sn.playerPos[s].x, sn.playerPos[s].z);
-            heading(s, rBase, 0.8f * dim);
-            PitchToken(dl, numFont, pp, rBase, teams[SlotToTeam(s)], players[s].shirtNumber, dim);
-            if (s == sn.ballOwnerSlot) dl->AddCircle(pp, rBase + Uf(4.0f), IM_COL32(255, 255, 255, 200), 24, std::max(1.0f, Uf(1.3f)));
+            if (s == sn.ballOwnerSlot || nearBall(s)) heading(s, rBase, 0.8f * dim);
+            PitchToken(dl, numFontBase, tokenPos[s], rBase, teams[SlotToTeam(s)], players[s].shirtNumber, dim);
+            if (s == sn.ballOwnerSlot) dl->AddCircle(tokenPos[s], rBase + Uf(4.0f), IM_COL32(255, 255, 255, 200), 0, std::max(1.0f, Uf(1.3f)));
         }
 
-        // 4. The play: contact link, the two players with a halo and a role tag. In a contact the two are often
-        // closer than two tokens: they are spread apart on screen around their midpoint (never on the pitch data)
-        const bool bothOn = IsValidSlot(activeOff) && IsValidSlot(activeVic) && sn.playerOnPitch[activeOff] && sn.playerOnPitch[activeVic];
-        ImVec2 heroPos[22];
-        for (int s = 0; s < 22; ++s) heroPos[s] = toScreen(sn.playerPos[s].x, sn.playerPos[s].z);
+        // 4. The play: contact link and the two players with a halo
         if (bothOn) {
-            ImVec2& a = heroPos[activeOff];
-            ImVec2& b = heroPos[activeVic];
-            const float minD = 2.0f * rHero + Uf(10.0f);
-            float dx = b.x - a.x, dy = b.y - a.y;
-            float dd = std::sqrt(dx * dx + dy * dy);
-            if (dd < minD) {
-                if (dd < 0.5f) { dx = 1.0f; dy = 0.0f; dd = 1.0f; } // same spot: side by side
-                const ImVec2 mid((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
-                const float h = minD * 0.5f;
-                a = ImVec2(mid.x - dx / dd * h, mid.y - dy / dd * h);
-                b = ImVec2(mid.x + dx / dd * h, mid.y + dy / dd * h);
-            }
-            DrawDashedLine(dl, a, b, IM_COL32(255, 255, 255, 200), std::max(1.2f, Uf(1.6f)), U(4), U(3));
+            DrawDashedLine(dl, tokenPos[activeOff], tokenPos[activeVic], IM_COL32(255, 255, 255, 200), std::max(1.2f, Uf(1.6f)), U(4), U(3));
         }
         auto hero = [&](int32_t slot, ImU32 ring) {
             if (!IsValidSlot(slot) || !sn.playerOnPitch[slot]) return;
-            const ImVec2 pp = heroPos[slot];
+            const ImVec2 pp = tokenPos[slot];
             heading(slot, rHero, 0.95f);
-            dl->AddCircleFilled(pp, rHero + Uf(6.0f), WithAlpha(ring, 0.20f), 28);
-            dl->AddCircle(pp, rHero + Uf(4.2f), ring, 28, std::max(1.6f, Uf(2.2f)));
-            PitchToken(dl, numFont, pp, rHero, teams[SlotToTeam(slot)], players[slot].shirtNumber, 1.0f);
+            dl->AddCircleFilled(pp, rHero + Uf(6.0f), WithAlpha(ring, 0.20f), 0);
+            dl->AddCircle(pp, rHero + Uf(4.2f), ring, 0, std::max(1.6f, Uf(2.2f)));
+            PitchToken(dl, numFontHero, pp, rHero, teams[SlotToTeam(slot)], players[slot].shirtNumber, 1.0f);
         };
         hero(activeVic, C::Accent);
         hero(activeOff, C::Red);
 
-        // Role tags: offender above, victim below when they are close (never on top of each other)
-        auto tag = [&](int32_t slot, const char* text, ImU32 col, bool below) {
-            if (!IsValidSlot(slot) || !sn.playerOnPitch[slot]) return;
-            const ImVec2 pp = heroPos[slot];
-            const float tw = TrackedW(text) + U(10);
-            const float th = LineH(Txt::Caption) + U(4);
-            const float gap = rHero + Uf(7.0f);
-            float x = std::clamp(pp.x - tw * 0.5f, pos.x + U(4), end.x - U(4) - tw);
-            float y = below ? pp.y + gap : pp.y - gap - th;
-            if (y < pos.y + U(4)) y = pp.y + gap;                // no room above: go below
-            if (y + th > end.y - U(4)) y = pp.y - gap - th;      // no room below: go above
-            dl->AddRectFilled(ImVec2(x, y), ImVec2(x + tw, y + th), IM_COL32(8, 12, 18, 225), U(kRadChip));
-            EdgeAccent(dl, ImVec2(x, y), ImVec2(x + tw, y + th), col, U(kRadChip), U(3));
-            Tracked(dl, ImVec2(x + U(6), y + U(2)), C::Text, text);
-        };
+        // 5. Ball: soft glow, white body, dark rim
+        dl->AddCircleFilled(bp, br + Uf(4.0f), IM_COL32(255, 255, 255, 40), 0);
+        dl->AddCircleFilled(bp, br, IM_COL32(255, 255, 255, 255), 0);
+        dl->AddCircle(bp, br, IM_COL32(10, 14, 20, 235), 0, std::max(1.0f, Uf(1.3f)));
+
+        // 6. Role tags last, placed where they cover the fewest tokens, the ball and each other. A player outside
+        // the visible part of the pitch gets no tag (it would point at nothing).
         if (vp.isZoomed || bothOn) {
-            const bool vicBelow = !IsValidSlot(activeOff) || !bothOn ||
-                                  sn.playerPos[activeVic].z >= sn.playerPos[activeOff].z;
+            ImVec2 placedMin(0, 0), placedMax(0, 0);
+            bool placed = false;
+            auto overlap = [](ImVec2 a0, ImVec2 a1, ImVec2 b0, ImVec2 b1) {
+                const float w = std::min(a1.x, b1.x) - std::max(a0.x, b0.x);
+                const float h = std::min(a1.y, b1.y) - std::max(a0.y, b0.y);
+                return (w > 0.0f && h > 0.0f) ? w * h : 0.0f;
+            };
+            auto tag = [&](int32_t slot, const char* text, ImU32 col, bool preferBelow) {
+                if (!IsValidSlot(slot) || !sn.playerOnPitch[slot]) return;
+                const ImVec2 pp = tokenPos[slot];
+                if (pp.x < pos.x || pp.x > end.x || pp.y < pos.y || pp.y > end.y) return;
+                const float tw = TrackedW(text) + U(10);
+                const float th = LineH(Txt::Caption) + U(4);
+                const float gap = rHero + Uf(7.0f);
+                const ImVec2 cands[4] = {
+                    ImVec2(pp.x - tw * 0.5f, preferBelow ? pp.y + gap : pp.y - gap - th),
+                    ImVec2(pp.x - tw * 0.5f, preferBelow ? pp.y - gap - th : pp.y + gap),
+                    ImVec2(pp.x + gap, pp.y - th * 0.5f),
+                    ImVec2(pp.x - gap - tw, pp.y - th * 0.5f),
+                };
+                float bestCost = 1e30f;
+                ImVec2 best = cands[0];
+                for (int ci = 0; ci < 4; ++ci) {
+                    ImVec2 a = cands[ci];
+                    float cost = static_cast<float>(ci) * 4.0f; // keep the preferred order when costs tie
+                    const float cx = std::clamp(a.x, pos.x + U(4), end.x - U(4) - tw);
+                    const float cy = std::clamp(a.y, pos.y + U(4), end.y - U(4) - th);
+                    cost += (std::fabs(cx - a.x) + std::fabs(cy - a.y)) * 40.0f; // had to be pushed inside
+                    a = ImVec2(cx, cy);
+                    const ImVec2 b(a.x + tw, a.y + th);
+                    for (int s = 0; s < 22; ++s) {
+                        if (!sn.playerOnPitch[s]) continue;
+                        const float rr = (isHero(s) ? rHero + Uf(4.2f) : rBase + Uf(1.5f));
+                        cost += overlap(a, b, ImVec2(tokenPos[s].x - rr, tokenPos[s].y - rr), ImVec2(tokenPos[s].x + rr, tokenPos[s].y + rr)) * (isHero(s) ? 6.0f : 1.0f);
+                    }
+                    cost += overlap(a, b, ImVec2(bp.x - br, bp.y - br), ImVec2(bp.x + br, bp.y + br)) * 6.0f;
+                    if (placed) cost += overlap(a, b, placedMin, placedMax) * 20.0f;
+                    if (cost < bestCost) { bestCost = cost; best = a; }
+                }
+                const ImVec2 bEnd(best.x + tw, best.y + th);
+                dl->AddRectFilled(best, bEnd, IM_COL32(8, 12, 18, 225), U(kRadChip));
+                EdgeAccent(dl, best, bEnd, col, U(kRadChip), U(3));
+                Tracked(dl, ImVec2(best.x + U(6), best.y + U(2)), C::Text, text);
+                placedMin = best;
+                placedMax = bEnd;
+                placed = true;
+            };
+            const bool vicBelow = !bothOn || sn.playerPos[activeVic].z >= sn.playerPos[activeOff].z;
             tag(activeOff, Tr("INFRATOR"), C::Red, !vicBelow);
             tag(activeVic, Tr("VÍTIMA"), C::Accent, vicBelow);
         }
+    } else {
+        // No recorded frame for this moment: the live ball only
+        dl->AddCircleFilled(bp, br + Uf(4.0f), IM_COL32(255, 255, 255, 40), 0);
+        dl->AddCircleFilled(bp, br, IM_COL32(255, 255, 255, 255), 0);
+        dl->AddCircle(bp, br, IM_COL32(10, 14, 20, 235), 0, std::max(1.0f, Uf(1.3f)));
     }
-
-    // Ball last: soft glow, white body, dark rim
-    const ImVec2 bp = toScreen(ball.x, ball.z);
-    const float br = vp.isZoomed ? Uf(4.6f) : Uf(3.8f);
-    dl->AddCircleFilled(bp, br + Uf(4.0f), IM_COL32(255, 255, 255, 40), 20);
-    dl->AddCircleFilled(bp, br, IM_COL32(255, 255, 255, 255), 16);
-    dl->AddCircle(bp, br, IM_COL32(10, 14, 20, 235), 16, std::max(1.0f, Uf(1.3f)));
 
     // Team chips (which team defends each goal) on the full pitch
     if (!vp.isZoomed) {
@@ -1371,6 +1462,7 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     Tracked(dl, ImVec2(zoomP.x + U(8), zoomP.y + (zoomH - LineH(Txt::Caption)) * 0.5f), overZoom ? C::Text : C::Text2, zoomTxt);
 
     dl->PopClipRect();
+    MaskOuterCorners(dl, pos, end, U(kRadCard), C::PanelSolid);
     dl->AddRect(pos, end, radarHovered ? C::StrokeHi : C::Stroke, U(kRadCard), 0, 1.0f);
 }
 
@@ -2365,7 +2457,9 @@ bool VarHudRenderer::EnsureFonts(float viewportW, float viewportH) {
     else std::snprintf(winDir, sizeof(winDir), "C:\\Windows");
 
     static const ImWchar kRanges[] = { 0x0020, 0x024F, 0x2013, 0x2014, 0x2022, 0x2022, 0x2026, 0x2026, 0 };
-    auto load = [&](const char* file, float px) -> ImFont* {
+    // Legibility floor for small screens (720p, 4:3, 800x600): the UI scale keeps the panel's share of the screen,
+    // but text below these sizes stops being readable. Only small scales are affected.
+    auto load = [&](const char* file, float px, float minPx) -> ImFont* {
         char path[MAX_PATH * 3];
         std::snprintf(path, sizeof(path), "%s\\Fonts\\%s", winDir, file);
         wchar_t wpath[MAX_PATH * 2];
@@ -2375,15 +2469,15 @@ bool VarHudRenderer::EnsureFonts(float viewportW, float viewportH) {
         cfg.OversampleH = 2;
         cfg.OversampleV = 1;
         cfg.PixelSnapH = true;
-        return io.Fonts->AddFontFromFileTTF(path, std::floor(px * s + 0.5f), &cfg, kRanges);
+        return io.Fonts->AddFontFromFileTTF(path, std::floor(std::max(px * s, minPx) + 0.5f), &cfg, kRanges);
     };
-    F.body = load("segoeui.ttf", 16.5f);
-    F.strong = load("seguisb.ttf", 16.5f);
-    if (!F.strong) F.strong = load("segoeuib.ttf", 16.5f);
-    F.title = load("segoeuib.ttf", 20.0f);
-    F.sm = load("segoeui.ttf", 14.0f);
-    F.caption = load("seguisb.ttf", 12.5f);
-    if (!F.caption) F.caption = load("segoeuib.ttf", 12.5f);
+    F.body = load("segoeui.ttf", 16.5f, 11.5f);
+    F.strong = load("seguisb.ttf", 16.5f, 11.5f);
+    if (!F.strong) F.strong = load("segoeuib.ttf", 16.5f, 11.5f);
+    F.title = load("segoeuib.ttf", 20.0f, 13.0f);
+    F.sm = load("segoeui.ttf", 14.0f, 10.5f);
+    F.caption = load("seguisb.ttf", 12.5f, 9.5f);
+    if (!F.caption) F.caption = load("segoeuib.ttf", 12.5f, 9.5f);
     if (!F.body) {
         ImFontConfig cfg;
         cfg.SizePixels = std::floor(15.0f * s + 0.5f);
