@@ -35,6 +35,9 @@ struct Report {
     uint64_t    elapsedMs = 0;
     std::string missingOffsets; // comma separated
     std::string missingBodies;
+    // Optional group "GoalRecord." (goal annulment only): not part of ok, the feature checks it on its own
+    size_t      goalRecordOffsets = 0, goalRecordConfirmed = 0;
+    bool        goalRecordOk = false;
 };
 
 // Runs once per process (later calls return the cached report). Thread safe.

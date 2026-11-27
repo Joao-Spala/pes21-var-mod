@@ -137,6 +137,16 @@ static const EngineLayoutGuard kLayoutGuards[] = {
     { "PlayerEntry_DisplayName", 0x03FC117, "817C244000100000753548397C2438772E33D2" },
     { "PlayerEntry_DisplayName", 0x03FC139, "85C0741948035C2438482B7C243875A7" },
     { "PlayerEntry_BalAvatarFlag", 0x14C5D70, "40534883EC208B8144010000488BD9C1E81F" },
+    // Goal record (goal annulment only): optional group, names prefixed with "GoalRecord."
+    { "GoalRecord.kHistoryBytes", 0x06A80E6, "488B542430488B88D00000004881C160071800E8????????488B5C2438" },
+    { "GoalRecord.kHistoryBytes", 0x0A223B4, "4533C0498B55204881C160071800E8????????4C8D5C2470" },
+    { "GoalRecord.kHistoryBytes", 0x0A2D595, "4C8D6608498B14244881C160071800E8????????4C8B742448" },
+    { "GoalRecord.Stats_TeamStride", 0x08C7B73, "770E4863C24869C0509605004803C1C3" },
+    { "GoalRecord.Team_GoalsProtected", 0x08C99F8, "4833C8490FAFCA49398B30950500752A8B442448" },
+    // Goal record (goal annulment only): optional group, names prefixed with "GoalRecord."
+    { "GoalRecord.History_StatsRoot", 0x0414286, "48C7442420FEFFFFFF488BD94881C1D0500700E8????????90" },
+    { "GoalRecord.History_StatsRoot", 0x0A3DE6E, "41B804010000E8????????488D8BD0500700E8????????90" },
+    { "GoalRecord.History_StatsRoot", 0x0A3F019, "488D8FFC061800E8????????488D8FD0500700E8????????488D0D????????" },
 };
 
 static const EngineBodyGuard kBodyGuards[] = {

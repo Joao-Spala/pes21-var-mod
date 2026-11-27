@@ -442,6 +442,7 @@ void TestEngineGuards() {
         if (!r.missingOffsets.empty()) std::printf("[info]   missing offsets: %s\n", r.missingOffsets.c_str());
         if (!r.missingBodies.empty()) std::printf("[info]   missing bodies: %s\n", r.missingBodies.c_str());
         EXPECT_TRUE(r.ok, "studied build passes the engine check");
+        EXPECT_TRUE(r.goalRecordOk && r.goalRecordOffsets == 4, "goal record layout proven (goal annulment)");
         EXPECT_TRUE(r.referenceBuild == expectReference, "reference build recognized by its addresses");
         EXPECT_TRUE(r.offsets > 50 && r.bodies >= 12, "the check covers the structure offsets and the hooked functions");
         FreeLibrary(h);

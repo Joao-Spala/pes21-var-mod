@@ -3993,9 +3993,12 @@ bool MatchHooks::Install(bool quietOnMiss) {
         VAR_LOG_WRN("Cutscene map guard not installed");
     }
 
-    // Optional: without it a goal simply cannot be annulled (the option never shows)
-    const uintptr_t addrHistoryAdd = resolveUnique("RecordHistory::AddEvent", Aobs::RecordHistory_AddEvent,
-                                                   AobHints::RecordHistory_AddEvent);
+    // Optional: without it a goal simply cannot be annulled (the option never shows). It copies and restores the
+    // whole goal record, so it also needs that record's layout proven in this executable (GoalRecord guards).
+    const bool goalRecordProven = EngineGuards::Verify().goalRecordOk;
+    if (!goalRecordProven) VAR_LOG_WRN("Goal record layout not proven in this executable: goals cannot be annulled");
+    const uintptr_t addrHistoryAdd = goalRecordProven
+        ? resolveUnique("RecordHistory::AddEvent", Aobs::RecordHistory_AddEvent, AobHints::RecordHistory_AddEvent) : 0;
     if (addrHistoryAdd &&
         GoalAnnul::g_hookHistoryAdd.Install(addrHistoryAdd, reinterpret_cast<void*>(&GoalAnnul::Detour_HistoryAddEvent), 11)) {
         VAR_LOG_INF("Goal annulment ready: RecordHistory::AddEvent hooked at 0x%llX",

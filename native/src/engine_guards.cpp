@@ -231,7 +231,7 @@ Report VerifyImage(void* moduleBase) {
     }
 
     // Offsets: confirmed when at least one of their guards is found exactly once
-    std::set<std::string> all, confirmed;
+    std::set<std::string> all, confirmed, optAll, optConfirmed;
     for (size_t i = 0; i < nl; ++i) {
         const bool found = pats[i].count == 1;
         r.layoutGuards++;
@@ -242,7 +242,11 @@ Report VerifyImage(void* moduleBase) {
             size_t b = names.find(',', a);
             if (b == std::string::npos) b = names.size();
             const std::string n = names.substr(a, b - a);
-            if (!n.empty()) { all.insert(n); if (found) confirmed.insert(n); }
+            if (!n.empty()) {
+                const bool optional = n.rfind("GoalRecord.", 0) == 0;
+                (optional ? optAll : all).insert(n);
+                if (found) (optional ? optConfirmed : confirmed).insert(n);
+            }
             a = b + 1;
         }
     }
@@ -256,6 +260,9 @@ Report VerifyImage(void* moduleBase) {
         if (pats[nl + i].count == 1) r.bodiesFound++;
         else r.missingBodies += (r.missingBodies.empty() ? "" : ",") + std::string(kBodyGuards[i].aob);
     }
+    r.goalRecordOffsets = optAll.size();
+    r.goalRecordConfirmed = optConfirmed.size();
+    r.goalRecordOk = !optAll.empty() && optConfirmed.size() == optAll.size();
     r.ok = r.offsetsConfirmed == r.offsets && r.bodiesFound == r.bodies;
     r.elapsedMs = GetTickCount64() - t0;
     return r;
@@ -284,12 +291,13 @@ bool Rejected() {
 }
 
 std::string Summary(const Report& r) {
-    char buf[320];
+    char buf[384];
     std::snprintf(buf, sizeof(buf),
                   "%s build (timestamp 0x%08X, image 0x%X): %zu/%zu structure offsets proven by %zu/%zu engine code guards, "
-                  "%zu/%zu hooked functions identical, %llu ms",
+                  "%zu/%zu hooked functions identical, goal record %zu/%zu, %llu ms",
                   r.referenceBuild ? "reference" : "other", r.timestamp, r.sizeOfImage, r.offsetsConfirmed, r.offsets,
-                  r.layoutFound, r.layoutGuards, r.bodiesFound, r.bodies, static_cast<unsigned long long>(r.elapsedMs));
+                  r.layoutFound, r.layoutGuards, r.bodiesFound, r.bodies, r.goalRecordConfirmed, r.goalRecordOffsets,
+                  static_cast<unsigned long long>(r.elapsedMs));
     return buf;
 }
 
