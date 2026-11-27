@@ -20,7 +20,7 @@ enum class HudPage : int32_t {
     Controls  = 4, // OPCOES > Controles (remap de teclas e botoes)
 };
 
-// OPCOES rows: 0..6 toggles, 7 = Idioma, 8 = Avisar nova versao, 9 = Controles, 10 = Voltar
+// OPCOES rows: 0..6 toggles, 7 = Idioma, 8 = Atualizacao automatica, 9 = Controles, 10 = Voltar
 constexpr int kSettingsRowReplayAfterDecision = 6;
 constexpr int kSettingsRowLanguage = 7;
 constexpr int kSettingsRowCheckUpdates = 8;

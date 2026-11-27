@@ -1235,11 +1235,11 @@ void VarHudController::TriggerSettingsRow(int row, int delta, VarState& state) {
     } else if (row == kSettingsRowLanguage) {
         cfg.language = (cfg.language == 1) ? 0 : 1; // applied instantly to the whole HUD
     } else if (row == kSettingsRowCheckUpdates) {
-        cfg.checkUpdates = !cfg.checkUpdates;
+        cfg.autoUpdate = !cfg.autoUpdate;
     }
     config_ = cfg;
     state.SetHudConfig(cfg, true);
-    if (row == kSettingsRowCheckUpdates) UpdateChecker::Start(cfg.checkUpdates); // background, once per process
+    if (row == kSettingsRowCheckUpdates) UpdateChecker::Start(cfg.autoUpdate); // background, once per process
 }
 
 // ---------------------------------------------------------------------------

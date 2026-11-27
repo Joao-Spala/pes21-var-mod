@@ -138,7 +138,8 @@ $LinkArgs = @(
     "-o", $OutDll
 ) + $CoreObjs + $ImguiObjs + @(
     "-luser32",
-    "-lwinhttp"
+    "-lwinhttp",
+    "-lbcrypt"
 )
 
 & $Compiler @LinkArgs
@@ -178,6 +179,7 @@ if (-not $SkipTests) {
         ) + $TestCoreObjs + $TestImguiObjs + @(
             "-luser32",
             "-lwinhttp",
+            "-lbcrypt",
             "-lgdi32",
             "-o", $TestExe
         )

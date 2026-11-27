@@ -146,10 +146,10 @@ Settings are saved in `<sider folder>\modules\var_mod\var_mod.ini`.
 | Live alerts | On |
 | Replay the play after the decision | On |
 | Language | Português (BR) |
-| Notify new version | On |
+| Automatic updates | On |
 | Controls | Two keys per action, remappable |
 
-**Notify new version**: at most once a day, in the background, the mod reads the number of the latest release on this repository (one request to `api.github.com`, nothing about you, your PC or your matches is sent). When a newer version exists, a notice shows the first time the VAR replay opens, and OPTIONS shows where to get it. The mod never downloads or installs anything by itself: update with option 5 of the setup script or by hand. Turn the option off to make the mod use no network at all. The last check is kept in `modules\var_mod\update_check.ini`.
+**Automatic updates**: every 6 hours at most, in the background, the mod reads the number of the latest release on this repository (one request to `api.github.com`, nothing about you, your PC or your matches is sent). When a newer version exists, it downloads it and installs it by itself, with no action from you. The new version takes effect the next time the game starts, and a notice in the VAR replay says so. Before installing, the mod checks the digital signature of the release with a key that only the author has, and the size and SHA-256 of each file. A release without that signature is never installed (only the notice with the release page is shown), so a stolen GitHub account cannot push code to your PC. The previous version stays in `modules\var_mod\previous\` to go back by hand. Turn the option off to make the mod use no network at all.
 
 ## Shortcuts
 
@@ -170,7 +170,7 @@ All shortcuts can be changed in **OPTIONS > Controls**. While the panel has focu
 ## Limitations
 
 - Supports only the Steam executable `v1.7.2.0`.
-- Offline matches only: Exhibition, Master League, Become a Legend and Cups. The game's network, DRM and online modes are not touched. The only connection the mod makes is the optional new version check above.
+- Offline matches only: Exhibition, Master League, Become a Legend and Cups. The game's network, DRM and online modes are not touched. The only connection the mod makes is the optional automatic update above.
 - A decision applies to the stoppage in which it was made. A goal can be disallowed until its kickoff is taken.
 - The replay after the decision requires a foul or penalty given with the ball in play and the reviewed moment still in the game's replay memory (about 11 s of play). The engine's own instant replay may play first.
 - The gamepad opens and collapses the panel and controls the replay. Navigation inside the panel uses keyboard and mouse.

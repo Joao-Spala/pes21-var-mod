@@ -1891,18 +1891,37 @@ void RenderOptionsPage(ImDrawList* dl, float contentW, const HudConfig& cfg, boo
     toggleRow(kSettingsRowReplayAfterDecision, "Replay do lance após a decisão", cfg.replayAfterDecision);
     SectionCaption(dl, "GERAL", U(10));
     selectorRow(kSettingsRowLanguage, "Idioma", i18n::LanguageDisplayName(cfg.language == 1 ? Language::English : Language::PtBr));
-    toggleRow(kSettingsRowCheckUpdates, "Avisar nova versão", cfg.checkUpdates);
-    if (cfg.checkUpdates) {
-        // Status line under the toggle (not selectable): where to get a newer version, never a download
+    toggleRow(kSettingsRowCheckUpdates, "Atualização automática", cfg.autoUpdate);
+    {
+        // Status under the toggle (not selectable). An update already installed is shown even with the option off.
+        const UpdateChecker::Phase phase = UpdateChecker::CurrentPhase();
         const char* newer = UpdateChecker::NewerVersion();
         char line[96];
-        if (newer) std::snprintf(line, sizeof(line), Tr("Nova versão %s disponível em"), newer);
-        else std::snprintf(line, sizeof(line), Tr("Versão instalada: %s"), VAR_MOD_VERSION);
-        const ImVec2 lp = ImGui::GetCursorScreenPos();
-        const float lh = LineH(Txt::Small);
-        TextFit(dl, Txt::Small, ImVec2(lp.x + U(16), lp.y), contentW - U(32), newer ? C::Accent : C::Text3, line);
-        if (newer) TextFit(dl, Txt::Small, ImVec2(lp.x + U(16), lp.y + lh + U(2)), contentW - U(32), C::Text2, UpdateChecker::kReleasesUrl);
-        ImGui::Dummy(ImVec2(contentW, (newer ? lh * 2.0f + U(2) : lh) + U(6)));
+        const char* second = nullptr;
+        ImU32 col = C::Text3;
+        if (newer && phase == UpdateChecker::Phase::Installed) {
+            std::snprintf(line, sizeof(line), Tr("Versão %s instalada"), newer);
+            second = Tr("Vale ao reiniciar o jogo");
+            col = C::Green;
+        } else if (newer && phase == UpdateChecker::Phase::Installing && cfg.autoUpdate) {
+            std::snprintf(line, sizeof(line), Tr("Baixando a versão %s..."), newer);
+            col = C::Accent;
+        } else if (newer && cfg.autoUpdate) {
+            std::snprintf(line, sizeof(line), Tr("Nova versão %s disponível em"), newer);
+            second = UpdateChecker::kReleasesUrl;
+            col = C::Accent;
+        } else if (cfg.autoUpdate) {
+            std::snprintf(line, sizeof(line), Tr("Versão instalada: %s"), VAR_MOD_VERSION);
+        } else {
+            line[0] = '\0';
+        }
+        if (line[0]) {
+            const ImVec2 lp = ImGui::GetCursorScreenPos();
+            const float lh = LineH(Txt::Small);
+            TextFit(dl, Txt::Small, ImVec2(lp.x + U(16), lp.y), contentW - U(32), col, line);
+            if (second) TextFit(dl, Txt::Small, ImVec2(lp.x + U(16), lp.y + lh + U(2)), contentW - U(32), C::Text2, second);
+            ImGui::Dummy(ImVec2(contentW, (second ? lh * 2.0f + U(2) : lh) + U(6)));
+        }
     }
     {
         bool hov = false;
@@ -2833,16 +2852,25 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
         RenderBanner(viewportW, viewportH, tel.alertBannerText, tel.alertBannerStartMs, tel.alertBannerUntilMs, tel.alertBannerStyle, true);
     }
 
-    // New version notice: once per game session, the first time the VAR replay opens (never during play)
+    // Update notice: shown in a VAR replay (never during play), once per game session for each state, so a
+    // "new version" notice is followed by "installed" when the download finishes later
     {
-        static bool s_updateNoticeShown = false;
-        const char* newer = cfg.checkUpdates ? UpdateChecker::NewerVersion() : nullptr;
-        if (!s_updateNoticeShown && newer && g_controller.IsInManualReplay() && !tel.siderOverlayOpen &&
-            GetTickCount64() >= tel.lastBannerUntilMs) {
-            s_updateNoticeShown = true;
+        static int s_updateNoticeShown = 0; // phase already announced
+        const UpdateChecker::Phase phase = UpdateChecker::CurrentPhase();
+        const char* newer = UpdateChecker::NewerVersion();
+        const bool announce = newer && (phase == UpdateChecker::Phase::Installed ||
+                                        (phase == UpdateChecker::Phase::Available && cfg.autoUpdate));
+        if (announce && static_cast<int>(phase) > s_updateNoticeShown && g_controller.IsInManualReplay() &&
+            !tel.siderOverlayOpen && GetTickCount64() >= tel.lastBannerUntilMs) {
+            s_updateNoticeShown = static_cast<int>(phase);
             char text[128];
-            std::snprintf(text, sizeof(text), "%s %s  \xC2\xB7  %s", Tr("NOVA VERSÃO"), newer, UpdateChecker::kReleasesUrl);
-            state.SetPostApplyBanner(text, 8000, BannerStyle::Info);
+            if (phase == UpdateChecker::Phase::Installed) {
+                std::snprintf(text, sizeof(text), "%s %s  \xC2\xB7  %s", Tr("VAR MOD ATUALIZADO PARA"), newer, Tr("vale ao reiniciar o jogo"));
+                state.SetPostApplyBanner(text, 8000, BannerStyle::Applied);
+            } else {
+                std::snprintf(text, sizeof(text), "%s %s  \xC2\xB7  %s", Tr("NOVA VERSÃO"), newer, UpdateChecker::kReleasesUrl);
+                state.SetPostApplyBanner(text, 8000, BannerStyle::Info);
+            }
         }
     }
 

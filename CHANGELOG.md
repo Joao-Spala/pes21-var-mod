@@ -1,5 +1,10 @@
 # Changelog
 
+## v4.5.1
+
+- **Automatic updates**: the option "Avisar nova versão" becomes "Atualização automática" (on by default, `auto_update` in `var_mod.ini`, the v4.5.0 `check_updates` value is kept). Every 6 hours at most the mod reads the latest release and, when it is newer, downloads and installs it in the background with no action from the player. The new version takes effect at the next game start, announced in the VAR replay and in OPTIONS. Nothing is installed unless the release manifest carries a valid signature of the author's key (ECDSA P-256, public key compiled into `var_core.dll`), its version equals the release tag and is above the running one, and both files match the SHA-256 and size it lists. Any failure rolls back to the running files. The replaced version is kept in `modules\var_mod\previous\`.
+- **Release signing**: `scripts/release/sign_update.ps1` builds and signs `update_manifest.txt` for each release. The private key stays on the author's PC.
+
 ## v4.5.0
 
 - **Disallow a goal**: during the stoppage of a goal the review panel offers "Anular gol" (attacking foul or handball, direct free kick for the defence, card optional) and "Anular gol por impedimento" (indirect free kick, no card), first in the list. The free kick replaces the kickoff, and the goal leaves the score, the scorer's statistics and the list of scorers. Before anything is written, the mod proves with the game's own score check that the record it restores differs from the live one by exactly this goal, otherwise nothing happens and a notice says why. The scoreboard shows the corrected score at once.

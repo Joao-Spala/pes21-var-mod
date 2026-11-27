@@ -146,10 +146,10 @@ As configurações ficam em `<pasta do sider>\modules\var_mod\var_mod.ini`.
 | Alertas durante o jogo | Ligado |
 | Replay do lance após a decisão | Ligado |
 | Idioma | Português (BR) |
-| Avisar nova versão | Ligado |
+| Atualização automática | Ligado |
 | Controles | Duas teclas por ação, remapeáveis |
 
-**Avisar nova versão**: no máximo uma vez por dia, em segundo plano, o mod lê o número da última release deste repositório (uma consulta ao `api.github.com`, nada sobre você, seu PC ou suas partidas é enviado). Quando existe versão mais nova, um aviso aparece na primeira vez que o replay do VAR abre, e as OPÇÕES mostram onde baixar. O mod nunca baixa nem instala nada sozinho: atualize pela opção 5 do script de instalação ou manualmente. Desligue a opção para o mod não usar a rede em nenhum momento. A última verificação fica em `modules\var_mod\update_check.ini`.
+**Atualização automática**: no máximo a cada 6 horas, em segundo plano, o mod lê o número da última release deste repositório (uma consulta ao `api.github.com`, nada sobre você, seu PC ou suas partidas é enviado). Quando existe versão mais nova, ele baixa e instala sozinho, sem você fazer nada. A nova versão vale a partir da próxima vez que o jogo abrir, e um aviso no replay do VAR informa isso. Antes de instalar, o mod confere a assinatura digital da release com uma chave que só o autor tem, além do tamanho e do SHA-256 de cada arquivo. Uma release sem essa assinatura nunca é instalada (só aparece o aviso com a página da release), então uma conta do GitHub roubada não consegue colocar código no seu PC. A versão anterior fica em `modules\var_mod\previous\` para voltar manualmente. Desligue a opção para o mod não usar a rede em nenhum momento.
 
 ## Atalhos
 
@@ -170,7 +170,7 @@ Todos os atalhos podem ser alterados em **OPÇÕES > Controles**. Com o painel e
 ## Limitações
 
 - Suporta apenas o executável Steam `v1.7.2.0`.
-- Apenas partidas offline: Exibição, Master Liga, Rumo ao Estrelato e Copas. Rede, DRM e modos online do jogo não são tocados. A única conexão que o mod faz é a verificação opcional de nova versão descrita acima.
+- Apenas partidas offline: Exibição, Master Liga, Rumo ao Estrelato e Copas. Rede, DRM e modos online do jogo não são tocados. A única conexão que o mod faz é a atualização automática opcional descrita acima.
 - Uma decisão vale para a parada em que foi tomada. Um gol pode ser anulado até a saída de bola.
 - O replay após a decisão exige falta ou pênalti marcado com a bola rolando e o momento revisado ainda na memória de replay do jogo (cerca de 11 s de jogo). O replay instantâneo da engine pode ser exibido antes.
 - O controle abre e recolhe o painel e controla o replay. A navegação dentro do painel usa teclado e mouse.

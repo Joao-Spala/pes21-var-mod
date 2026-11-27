@@ -106,9 +106,10 @@ __declspec(dllexport) int __cdecl var_init(const char* logDirUtf8) {
 
     var_mod::VarState::Instance().SetIniPath(baseDir.empty() ? L"var_mod.ini" : (baseDir + L"var_mod.ini"));
     var_mod::VarState::Instance().LoadHudConfig();
-    // New version notice (option "Avisar nova versao", on by default): one background GET a day, never a download
+    // Automatic update (option "Atualizacao automatica", on by default): background check every 6 h, a newer
+    // release is installed only with a valid signature and takes effect at the next game start
     var_mod::UpdateChecker::SetBaseDir(baseDir);
-    var_mod::UpdateChecker::Start(var_mod::VarState::Instance().GetHudConfig().checkUpdates);
+    var_mod::UpdateChecker::Start(var_mod::VarState::Instance().GetHudConfig().autoUpdate);
 
     // Engine heap fix, independent from the VAR itself: makes the dlmalloc segment release atomic so the
     // post-match heap trim cannot write into a segment it has just released (crash at PES2021.exe+0x3FE31D).
