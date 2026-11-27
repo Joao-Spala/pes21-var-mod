@@ -2,7 +2,7 @@
 
 <img src="docs/images/hero_pt.png" alt="VAR para PES 2021: pause, reveja, decida. O jogo obedece." width="100%">
 
-![Version](https://img.shields.io/github/v/release/Joao-Spala/pes21-var-mod?style=for-the-badge&label=Version&color=38BDF8)
+[![Version](docs/images/badge_version.svg)](https://github.com/Joao-Spala/pes21-var-mod/releases/latest)
 ![PES 2021](https://img.shields.io/badge/eFootball_PES_2021-v1.7.2.0_(Steam)-0095D9?style=for-the-badge)
 ![Sider](https://img.shields.io/badge/Sider_7.3+-Compatible-F59E0B?style=for-the-badge)
 ![Native](https://img.shields.io/badge/Native-C%2B%2B20_%2B_DX11_%2B_ImGui-84CC16?style=for-the-badge)
