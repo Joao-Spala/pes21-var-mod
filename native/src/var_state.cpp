@@ -12,6 +12,15 @@
 
 namespace var_mod {
 
+// Body reach (metres between player centres, the engine positions are the feet): two bodies touch at about
+// 0.9 m, a standing tackle reaches about 1.1 m, a slide about 1.8 m. A causer the engine recorded further than
+// 3 m away belongs to an earlier contact.
+constexpr float kTouchDistM          = 0.9f;
+constexpr float kStandReachM         = 1.1f;
+constexpr float kSlideReachM         = 1.8f;
+constexpr float kAdjacentChallengerM = 1.3f;
+constexpr float kCauserMaxDistM      = 3.0f;
+
 namespace {
 
 std::string TrimAscii(const std::string& s) {
@@ -1030,6 +1039,7 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         m.victimSlot      = ev.victimSlot;
         m.pos             = ev.pos;
         m.contactDistM    = 0.0f;
+        m.rolesConfirmed  = ev.type != VarEventType::NoFoul; // a call the VAR annulled names no offender any more
         m.signedBoxDistM  = storedOr(ev.boxDistValid, ev.boxDistM, computeBoxDist(ev.offenderSlot, ev.benefitedTeam, ev.pos));
 
         if (ev.type == VarEventType::NoFoul && ev.reviewedByVar) {
@@ -1102,6 +1112,36 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         }
     }
 
+    // A play the referee already called is never shown again as a separate (or "missed") incident: a physical
+    // incident or duel sharing a player with a called foul / penalty / card / advantage from kCallLookBack60Hz
+    // before the whistle (10 s after an advantage) up to just after it belongs to that call. The foul the match is
+    // stopped for right now counts as a call even before it reaches the event history.
+    constexpr float kCallLookBack60Hz = 240.0f;
+    constexpr float kAdvantageLookBack60Hz = 600.0f;
+    auto sharesPlayer = [](int32_t a1, int32_t a2, int32_t b1, int32_t b2) {
+        auto in = [&](int32_t x) { return IsValidSlot(x) && (x == b1 || x == b2); };
+        return in(a1) || in(a2);
+    };
+    const bool liveCall = telemetry_.activeFoulValid != 0 &&
+                          telemetry_.matchStatus != static_cast<int32_t>(MatchStatus::InPlay) &&
+                          (IsValidSlot(telemetry_.activeOffenderSlot) || IsValidSlot(telemetry_.activeVictimSlot));
+    auto coveredByCall = [&](int32_t phase, float t, int32_t off, int32_t vic) -> bool {
+        for (size_t e = 0; e < eventCount_; ++e) {
+            const auto& ev = events_[(eventHead_ + kMaxEvents - 1 - e) % kMaxEvents];
+            if (!IsPhaseCompatible(ev.matchPhase, phase)) continue;
+            const float back = ev.wasAdvantage ? kAdvantageLookBack60Hz : kCallLookBack60Hz;
+            const float d = t - ev.time60Hz;
+            if (d < -back || d > 30.0f) continue;
+            if (sharesPlayer(off, vic, ev.offenderSlot, ev.victimSlot)) return true;
+        }
+        if (liveCall && IsPhaseCompatible(telemetry_.matchPhase, phase)) {
+            const float d = t - telemetry_.time60Hz; // the clock is stopped at the whistle during the stoppage
+            if (d >= -kAdvantageLookBack60Hz && d <= 30.0f &&
+                sharesPlayer(off, vic, telemetry_.activeOffenderSlot, telemetry_.activeVictimSlot)) return true;
+        }
+        return false;
+    };
+
     // 2. Physical engine incidents detected at 60Hz (Slide Tackle, Victim Fall, Stand Tackle, Body Charge)
     std::vector<ReplayMarker> detected;
     for (size_t i = 0; i < incCount_; ++i) {
@@ -1119,7 +1159,7 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
                                      om.offenderSlot == inc.victimSlot || om.victimSlot == inc.offenderSlot;
             if (std::fabs(om.time60Hz - inc.time60Hz) <= 90.0f && samePlayers) { mergedIntoOfficial = true; break; }
         }
-        if (mergedIntoOfficial) continue;
+        if (mergedIntoOfficial || coveredByCall(inc.matchPhase, inc.time60Hz, inc.offenderSlot, inc.victimSlot)) continue;
 
         const float boxDist = storedOr(inc.boxDistValid, inc.boxDistM,
                                        computeBoxDist(inc.offenderSlot, 1 - SlotToTeam(inc.offenderSlot), inc.pos));
@@ -1138,6 +1178,7 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         m.contactDistM    = inc.contactDistM;
         m.signedBoxDistM  = boxDist;
         m.nearFoul        = inc.nearFoul;
+        m.rolesConfirmed  = inc.rolesConfirmed || inc.nearFoul;
         FormatIncidentLabel(m.kind, boxDist < 0.0f, m.label, sizeof(m.label));
 
         const bool samePairAsLast = !detected.empty() &&
@@ -1153,8 +1194,13 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         }
     }
 
-    // 3. Fallback from the snapshots only for close contests not already covered by official or physical markers
-    constexpr float kFallbackContactDistSq = 2.10f; // <= 1.45m
+    // 3. Fallback from the snapshots only for body-to-body duels for the ball not already covered by official or
+    // physical markers: the pair is within touching distance, one of them has (or just had) the ball, and it lasts
+    // kFallbackMinFrames consecutive snapshots. A duel has no roles.
+    constexpr float kFallbackContactDistSq = kTouchDistM * kTouchDistM;
+    constexpr int   kFallbackMinFrames = 4;
+    int32_t runA = -1, runB = -1, runLen = 0;
+    float runLastTime = -1000.0f;
     for (size_t i = 0; i < snapCount_; ++i) {
         const size_t idx = (snapHead_ + kMaxSnapshots - snapCount_ + i) % kMaxSnapshots;
         const SnapKey& key = snapKeys_[idx]; // filter on the 8-byte key before touching the snapshot
@@ -1162,7 +1208,19 @@ void VarState::BuildReplayWindowMarkersLocked(int32_t winPhase, float winStartTi
         if (key.time60Hz < winStartTime || key.time60Hz > winEndTime) continue;
         const auto& sn = snapshots_[idx];
         if (!IsValidSlot(sn.closestA) || !IsValidSlot(sn.closestB)) continue;
-        if (sn.closestDistSq > kFallbackContactDistSq) continue;
+        const bool withBall = sn.ballOwnerSlot == sn.closestA || sn.ballOwnerSlot == sn.closestB ||
+                              sn.recentBallOwnerSlot == sn.closestA || sn.recentBallOwnerSlot == sn.closestB;
+        if (sn.closestDistSq > kFallbackContactDistSq || !withBall) { runLen = 0; continue; }
+        if (sn.closestA == runA && sn.closestB == runB && sn.time60Hz - runLastTime <= 3.5f) {
+            ++runLen;
+        } else {
+            runA = sn.closestA;
+            runB = sn.closestB;
+            runLen = 1;
+        }
+        runLastTime = sn.time60Hz;
+        if (runLen != kFallbackMinFrames) continue; // one marker per sustained duel
+        if (coveredByCall(sn.matchPhase, sn.time60Hz, sn.closestA, sn.closestB)) continue;
 
         bool covered = false;
         for (const auto& om : markers) {
@@ -1246,11 +1304,15 @@ int32_t VarState::SuspicionScore(const ReplayMarker& m) {
         case IncidentKind::CloseContact: s = 12; break;
         default:                         return 0;
     }
+    if (m.kind == IncidentKind::CloseContact) return 0; // proximity alone is never a missed foul
     if (m.nearFoul && m.kind != IncidentKind::Dive) s += 22;
     if (m.signedBoxDistM < 0.0f) s += 24;
     else if (m.signedBoxDistM < 6.0f) s += 8;
     if (m.contactDistM < 1.0f) s += 10;
     else if (m.contactDistM < 1.5f) s += 5;
+    // Without a contact reaction (nobody staggered or went down from that opponent) it stays below the
+    // threshold: a clean tackle in the box is not a likely missed foul
+    if (!m.nearFoul) s = std::min(s, kSuspectThreshold - 15);
     return std::clamp(s, 0, 100);
 }
 
@@ -1989,7 +2051,8 @@ bool VarState::DetectPhysicalIncident(const PlaySnapshot& snap, const PitchDims&
     auto opponents = [](int32_t a, int32_t b) {
         return IsValidSlot(a) && IsValidSlot(b) && SlotToTeam(a) != SlotToTeam(b);
     };
-    auto considerCandidate = [&](IncidentKind kind, int32_t prio, int32_t offSlot, int32_t vicSlot, bool nearFoul) {
+    auto considerCandidate = [&](IncidentKind kind, int32_t prio, int32_t offSlot, int32_t vicSlot, bool nearFoul,
+                                 bool rolesConfirmed) {
         if (!opponents(offSlot, vicSlot)) return;
         const Vec3 spot{
             0.35f * snap.playerPos[offSlot].x + 0.65f * snap.playerPos[vicSlot].x,
@@ -2015,6 +2078,7 @@ bool VarState::DetectPhysicalIncident(const PlaySnapshot& snap, const PitchDims&
             outInc.contactDistM = distM;
             outInc.insideBox    = inBox;
             outInc.nearFoul     = nearFoul;
+            outInc.rolesConfirmed = rolesConfirmed;
             outInc.boxDistM     = PitchGeometry::SignedDistanceToDefendingBox(dims, spot, teamAttackDir[boxTeam]);
             outInc.boxDistValid = true;
         }
@@ -2050,32 +2114,38 @@ bool VarState::DetectPhysicalIncident(const PlaySnapshot& snap, const PitchDims&
         // Simulation: the player went down by himself
         if (aid == PlayerActionId::Dive || (flags & PlayerActionId::FlagSimulation) != 0) {
             int32_t opp = snap.playerCauser[v];
-            if (!opponents(v, opp) || !snap.playerOnPitch[opp]) opp = nearestOpponent(v, 2.5f, false);
+            if (!opponents(v, opp) || !snap.playerOnPitch[opp] ||
+                DistSq2D(snap.playerPos[v], snap.playerPos[opp]) > kCauserMaxDistM * kCauserMaxDistM) {
+                opp = nearestOpponent(v, 2.5f, false); // the opponent he went down next to (no contact by definition)
+            }
             // The diver is the one to punish (card, indirect restart for the opponents): he is the offender
-            if (opponents(v, opp)) considerCandidate(IncidentKind::Dive, 48, v, opp, false);
+            if (opponents(v, opp)) considerCandidate(IncidentKind::Dive, 48, v, opp, false, true);
             continue;
         }
 
-        // Contact reaction: the engine tells who caused it
+        // Contact reaction: the engine tells who caused it. A recorded causer far away is a stale record of an
+        // earlier contact, not this one.
         if (PlayerActionId::IsContactReaction(aid, flags)) {
             int32_t causer = snap.playerCauser[v];
             int32_t penalty = 0;
-            if (!opponents(v, causer) || !snap.playerOnPitch[causer]) {
-                // No recorded causer: only an opponent actively challenging right next to him counts
-                causer = nearestOpponent(v, 2.2f, true);
+            if (!opponents(v, causer) || !snap.playerOnPitch[causer] ||
+                DistSq2D(snap.playerPos[v], snap.playerPos[causer]) > kCauserMaxDistM * kCauserMaxDistM) {
+                // No usable causer: only an opponent actively challenging within body reach counts
+                causer = nearestOpponent(v, kAdjacentChallengerM, true);
                 penalty = 8;
             }
             if (opponents(v, causer)) {
                 IncidentKind kind{};
                 int32_t prio = 0;
                 kindFromCauser(causer, kind, prio);
-                considerCandidate(kind, prio - penalty, causer, v, true);
+                considerCandidate(kind, prio - penalty, causer, v, true, true);
             }
         }
     }
 
-    // Challenges with nobody going down: a slide or standing tackle on the ball carrier (never a goalkeeper action,
-    // never a block). Low priority: shown as a neutral marker so the user can still jump to it.
+    // Challenges with nobody going down: a slide or standing tackle on the ball carrier within the reach of that
+    // challenge (never a goalkeeper action, never a block). Low priority and no roles: a duel the user can still
+    // jump to, never an offender and a victim.
     if (bestPriority == 0) {
         const int32_t carrier = IsValidSlot(snap.ballOwnerSlot) ? snap.ballOwnerSlot : snap.recentBallOwnerSlot;
         if (IsValidSlot(carrier) && snap.playerOnPitch[carrier]) {
@@ -2083,9 +2153,10 @@ bool VarState::DetectPhysicalIncident(const PlaySnapshot& snap, const PitchDims&
                 if (!snap.playerOnPitch[s] || !opponents(s, carrier)) continue;
                 const int8_t a = snap.playerActionId[s];
                 if (!PlayerActionId::IsSlide(a) && a != PlayerActionId::Tackle) continue;
-                if (DistSq2D(snap.playerPos[s], snap.playerPos[carrier]) > 2.5f * 2.5f) continue;
+                const float reach = PlayerActionId::IsSlide(a) ? kSlideReachM : kStandReachM;
+                if (DistSq2D(snap.playerPos[s], snap.playerPos[carrier]) > reach * reach) continue;
                 considerCandidate(PlayerActionId::IsSlide(a) ? IncidentKind::SlideTackle : IncidentKind::StandTackle,
-                                  PlayerActionId::IsSlide(a) ? 40 : 34, s, carrier, false);
+                                  PlayerActionId::IsSlide(a) ? 40 : 34, s, carrier, false, false);
             }
         }
     }

@@ -724,4 +724,127 @@ inline void FormatMatchClock(int32_t matchPhase, float time60Hz, int& outMinutes
 
 } // namespace PitchGeometry
 
+// Goal record of the match (re_notes/09_goal_annulment.md). The record history object H receives every event in
+// RecordHistory::AddEvent (0x140A3E260, rcx = H, rdx = event). A goal (category 0x1F) changes only H: its event
+// lists and, through the stats dispatcher (0x140A22760, stats = H + 0x750D0), the team score, the scorer's stats,
+// the scorers list and the lead markers. The team score is an anti-tamper protected value: a write with a wrong
+// hash makes the engine's own getter (0x1408C98F0) call 0x1415A6744 and int3.
+namespace GoalRecord {
+    constexpr size_t    kHistoryBytes          = 0x180760; // highest field written by AddEvent ends at +0x180760
+    constexpr uintptr_t History_PendingCount   = 0x271F0;  // u32 count + u32 write index, zeroed each update (0x140A3E760)
+    constexpr uintptr_t History_StatsRoot      = 0x750D0;  // 0x140A3EEC0
+    constexpr uintptr_t Stats_TeamStride       = 0x59650;  // 0x1408C7B70
+    constexpr uintptr_t Team_GoalsProtected    = 0x59530;  // per period, 0x1408C98F0 stat 0
+    constexpr uintptr_t Protected_Stride       = 0x20;
+    constexpr int       kGoalPeriods           = 8;        // GetTeamStat(table, 5) sums periods 0..7 (0x1408CA550)
+    constexpr int32_t   kGoalEventCategory     = 0x1F;
+    constexpr uintptr_t Event_CreditedTeam     = 0x168;    // own goal when it differs from the scorer team (+0x14C)
+    constexpr size_t    kEventReadableBytes    = 0x170;
+
+    // Protected u32: +0x00 FNV-1a 64 hash of the 4 plain bytes, +0x08 seed, +0x0C key, +0x10 slots[4] (key & 3)
+    inline void ProtectedKeys(uint32_t seed, uint8_t k[4]) {
+        const uint32_t s3 = seed * 3u;
+        k[0] = static_cast<uint8_t>(s3);
+        k[1] = static_cast<uint8_t>((s3 + 4u) >> 8);
+        k[2] = static_cast<uint8_t>((s3 + 8u) >> 16);
+        k[3] = static_cast<uint8_t>((s3 + 12u) >> 24);
+    }
+    inline uint64_t Fnv1a64(const uint8_t b[4]) {
+        uint64_t h = 0xCBF29CE484222325ULL;
+        for (int i = 0; i < 4; ++i) { h ^= b[i]; h *= 0x100000001B3ULL; }
+        return h;
+    }
+    // Same decode and hash check as 0x1408C98F0. False when the hash does not match (never crashes).
+    inline bool DecodeProtectedU32(const uint8_t* p, uint32_t& out) {
+        uint64_t hash; uint32_t seed, key, enc;
+        std::memcpy(&hash, p, 8);
+        std::memcpy(&seed, p + 0x08, 4);
+        std::memcpy(&key, p + 0x0C, 4);
+        std::memcpy(&enc, p + 0x10 + (key & 3u) * 4u, 4);
+        uint8_t k[4]; ProtectedKeys(seed, k);
+        uint8_t plain[4];
+        for (int i = 0; i < 4; ++i) {
+            const uint8_t e = static_cast<uint8_t>(enc >> (8 * i));
+            plain[i] = static_cast<uint8_t>(static_cast<uint8_t>(e + k[i]) ^ static_cast<uint8_t>(k[i] * 0x3Fu));
+        }
+        if (Fnv1a64(plain) != hash) return false;
+        std::memcpy(&out, plain, 4);
+        return true;
+    }
+    // Same encode as 0x1408CA5F0 (the seed is kept, the key picks the slot). Used by the tests.
+    inline void EncodeProtectedU32(uint8_t* p, uint32_t value, uint32_t key) {
+        uint32_t seed; std::memcpy(&seed, p + 0x08, 4);
+        uint8_t plain[4]; std::memcpy(plain, &value, 4);
+        uint8_t k[4]; ProtectedKeys(seed, k);
+        uint32_t enc = 0;
+        for (int i = 0; i < 4; ++i) {
+            const uint8_t e = static_cast<uint8_t>(static_cast<uint8_t>(plain[i] ^ static_cast<uint8_t>(k[i] * 0x3Fu)) - k[i]);
+            enc |= static_cast<uint32_t>(e) << (8 * i);
+        }
+        const uint64_t hash = Fnv1a64(plain);
+        std::memcpy(p, &hash, 8);
+        std::memcpy(p + 0x0C, &key, 4);
+        std::memcpy(p + 0x10 + (key & 3u) * 4u, &enc, 4);
+    }
+    // Match goals of a team in a history image (H or a copy of it): sum of the protected periods 0..7
+    inline bool ReadTeamGoals(const uint8_t* history, int team, uint32_t& goals) {
+        if (team != 0 && team != 1) return false;
+        const uint8_t* table = history + History_StatsRoot + static_cast<size_t>(team) * Stats_TeamStride + Team_GoalsProtected;
+        uint32_t sum = 0;
+        for (int p = 0; p < kGoalPeriods; ++p) {
+            uint32_t v = 0;
+            if (!DecodeProtectedU32(table + static_cast<size_t>(p) * Protected_Stride, v) || v > 255u) return false;
+            sum += v;
+        }
+        goals = sum;
+        return true;
+    }
+} // namespace GoalRecord
+
+// MSVC std::map / std::set node links (verified on the FixDemoMain map in a crash dump and in the engine's own
+// traversal at 0x141F3F3A0): +0x00 left, +0x08 parent, +0x10 right, +0x18 colour (0 red, 1 black), +0x19 isnil.
+// Children of a leaf point at the head (sentinel, isnil = 1), never null. RepairMsvcTreeLinks walks from the root
+// and rewrites links that cannot be valid (null child, parent that is not the node it was reached from, colour
+// out of range). Returns the number of fixes, or -1 when the tree cannot be walked safely. Read-only on a healthy
+// tree.
+namespace MsvcTree {
+    using ReadableFn = bool (*)(const void* p, size_t len);
+    inline int RepairMsvcTreeLinks(uint8_t* head, size_t size, ReadableFn readable) {
+        if (!head || !readable(head, 0x20) || head[0x19] != 1 || size > 100000) return -1;
+        uint8_t* root = *reinterpret_cast<uint8_t**>(head + 0x08);
+        if (root == head) return 0;
+        struct Item { uint8_t* node; uint8_t* parent; };
+        Item stack[256];
+        int sp = 0;
+        stack[sp++] = Item{ root, head };
+        size_t visited = 0;
+        int fixes = 0;
+        while (sp > 0) {
+            const Item it = stack[--sp];
+            uint8_t* n = it.node;
+            if (n == head) continue;
+            if (!n || !readable(n, 0x20)) return -1;
+            if (n[0x19] != 0) return -1; // a second sentinel inside the tree: not a tree any more
+            if (++visited > size + 8) return -1;
+            auto** left = reinterpret_cast<uint8_t**>(n + 0x00);
+            auto** parent = reinterpret_cast<uint8_t**>(n + 0x08);
+            auto** right = reinterpret_cast<uint8_t**>(n + 0x10);
+            if (*parent != it.parent) { *parent = it.parent; ++fixes; }
+            if (*left == nullptr) { *left = head; ++fixes; }
+            if (*right == nullptr) { *right = head; ++fixes; }
+            if (n[0x18] > 1) { n[0x18] = 1; ++fixes; }
+            if (*left != head) { if (sp >= 256) return -1; stack[sp++] = Item{ *left, n }; }
+            if (*right != head) { if (sp >= 256) return -1; stack[sp++] = Item{ *right, n }; }
+        }
+        // The engine's walk starts at head->left (smallest) and stops at the head after head->right (largest)
+        uint8_t* lo = root;
+        while (*reinterpret_cast<uint8_t**>(lo) != head) lo = *reinterpret_cast<uint8_t**>(lo);
+        uint8_t* hi = root;
+        while (*reinterpret_cast<uint8_t**>(hi + 0x10) != head) hi = *reinterpret_cast<uint8_t**>(hi + 0x10);
+        if (*reinterpret_cast<uint8_t**>(head + 0x00) != lo) { *reinterpret_cast<uint8_t**>(head + 0x00) = lo; ++fixes; }
+        if (*reinterpret_cast<uint8_t**>(head + 0x10) != hi) { *reinterpret_cast<uint8_t**>(head + 0x10) = hi; ++fixes; }
+        return fixes;
+    }
+} // namespace MsvcTree
+
 } // namespace var_mod

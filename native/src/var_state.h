@@ -228,6 +228,9 @@ struct DetectedIncident {
     float        contactDistM = 99.0f;
     bool         insideBox    = false;
     bool         nearFoul     = false; // the victim went down from a contact with an identified opponent
+    // Offender and victim are only roles when a contact is proven: a contact reaction (stagger / fall) caused by
+    // that opponent, or a simulation. A challenge nobody reacted to is only a duel between two players.
+    bool         rolesConfirmed = false;
     // Signed distance to the relevant penalty box with the sides of THAT moment (sides swap at half-time)
     float        boxDistM     = 0.0f;
     bool         boxDistValid = false;
@@ -287,6 +290,9 @@ struct VarVerdict {
     bool     customSpot       = false; // True when user manually adjusted spot on radar/presets
     bool     targetsLiveSetPlay = false; // overturn of the foul the match is stopped for (restart allowed)
     bool     fromLiveFoul       = false; // any decision made on the foul the match is stopped for
+    // Goal annulment: the free kick replaces the kickoff of the goal the match is stopped for and the goal is
+    // taken off the record. -1 = not an annulment, 0 = foul or handball by the attack, 1 = offside.
+    int8_t   annulGoal          = -1;
     int8_t   liveSetPlayKind    = -1;    // SetPlayInfo kind of that stoppage when armed (identifies it later)
     // Stoppage counter when armed (LiveTelemetry::stoppageCount) and the replay moment of the play: a play
     // decision belongs to the stoppage it was made in; after the game moved on (restart, goal, half-time)
@@ -479,6 +485,7 @@ struct ReplayMarker {
     float        contactDistM    = 99.0f;
     float        signedBoxDistM  = 99.0f;
     bool         nearFoul        = false;
+    bool         rolesConfirmed  = false; // offender / victim are real roles (official call or proven contact)
     // 0..100: how likely this is a foul the referee did not give (official events score 0). The single
     // strongest marker of the window at or above kSuspectThreshold is flagged as the play to review.
     int32_t      suspicion       = 0;
@@ -528,6 +535,9 @@ struct LiveTelemetry {
     int32_t activeFoulCard      = 0;
     int32_t activeOffenderSlot  = -1;
     int32_t activeVictimSlot    = -1;
+    // The match is stopped for a goal that can still be annulled (copy of the record taken, kickoff not taken)
+    bool    goalAnnulAvailable  = false;
+    int32_t goalCreditedTeam    = -1;
 
     PitchDims pitchDims{};
     float     teamAttackDir[2] = { -1.0f, 1.0f };

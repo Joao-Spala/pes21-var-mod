@@ -1,10 +1,21 @@
 # Changelog
 
+## v4.5.0
+
+- **Disallow a goal**: during the stoppage of a goal the review panel offers "Anular gol" (attacking foul or handball, direct free kick for the defence, card optional) and "Anular gol por impedimento" (indirect free kick, no card), first in the list. The free kick replaces the kickoff, and the goal leaves the score, the scorer's statistics and the list of scorers. Before anything is written, the mod proves with the game's own score check that the record it restores differs from the live one by exactly this goal, otherwise nothing happens and a notice says why. The scoreboard shows the corrected score at once.
+- **Offender and fouled player only for a proven contact**: a referee's call, a player reacting to a contact (stagger or fall) caused by an opponent next to him, or a simulation. A challenge nobody reacted to is a duel without roles ("DISPUTA"), and only within the reach of that challenge (1.1 m standing, 1.8 m sliding). Two players merely close to each other are never an incident, and the player followed by the camera is never taken for the offender.
+- **Called plays are not offered again**: a contact that shares a player with a foul, penalty, card or advantage called up to 4 s before the whistle (10 s after an advantage) belongs to that call, including the foul the match is stopped for. It is never shown as a separate play or as a likely missed foul, and "Anular falta marcada" comes first during that stoppage.
+- **Likely missed foul**: needs a contact reaction. A clean tackle in the box is no longer flagged.
+- **Decision page**: the row of the player who commits the foul reads "Infrator" ("Impedido" for offside, "Jogador" only for a card edit). The options keep a fixed order and the selection stays on the same option while the replay moves. Back returns to the option the user came from.
+- **Replay after the decision**: follows the fouled player (or the offender). Before, the game kept the player of an earlier clip.
+- **End of match**: the cutscene list of the game is checked before the game clears it, and broken links are rebuilt from the list itself. A broken link there crashed the game when leaving a match in a live test. Nothing is written when the list is intact.
+- **Diagnostics**: if the simulation stops for 4 s outside a replay while frames keep being drawn, the log names the code every busy thread is running.
+
 ## v4.4.12
 
 Final triple check of v4.4.11 (build with the real executable, ASan and UBSan, two independent reviewers, installer runs on test folders, privacy scan of the repository and the package).
 
-- **Setup script matches its description**: enable and disable now also refuse to run while PES 2021 is open, every `sider-<name>.ini` variant next to `sider.ini` is handled (backups never match), and a backup made in the same second as an earlier one gets a `-2` suffix instead of replacing it. When `var_mod.lua` is the only module, `lua.enabled` and `luajit.ext.enabled` are written before its line instead of at the end of the file. The header, the README and the options table now describe uninstall exactly (settings saved as `var_mod.ini.before-uninstall-<date>.bak`, whole `modulesar_mod\` folder removed).
+- **Setup script matches its description**: enable and disable now also refuse to run while PES 2021 is open, every `sider-<name>.ini` variant next to `sider.ini` is handled (backups never match), and a backup made in the same second as an earlier one gets a `-2` suffix instead of replacing it. When `var_mod.lua` is the only module, `lua.enabled` and `luajit.ext.enabled` are written before its line instead of at the end of the file. The header, the README and the options table now describe uninstall exactly (settings saved as `var_mod.ini.before-uninstall-<date>.bak`, whole `modules\var_mod\` folder removed).
 - **Overlay robustness**: the views taken for each frame are released and the game's render targets restored on any exit, including an out of memory error while rebuilding fonts after a resolution change. A leaked view would make the next resize fail.
 - **Position reads**: ball and player positions are kept finite and within the pitch area before any HUD math, so a torn read can never draw broken geometry.
 - **Package**: zip entries use `/` as the separator again, as the ZIP format requires (the first v4.4.11 upload used `\` and was replaced).

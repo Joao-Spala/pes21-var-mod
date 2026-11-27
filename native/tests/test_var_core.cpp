@@ -146,6 +146,10 @@ void TestRealPes2021BinaryAobs() {
         { "ReplayCtrl_SyncToManager",   Aobs::ReplayCtrl_SyncToManager,   AobHints::ReplayCtrl_SyncToManager,   0x1420C16A0ULL },
         { "ReplayPlayer_SetFrame",      Aobs::ReplayPlayer_SetFrame,      AobHints::ReplayPlayer_SetFrame,      0x14217E800ULL },
         { "ReplayPlayer_GetFocusPos",   Aobs::ReplayPlayer_GetFocusPos,   AobHints::ReplayPlayer_GetFocusPos,   0x14217EC70ULL },
+        { "RecordHistory_AddEvent",     Aobs::RecordHistory_AddEvent,     AobHints::RecordHistory_AddEvent,     0x140A3E260ULL },
+        { "RecordHistory_ResetPending", Aobs::RecordHistory_ResetPending, AobHints::RecordHistory_ResetPending, 0x140A3E760ULL },
+        { "SimMain_UpdateScore",        Aobs::SimMain_UpdateScore,        AobHints::SimMain_UpdateScore,        0x142101130ULL },
+        { "FixDemoMain_ClearMap",       Aobs::FixDemoMain_ClearMap,       AobHints::FixDemoMain_ClearMap,       0x141F3F3A0ULL },
     };
 
     uintptr_t mainTickBufAddr = 0;
@@ -1308,6 +1312,7 @@ void TestV4BroadcastHudAndRadar() {
     m0.time60Hz = 5100.0f;
     m0.timelineNorm = 0.375f;
     m0.kind = IncidentKind::SlideTackle;
+    m0.rolesConfirmed = true; // a proven contact: offender / victim are roles
     m0.offenderSlot = 14;
     m0.victimSlot = 9;
     m0.pos = Vec3{ 43.0f, 0.0f, 4.0f };
@@ -1318,6 +1323,7 @@ void TestV4BroadcastHudAndRadar() {
     m1.time60Hz = 5400.0f;
     m1.timelineNorm = 0.75f;
     m1.kind = IncidentKind::BodyCharge;
+    m1.rolesConfirmed = true;
     m1.offenderSlot = 9;
     m1.victimSlot = 14;
     m1.pos = Vec3{ 5.0f, 0.0f, -2.0f };
@@ -1375,9 +1381,9 @@ void TestV4BroadcastHudAndRadar() {
                 "TogglePlayPause while paused must request Play");
 
     // Real team short name in verdict summary
-    ctrl.SelectReplayMarker(0, st, false); // offender = 14 (PAL) inside box -> first main option is Marcar Penalti for FLA!
-    ctrl.SelectMainOption(0, st);
-    EXPECT_EQ(ctrl.DraftAction(), VarAction::RetroactivePenalty, "Inside-box NoFoul option 0 must be Marcar Penalti");
+    ctrl.SelectReplayMarker(0, st, false); // offender = 14 (PAL) inside box: fixed order, option 1 is Marcar Penalti for FLA
+    ctrl.SelectMainOption(1, st);
+    EXPECT_EQ(ctrl.DraftAction(), VarAction::RetroactivePenalty, "NoFoul option 1 is always Marcar Penalti (fixed order)");
     const std::string sum = ctrl.FormatVerdictSummary();
     EXPECT_TRUE(sum.find("FLA") != std::string::npos, "Verdict summary must display real team abbrev FLA");
     EXPECT_EQ(ctrl.FormatPlayerBroadcast(9), std::string("#10 GABIGOL"), "Broadcast player format mismatch");
@@ -1415,6 +1421,157 @@ void PatchReplayTelemetryForTest(bool active, int32_t cursorPhase, float cursorT
         active ? 1 : 0, active ? 1 : 0, 0, 0,
         cursorTime, cursorPhase, winStart, cursorPhase, winEnd, cursorPhase,
         0, 0.0f, 0, 0, 0, 0, 0, -1, -1);
+}
+
+// Protected score codec (0x1408C98F0 / 0x1408CA5F0) and the goal record layout
+void TestGoalRecordCodec() {
+    using namespace GoalRecord;
+    // Known answers from the engine itself: AddTeamStat's reset (0x1408CAAA0) stores this hash for 0 and
+    // encodes every byte as k*0x3E; the overflow branch stores this hash for 0xFFFFFFFF.
+    {
+        const uint8_t zero[4] = { 0, 0, 0, 0 };
+        EXPECT_EQ(Fnv1a64(zero), 0x4D25767F9DCE13F5ULL, "FNV of 0 matches the engine's reset hash");
+        const uint8_t ff[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+        EXPECT_EQ(Fnv1a64(ff), static_cast<uint64_t>(-0x66B0899AC1D5C6AFLL), "FNV of 0xFFFFFFFF matches the engine");
+        uint8_t blk[0x20] = {};
+        const uint32_t seed = 0x12345678u;
+        std::memcpy(blk + 8, &seed, 4);
+        EncodeProtectedU32(blk, 0, 2);
+        uint8_t k[4]; ProtectedKeys(seed, k);
+        uint32_t enc = 0; std::memcpy(&enc, blk + 0x10 + 2 * 4, 4);
+        for (int i = 0; i < 4; ++i) {
+            EXPECT_EQ(static_cast<uint8_t>(enc >> (8 * i)), static_cast<uint8_t>(k[i] * 0x3E), "reset encoding is k*0x3E");
+        }
+    }
+    // Round trip over many seeds, keys and values; any tampering fails the hash instead of decoding garbage
+    uint32_t rng = 0xC0FFEEu;
+    auto next = [&]() { rng = rng * 1664525u + 1013904223u; return rng; };
+    for (int it = 0; it < 2000; ++it) {
+        uint8_t blk[0x20] = {};
+        const uint32_t seed = next(), key = next(), value = (it % 3 == 0) ? (next() & 0xFF) : next();
+        std::memcpy(blk + 8, &seed, 4);
+        EncodeProtectedU32(blk, value, key);
+        uint32_t out = 0;
+        EXPECT_TRUE(DecodeProtectedU32(blk, out), "encoded value decodes");
+        EXPECT_EQ(out, value, "round trip keeps the value");
+        uint8_t bad[0x20]; std::memcpy(bad, blk, sizeof(bad));
+        bad[0x10 + (key & 3u) * 4u] ^= 0x01;
+        EXPECT_TRUE(!DecodeProtectedU32(bad, out), "a changed slot fails the hash");
+    }
+    // Team goals in a history image: periods 0..7 summed, period 8 (shootout) ignored, both teams separate
+    std::vector<uint8_t> h(kHistoryBytes, 0);
+    auto put = [&](int team, int period, uint32_t v) {
+        uint8_t* b = h.data() + History_StatsRoot + static_cast<size_t>(team) * Stats_TeamStride + Team_GoalsProtected +
+                     static_cast<size_t>(period) * Protected_Stride;
+        const uint32_t seed = 0x9E3779B9u * static_cast<uint32_t>(team * 9 + period + 1);
+        std::memcpy(b + 8, &seed, 4);
+        EncodeProtectedU32(b, v, seed ^ 0x55u);
+    };
+    for (int t = 0; t < 2; ++t) for (int p = 0; p <= 8; ++p) put(t, p, 0);
+    put(0, 0, 1); put(0, 3, 2); put(0, 8, 4); put(1, 5, 1);
+    uint32_t g0 = 0, g1 = 0;
+    EXPECT_TRUE(ReadTeamGoals(h.data(), 0, g0) && ReadTeamGoals(h.data(), 1, g1), "team goals decode");
+    EXPECT_EQ(g0, 3u, "home goals = periods 0..7");
+    EXPECT_EQ(g1, 1u, "away goals");
+    EXPECT_TRUE(!ReadTeamGoals(h.data(), 2, g0), "team index checked");
+    put(1, 2, 300);
+    EXPECT_TRUE(!ReadTeamGoals(h.data(), 1, g1), "an impossible per-period count is rejected");
+    // Layout constants stay inside the copied image
+    EXPECT_TRUE(History_StatsRoot + Stats_TeamStride + Team_GoalsProtected + 9 * Protected_Stride <= kHistoryBytes,
+                "both score tables are inside the copy");
+    EXPECT_TRUE(History_PendingCount + 8 <= kHistoryBytes, "pending list inside the copy");
+    MarkPass("TestGoalRecordCodec");
+}
+
+// Goal annulment in the HUD: options first, the draft never inherits the event under the cursor nor a player of
+// the conceding team as offender, the offender stays in the scoring team, the kick goes to the defence
+void TestGoalAnnulHud() {
+    auto& st = VarState::Instance();
+    st.ResetMatch();
+    VarHudController ctrl;
+    LiveTelemetry tel{};
+    tel.enabled = true;
+    tel.offlineAllowed = true;
+    tel.matchActive = true;
+    tel.matchStatus = static_cast<int32_t>(MatchStatus::OutOfPlay);
+    tel.fsmState = 0x1D;
+    tel.replayMode = 2;
+    tel.replayManualFlag = 1;
+    tel.replayCursorTime = 5000.0f;
+    tel.goalAnnulAvailable = true;
+    tel.goalCreditedTeam = 1; // away scored
+
+    // Cursor on an earlier home foul with a yellow: nothing of it may reach the annulment
+    VarEvent foul{};
+    foul.id = 91;
+    foul.type = VarEventType::Foul;
+    foul.time60Hz = 5000.0f;
+    foul.offenderSlot = 4;
+    foul.victimSlot = 15;
+    foul.benefitedTeam = 1;
+    foul.cardKind = CardKind::Yellow;
+    ReplaySyncResult sync{};
+    sync.hasEvent = true;
+    sync.event = foul;
+    std::vector<VarEvent> hist = { foul };
+    ctrl.UpdateContext(tel, sync, st.GetPlayers(), st.GetTeams(), hist, MatchVarStats{}, HudConfig{});
+
+    const auto& opts = ctrl.MainOptions();
+    EXPECT_TRUE(opts.size() >= 2, "options exist");
+    EXPECT_EQ(static_cast<int>(opts[0].annulGoal), 0, "annul (foul) comes first during a goal stoppage");
+    EXPECT_EQ(static_cast<int>(opts[1].annulGoal), 1, "annul (offside) second");
+    for (size_t i = 2; i < opts.size(); ++i) EXPECT_EQ(static_cast<int>(opts[i].annulGoal), -1, "regular options unchanged");
+
+    ctrl.SelectMainOption(0, st);
+    EXPECT_EQ(ctrl.Page(), HudPage::Configure, "annulment opens the configure page");
+    EXPECT_EQ(static_cast<int>(ctrl.DraftAnnulGoal()), 0, "draft is an annulment");
+    EXPECT_EQ(ctrl.DraftSourceEventId(), 0u, "no source event inherited");
+    EXPECT_EQ(ctrl.DraftOrigCard(), CardKind::None, "no original card inherited");
+    EXPECT_EQ(ctrl.DraftBenefitedTeam(), 0, "kick goes to the defence");
+    // Detected pair was a home offender on an away player: no reason to annul, the offender is left to the user
+    EXPECT_TRUE(!IsValidSlot(ctrl.DraftOffenderSlot()), "no offender of the conceding team, none invented");
+    for (ConfigField f : ctrl.ActiveConfigFields()) EXPECT_TRUE(f != ConfigField::Team, "no team field for an annulment");
+
+    // Cycling the offender never leaves the scoring team
+    int offRow = -1;
+    for (size_t i = 0; i < ctrl.ActiveConfigFields().size(); ++i)
+        if (ctrl.ActiveConfigFields()[i] == ConfigField::Offender) offRow = static_cast<int>(i);
+    EXPECT_TRUE(offRow >= 0, "offender row present");
+    while (ctrl.SelectedIndex() < offRow) ctrl.HandleAction(NavAction::Down, st);
+    for (int k = 0; k < 25; ++k) {
+        ctrl.HandleAction((k % 3 == 0) ? NavAction::Left : NavAction::Right, st);
+        EXPECT_TRUE(SlotToTeam(ctrl.DraftOffenderSlot()) == 1, "offender cycling stays in the scoring team");
+        EXPECT_EQ(ctrl.DraftBenefitedTeam(), 0, "kick stays with the defence");
+    }
+
+    int confirmRow = -1;
+    for (size_t i = 0; i < ctrl.ActiveConfigFields().size(); ++i)
+        if (ctrl.ActiveConfigFields()[i] == ConfigField::Confirm) confirmRow = static_cast<int>(i);
+    while (ctrl.SelectedIndex() < confirmRow) ctrl.HandleAction(NavAction::Down, st);
+    ctrl.HandleAction(NavAction::Confirm, st);
+    const VerdictPool pool = st.PeekVerdictPool();
+    EXPECT_TRUE(pool.hasPlayDecision, "annulment armed as the play decision");
+    EXPECT_EQ(static_cast<int>(pool.playDecision.annulGoal), 0, "armed play carries annulGoal");
+    EXPECT_EQ(pool.playDecision.action, VarAction::RetroactiveFreeKick, "free kick action");
+    EXPECT_EQ(pool.playDecision.benefitedTeam, 0, "armed kick for the defence");
+    EXPECT_EQ(pool.playDecision.sourceEventId, 0u, "armed without a source event");
+    EXPECT_EQ(pool.playDecision.origCard, CardKind::None, "no card revocation");
+    // Leave the replay and enter a new one: the old list must not steer the selection away from "Anular gol"
+    tel.replayMode = 0;
+    tel.replayManualFlag = 0;
+    ctrl.UpdateContext(tel, sync, st.GetPlayers(), st.GetTeams(), hist, MatchVarStats{}, HudConfig{});
+    tel.replayMode = 2;
+    tel.replayManualFlag = 1;
+    ctrl.UpdateContext(tel, sync, st.GetPlayers(), st.GetTeams(), hist, MatchVarStats{}, HudConfig{});
+    EXPECT_EQ(ctrl.SelectedIndex(), 0, "a new replay of the goal stoppage opens on the first option");
+    EXPECT_EQ(static_cast<int>(ctrl.MainOptions()[0].annulGoal), 0, "the first option is the annulment");
+    // The offside variant has no card row and no fouled player
+    ctrl.SelectMainOption(1, st);
+    EXPECT_EQ(static_cast<int>(ctrl.DraftAnnulGoal()), 1, "offside annulment draft");
+    for (ConfigField f : ctrl.ActiveConfigFields()) EXPECT_TRUE(f != ConfigField::Card, "no card for offside");
+    EXPECT_TRUE(!IsValidSlot(ctrl.DraftVictimSlot()), "no fouled player for offside");
+    st.ResetMatch();
+    MarkPass("TestGoalAnnulHud");
 }
 
 void TestDecisionReplayWindow() {
@@ -1469,6 +1626,155 @@ void TestDecisionReplayWindow() {
     MarkPass("TestDecisionReplayWindow");
 }
 
+// The cutscene map repair rebuilds exactly the links found zeroed in the crash dump and leaves a healthy tree alone
+void TestMsvcTreeRepair() {
+    struct Node { uint8_t* left; uint8_t* parent; uint8_t* right; uint8_t color; uint8_t isnil; uint8_t pad[6]; uint64_t key; };
+    static Node head{}, n6e{}, n78{}, n82{}, nc8{};
+    auto P = [](Node& n) { return reinterpret_cast<uint8_t*>(&n); };
+    auto reset = [&]() {
+        head = Node{}; n6e = Node{}; n78 = Node{}; n82 = Node{}; nc8 = Node{};
+        head.isnil = 1; head.color = 1;
+        // root 0x6e, right child 0xc8, whose left child is 0x82, whose left child is 0x78 (shape of the dump)
+        n6e = Node{ P(head), P(head), P(nc8), 1, 0, {}, 0x6e };
+        nc8 = Node{ P(n82), P(n6e), P(head), 1, 0, {}, 0xc8 };
+        n82 = Node{ P(n78), P(nc8), P(head), 0, 0, {}, 0x82 };
+        n78 = Node{ P(head), P(n82), P(head), 1, 0, {}, 0x78 };
+        head.left = P(n6e); head.parent = P(n6e); head.right = P(nc8);
+    };
+    auto readable = [](const void* p, size_t) { return p != nullptr; };
+    reset();
+    EXPECT_EQ(MsvcTree::RepairMsvcTreeLinks(P(head), 4, readable), 0, "a healthy tree is left alone");
+    // The corruption of the dump: parent and right child of 0x82 zeroed
+    n82.parent = nullptr; n82.right = nullptr;
+    const int fixes = MsvcTree::RepairMsvcTreeLinks(P(head), 4, readable);
+    EXPECT_TRUE(fixes == 2, "parent and right child rebuilt");
+    EXPECT_TRUE(n82.parent == P(nc8) && n82.right == P(head) && n82.left == P(n78), "links of 0x82 restored");
+    // A wrong head->left (where the engine starts its walk) is rebuilt to the real smallest node
+    head.left = P(n82);
+    EXPECT_TRUE(MsvcTree::RepairMsvcTreeLinks(P(head), 4, readable) == 1 && head.left == P(n6e), "head->left rebuilt");
+    // A cycle (child pointing back up) is refused instead of walked forever
+    reset();
+    n78.left = P(n6e);
+    EXPECT_TRUE(MsvcTree::RepairMsvcTreeLinks(P(head), 4, readable) == -1, "a cycle is not walked");
+    MarkPass("TestMsvcTreeRepair");
+}
+
+// A play the referee called is never offered again as a separate or "likely missed" foul: the contact seconds
+// before the whistle belongs to the call, also for the foul the match is stopped for before it is recorded
+void TestCalledPlayNotSuspect() {
+    auto& st = VarState::Instance();
+    st.ResetMatch();
+    LiveTelemetry tel{};
+    tel.matchActive = true;
+    tel.matchPhase = 1;
+    tel.matchStatus = static_cast<int32_t>(MatchStatus::InPlay);
+    st.UpdateTelemetry(tel);
+    auto fall = [&](float t, int32_t off, int32_t vic) {
+        DetectedIncident inc{};
+        inc.matchPhase = 1;
+        inc.time60Hz = t;
+        inc.kind = IncidentKind::SlideTackle;
+        inc.priority = 88;
+        inc.offenderSlot = off;
+        inc.victimSlot = vic;
+        inc.nearFoul = true;
+        inc.rolesConfirmed = true;
+        inc.contactDistM = 0.7f;
+        inc.boxDistM = -3.0f; // in the box: the strongest suspicion when nobody called it
+        inc.boxDistValid = true;
+        st.PushDetectedIncident(inc);
+    };
+    // Contact 3 s before the whistle (frames of the same play), foul called on the same players
+    fall(9820.0f, 3, 15);
+    fall(9840.0f, 3, 15);
+    VarEvent ev{};
+    ev.type = VarEventType::Foul;
+    ev.matchPhase = 1;
+    ev.time60Hz = 10000.0f;
+    ev.offenderSlot = 3;
+    ev.victimSlot = 15;
+    st.PushEvent(ev);
+    auto markers = st.GetReplayWindowMarkers(1, 9000.0f, 10600.0f);
+    int official = 0, loose = 0, suspects = 0;
+    for (const auto& m : markers) {
+        if (m.isOfficialEvent) ++official; else ++loose;
+        if (m.topSuspect) ++suspects;
+    }
+    EXPECT_EQ(official, 1, "the called foul is on the timeline");
+    EXPECT_EQ(loose, 0, "the contact of the called play is not a separate incident");
+    EXPECT_EQ(suspects, 0, "a called play is never a likely missed foul");
+
+    // An unrelated contact long before (other players, 12 s earlier) is still offered
+    fall(9280.0f, 6, 18);
+    markers = st.GetReplayWindowMarkers(1, 9000.0f, 10600.0f);
+    loose = 0;
+    for (const auto& m : markers) if (!m.isOfficialEvent) ++loose;
+    EXPECT_EQ(loose, 1, "an earlier unrelated contact stays on the timeline");
+
+    // The foul the match is stopped for, before it reaches the event history
+    st.ResetMatch();
+    tel.matchStatus = static_cast<int32_t>(MatchStatus::OutOfPlay);
+    tel.time60Hz = 20000.0f;
+    tel.activeFoulValid = 1;
+    tel.activeOffenderSlot = 14;
+    tel.activeVictimSlot = 2;
+    st.UpdateTelemetry(tel);
+    fall(19850.0f, 14, 2);
+    markers = st.GetReplayWindowMarkers(1, 19000.0f, 20100.0f);
+    suspects = 0;
+    loose = 0;
+    for (const auto& m : markers) { if (!m.isOfficialEvent) ++loose; if (m.topSuspect) ++suspects; }
+    EXPECT_EQ(loose, 0, "the play of the live stoppage foul is not a separate incident");
+    EXPECT_EQ(suspects, 0, "the live stoppage foul is never a likely missed foul");
+    st.UpdateTelemetry(LiveTelemetry{}); // no live call leaks into later tests
+    st.ResetMatch();
+    MarkPass("TestCalledPlayNotSuspect");
+}
+
+// Incident detection needs a proven contact for roles: a reaction caused by a nearby opponent. A challenge
+// nobody reacted to is a duel within reach, and two players merely close are nothing.
+void TestContactDetectionRules() {
+    PitchDims dims{};
+    const float dirs[2] = { 1.0f, -1.0f };
+    auto base = []() {
+        PlaySnapshot sn{};
+        for (int i = 0; i < 22; ++i) {
+            sn.playerOnPitch[i] = 1;
+            sn.playerCauser[i] = -1;
+            sn.playerPos[i] = Vec3{ -40.0f + 3.5f * static_cast<float>(i), 0.0f, (i < 11) ? -25.0f : 25.0f };
+        }
+        sn.ballOwnerSlot = 5;
+        return sn;
+    };
+    DetectedIncident inc{};
+    // Standing tackle 1.3 m from the carrier, nobody reacts: out of reach, nothing
+    PlaySnapshot sn = base();
+    sn.playerPos[5] = Vec3{ 0.0f, 0.0f, 0.0f };
+    sn.playerPos[16] = Vec3{ 1.3f, 0.0f, 0.0f };
+    sn.playerActionId[16] = PlayerActionId::Tackle;
+    EXPECT_TRUE(!VarState::DetectPhysicalIncident(sn, dims, dirs, inc), "a tackle out of reach is not an incident");
+    // Same tackle at 1.0 m: a duel, with no roles
+    sn.playerPos[16] = Vec3{ 1.0f, 0.0f, 0.0f };
+    EXPECT_TRUE(VarState::DetectPhysicalIncident(sn, dims, dirs, inc), "a tackle within reach is a duel");
+    EXPECT_TRUE(!inc.rolesConfirmed && !inc.nearFoul, "a duel nobody reacted to has no offender / victim");
+    // The carrier goes down and the engine names a causer 0.8 m away: proven contact, roles confirmed
+    sn.playerActionId[5] = PlayerActionId::FallDown;
+    sn.playerCauser[5] = 16;
+    sn.playerPos[16] = Vec3{ 0.8f, 0.0f, 0.0f };
+    EXPECT_TRUE(VarState::DetectPhysicalIncident(sn, dims, dirs, inc), "a fall caused by an opponent is an incident");
+    EXPECT_TRUE(inc.rolesConfirmed && inc.nearFoul && inc.offenderSlot == 16 && inc.victimSlot == 5, "roles of a proven contact");
+    // The recorded causer is 5 m away (stale) and nobody else challenges within reach: no incident
+    sn.playerPos[16] = Vec3{ 5.0f, 0.0f, 0.0f };
+    sn.playerActionId[16] = 0;
+    EXPECT_TRUE(!VarState::DetectPhysicalIncident(sn, dims, dirs, inc), "a stale causer far away is ignored");
+    // ...but an opponent tackling right next to him (1.2 m) is taken as the causer
+    sn.playerPos[17] = Vec3{ -1.2f, 0.0f, 0.0f };
+    sn.playerActionId[17] = PlayerActionId::Tackle;
+    EXPECT_TRUE(VarState::DetectPhysicalIncident(sn, dims, dirs, inc) && inc.offenderSlot == 17 && inc.rolesConfirmed,
+                "an adjacent challenger causes the fall");
+    MarkPass("TestContactDetectionRules");
+}
+
 void TestSuspectAndCameraFollow() {
     auto mk = [](IncidentKind kind, bool nearFoul, float boxDist, float contact, float t, bool official) {
         ReplayMarker m{};
@@ -1485,8 +1791,10 @@ void TestSuspectAndCameraFollow() {
               "Slide that floored the opponent in the box must be the maximum");
     EXPECT_EQ(VarState::SuspicionScore(mk(IncidentKind::SlideTackle, true, 20.0f, 1.2f, 0, false)), 73,
               "Slide that floored the opponent in midfield");
-    EXPECT_EQ(VarState::SuspicionScore(mk(IncidentKind::CloseContact, false, 20.0f, 1.4f, 0, false)), 17,
+    EXPECT_EQ(VarState::SuspicionScore(mk(IncidentKind::CloseContact, false, 20.0f, 0.8f, 0, false)), 0,
               "A plain close contest is never a suspect");
+    EXPECT_TRUE(VarState::SuspicionScore(mk(IncidentKind::SlideTackle, false, -3.0f, 0.8f, 0, false)) < VarState::kSuspectThreshold,
+                "A clean slide in the box (nobody reacted to a contact) is not a likely missed foul");
     EXPECT_EQ(VarState::SuspicionScore(mk(IncidentKind::SlideTackle, true, -3.0f, 0.5f, 0, true)), 0,
               "An official decision is never a missed foul");
     EXPECT_TRUE(VarState::SuspicionScore(mk(IncidentKind::Dive, true, -2.0f, 0.5f, 0, false)) < VarState::kSuspectThreshold,
@@ -3210,6 +3518,11 @@ int main() {
     TestSnapshotInterpolation();
     TestSuspectAndCameraFollow();
     TestDecisionReplayWindow();
+    TestGoalRecordCodec();
+    TestGoalAnnulHud();
+    TestContactDetectionRules();
+    TestCalledPlayNotSuspect();
+    TestMsvcTreeRepair();
     TestRemapAndLanguage();
     TestHudRenderSmoke();
     TestCompositeVerdictPoolAndRcuOffsets();

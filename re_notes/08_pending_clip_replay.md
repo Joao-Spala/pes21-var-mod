@@ -7,6 +7,7 @@ Addresses of `PES2021.exe` Steam `1.7.2.0`. **[P]** proven by disassembly, **[I]
 - Four replay requests at `MatchInfo + 0x168C`, stride `0x2C`, reset by `0x140A68200` (status -1, type 0x13, `+0x18 = 0xA`, `+0x24 = 0x29`, `+0x28 = 0xFFFF`) **[P]**.
 - Fields: `+0x00` status (-1 idle, -2 committed, 0 commit now, N delay), `+0x04` type, `+0x05` priority, `+0x07` phase, `+0x08` minute, `+0x09` second, `+0x0C`/`+0x0E` frames back from the newest ring frame (start and end of the clip), `+0x10`/`+0x12` segment 1 **[P]**.
 - The slot 3 builder `0x140A68D40(req, minute, second, phase, status, A, B)` writes type 0x11 with priority 0x5B, clears segment 1 and flag bit 4 **[P]**. The mod writes the same fields directly, status last.
+- `+0x1C` / `+0x20`: the player the replay director follows, as (team 0..1, roster index 0..39), validated by `0x140A60BA0`. The native caller `0x14042DBB0` copies it from its event (`event+0x14`, request kind at `event+0x1C`: 7 = slot 0 stoppage, 8 = slot 3 pending clip) right after the builder (`0x14042DCA3` writes `MatchInfo+0x172C`) **[P]**. Neither the builder nor the reset `0x140A68200` touches it, so a request written without it follows the player of an earlier clip. The mod writes the fouled player (or the offender), or an invalid pair. Fixed on 27/11/2026 after a live test showed the decision replay following another player.
 
 ## 2. Commit and playback
 

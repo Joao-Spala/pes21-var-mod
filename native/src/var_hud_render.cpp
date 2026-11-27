@@ -721,7 +721,12 @@ void RenderBanner(float vw, float vh, const char* storedText, uint64_t startMs, 
     const float titleW = TrackedW(title.c_str());
     const float detailW = detail ? Measure(Txt::Small, detail) : 0.0f;
     const float badgeMeasure = Measure(Txt::Strong, "VAR") + U(14);
-    const float w = U(14) + badgeMeasure + U(14) + titleW + (detail ? U(14) + detailW : 0.0f) + U(18);
+    float w = U(14) + badgeMeasure + U(14) + titleW + (detail ? U(14) + detailW : 0.0f) + U(18);
+    float detailMaxW = detailW;
+    if (w > vw - U(32)) {
+        detailMaxW = std::max(0.0f, detailW - (w - (vw - U(32))));
+        w = vw - U(32);
+    }
     const float slide = (1.0f - alpha) * U(-10);
     const ImVec2 p(CenterOutsidePanel(vw, w), (isAlert ? U(72) : U(24)) + slide);
     const ImVec2 e(p.x + w, p.y + h);
@@ -745,7 +750,7 @@ void RenderBanner(float vw, float vh, const char* storedText, uint64_t startMs, 
     x += titleW;
     if (detail) {
         x += U(14);
-        Text(dl, Txt::Small, ImVec2(x, p.y + (h - LineH(Txt::Small)) * 0.5f), WithAlpha(C::Text2, alpha), detail);
+        TextFit(dl, Txt::Small, ImVec2(x, p.y + (h - LineH(Txt::Small)) * 0.5f), detailMaxW, WithAlpha(C::Text2, alpha), detail);
     }
 }
 
@@ -1002,7 +1007,7 @@ void RenderTimeline(ImDrawList* dl, float contentW, VarState& state) {
         if (IsValidSlot(m.victimSlot)) {
             char vic[80];
             g_controller.FormatPlayerBroadcastBuf(m.victimSlot, vic, sizeof(vic));
-            ImGui::Text(Tr("%s em %s"), off, vic);
+            ImGui::Text((m.rolesConfirmed && m.kind != IncidentKind::Dive) ? Tr("%s em %s") : Tr("%s x %s"), off, vic);
         } else {
             ImGui::TextUnformatted(off);
         }
@@ -1026,6 +1031,7 @@ void RenderIncidentCard(ImDrawList* dl, float contentW, VarState& state) {
     const auto& teams = g_controller.Teams();
     const int32_t offSlot = g_controller.DetectedOffenderSlot();
     const int32_t vicSlot = g_controller.DetectedVictimSlot();
+    const bool rolesKnown = g_controller.DetectedRolesConfirmed();
     const float boxDist = g_controller.ActiveSignedBoxDistance();
     const bool inBox = (boxDist < 0.0f);
 
@@ -1059,16 +1065,16 @@ void RenderIncidentCard(ImDrawList* dl, float contentW, VarState& state) {
     // The suspect play says so in words (the gold pulse alone is not self-explanatory)
     const auto& zoneMarkers = g_controller.ReplayMarkers();
     const int zoneSel = g_controller.SelectedMarkerIndex();
-    const bool zoneSuspect = zoneSel >= 0 && zoneSel < static_cast<int>(zoneMarkers.size()) &&
-                             zoneMarkers[static_cast<size_t>(zoneSel)].topSuspect;
+    const bool zoneSuspect = g_controller.SelectedMarkerApplied() && zoneSel >= 0 &&
+                             zoneSel < static_cast<int>(zoneMarkers.size()) && zoneMarkers[static_cast<size_t>(zoneSel)].topSuspect;
     if (zoneSuspect) std::snprintf(zone, sizeof(zone), "%s", Tr("PROVÁVEL FALTA NÃO MARCADA"));
     const float zoneW = TrackedW(zone);
     Tracked(dl, ImVec2(e.x - pad - zoneW, y1), zoneSuspect ? C::Suspect : inBox ? C::Red : C::Text3, zone);
     // The play under review is the suspect of this replay: gold dot with a ring, matching its timeline marker
     const auto& cardMarkers = g_controller.ReplayMarkers();
     const int cardSel = g_controller.SelectedMarkerIndex();
-    const bool cardSuspect = cardSel >= 0 && cardSel < static_cast<int>(cardMarkers.size()) &&
-                             cardMarkers[static_cast<size_t>(cardSel)].topSuspect;
+    const bool cardSuspect = g_controller.SelectedMarkerApplied() && cardSel >= 0 &&
+                             cardSel < static_cast<int>(cardMarkers.size()) && cardMarkers[static_cast<size_t>(cardSel)].topSuspect;
     dl->AddCircleFilled(ImVec2(p.x + pad + U(4), y1 + row1H * 0.5f), U(4), cardSuspect ? C::Suspect : sev, 12);
     if (cardSuspect) dl->AddCircle(ImVec2(p.x + pad + U(4), y1 + row1H * 0.5f), U(6.5f), C::Suspect, 16, std::max(1.0f, Uf(1.2f)));
     const float titleMaxW = std::max(U(40), contentW - pad * 2 - zoneW - U(26));
@@ -1083,7 +1089,10 @@ void RenderIncidentCard(ImDrawList* dl, float contentW, VarState& state) {
     char focusLabel[48];
     g_controller.FormatNextCameraFocusLabelBuf(focusLabel, sizeof(focusLabel));
     if (IconButton(dl, "##cam_focus", ImVec2(camX, btnY), btn, CameraIconAdapter, focusLabel)) g_controller.CycleCameraFocus(state);
-    if (IconButton(dl, "##swap_roles", ImVec2(swapX, btnY), btn, SwapIconAdapter, Tr("Trocar infrator e vítima"))) g_controller.InvertDetectedRoles();
+    if (IconButton(dl, "##swap_roles", ImVec2(swapX, btnY), btn, SwapIconAdapter,
+                   g_controller.DetectedRolesConfirmed() ? Tr("Trocar infrator e vítima") : Tr("Definir infrator e vítima"))) {
+        g_controller.InvertDetectedRoles();
+    }
 
     const float namesL = p.x + pad;
     const float namesR = camX - U(12);
@@ -1113,9 +1122,19 @@ void RenderIncidentCard(ImDrawList* dl, float contentW, VarState& state) {
             Text(dl, Txt::Body, ImVec2(x0, ny), C::Text3, Tr("Não definido"));
         }
     };
-    person(namesL, Tr("INFRATOR"), C::RoleOffender, offSlot);
-    IconChevron(dl, ImVec2(namesL + colW + arrowW * 0.5f, y2 + LineH(Txt::Caption) + U(4) + nameH * 0.5f), U(10), Dir::Right, C::Text3);
-    person(namesL + colW + arrowW, Tr("VÍTIMA"), C::RoleFouled, vicSlot);
+    if (rolesKnown && g_controller.DetectedIncidentKind() == IncidentKind::Dive) {
+        // A simulation: the diver is the one to punish, the opponent fouled nobody and was fouled by nobody
+        person(namesL, Tr("SIMULAÇÃO"), C::RoleOffender, offSlot);
+        person(namesL + colW + arrowW, Tr("ADVERSÁRIO"), C::Text2, vicSlot);
+    } else if (rolesKnown) {
+        person(namesL, Tr("INFRATOR"), C::RoleOffender, offSlot);
+        IconChevron(dl, ImVec2(namesL + colW + arrowW * 0.5f, y2 + LineH(Txt::Caption) + U(4) + nameH * 0.5f), U(10), Dir::Right, C::Text3);
+        person(namesL + colW + arrowW, Tr("VÍTIMA"), C::RoleFouled, vicSlot);
+    } else {
+        // No proven contact: the two players of the duel, without saying who fouled whom
+        person(namesL, Tr("DISPUTA"), C::Text2, offSlot);
+        person(namesL + colW + arrowW, Tr("DISPUTA"), C::Text2, vicSlot);
+    }
 
     ImGui::SetCursorScreenPos(p);
     ImGui::Dummy(ImVec2(contentW, h));
@@ -1251,6 +1270,8 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
     const bool configure = (g_controller.Page() == HudPage::Configure);
     const int32_t activeOff = configure ? g_controller.DraftOffenderSlot() : g_controller.DetectedOffenderSlot();
     const int32_t activeVic = configure ? g_controller.DraftVictimSlot() : g_controller.DetectedVictimSlot();
+    // On the decision page the user names the offender; elsewhere roles only for a call or a proven contact
+    const bool rolesKnown = configure || g_controller.DetectedRolesConfirmed();
 
     float offsideLineX = -1.0f; // screen x of the offside line when drawn
     if (sync.hasSnapshot && std::fabs(spot.x) >= 22.0f) {
@@ -1448,8 +1469,8 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
             dl->AddCircle(pp, rHero + Uf(4.2f), ring, 0, std::max(1.6f, Uf(2.2f)));
             PitchToken(dl, numFontHero, pp, rHero, teams[SlotToTeam(slot)], players[slot].shirtNumber, 1.0f);
         };
-        hero(activeVic, C::RoleFouled);
-        hero(activeOff, C::RoleOffender);
+        hero(activeVic, rolesKnown ? C::RoleFouled : C::Text2);
+        hero(activeOff, rolesKnown ? C::RoleOffender : C::Text2);
 
         // 5. Ball: soft glow, white body, dark rim
         dl->AddCircleFilled(ballDraw, br + Uf(4.0f), IM_COL32(255, 255, 255, 40), 0);
@@ -1528,8 +1549,11 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                 if (tagCount < 2) { tagMin[tagCount] = best; tagMax[tagCount] = bEnd; ++tagCount; }
             };
             const bool vicBelow = !bothOn || sn.playerPos[activeVic].z >= sn.playerPos[activeOff].z;
-            tag(0, activeOff, Tr("INFRATOR"), C::RoleOffender, !vicBelow);
-            tag(1, activeVic, Tr("VÍTIMA"), C::RoleFouled, vicBelow);
+            const bool dive = !configure && rolesKnown && g_controller.DetectedIncidentKind() == IncidentKind::Dive;
+            tag(0, activeOff, dive ? Tr("SIMULAÇÃO") : rolesKnown ? Tr("INFRATOR") : Tr("DISPUTA"),
+                rolesKnown ? C::RoleOffender : C::Text2, !vicBelow);
+            tag(1, activeVic, dive ? Tr("ADVERSÁRIO") : rolesKnown ? Tr("VÍTIMA") : Tr("DISPUTA"),
+                (rolesKnown && !dive) ? C::RoleFouled : C::Text2, vicBelow);
         }
 
         // 7. Offside label: beside the line (never across it), wherever it covers the fewest tokens, the ball and
@@ -1545,6 +1569,16 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                 const float h = std::min(a1.y, b1.y) - std::max(a0.y, b0.y);
                 return (w > 0.0f && h > 0.0f) ? w * h : 0.0f;
             };
+            // The restart cross and its label (drawn later, on the decision page) keep the area above and below it
+            const bool restartShown = IsNonZeroVec(spot) && g_controller.Page() == HudPage::Configure;
+            ImVec2 rsMin(0, 0), rsMax(0, 0);
+            if (restartShown) {
+                const ImVec2 sp = toScreen(spot.x, spot.z);
+                const float half = (TrackedW(Tr("COBRANÇA")) + U(10)) * 0.5f;
+                const float reach = std::max(Uf(6.0f), 5.0f) + Uf(7.0f) + LineH(Txt::Caption) + U(4);
+                rsMin = ImVec2(sp.x - half, sp.y - reach);
+                rsMax = ImVec2(sp.x + half, sp.y + reach);
+            }
             static int s_offPrev = -1;
             float bestCost = 1e30f;
             ImVec2 best(0, 0);
@@ -1567,6 +1601,7 @@ void RenderPitch(ImDrawList* dl, float contentW, float radarH, VarState& state) 
                     }
                     cost += overlapArea(a, b, ImVec2(ballDraw.x - br, ballDraw.y - br), ImVec2(ballDraw.x + br, ballDraw.y + br)) * 6.0f;
                     for (int t = 0; t < tagCount; ++t) cost += overlapArea(a, b, tagMin[t], tagMax[t]) * 20.0f;
+                    if (restartShown) cost += overlapArea(a, b, rsMin, rsMax) * 20.0f;
                     if (side * 8 + row == s_offPrev) { prevCost = cost; prevAt = a; }
                     if (cost < bestCost) { bestCost = cost; best = a; found = true; bestKey = side * 8 + row; }
                 }
@@ -2028,7 +2063,7 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
         const float tx = p.x + bs + U(12);
         Tracked(dl, ImVec2(tx, p.y - Uf(1)), C::Text3, Tr("DECISÃO"));
         TextFit(dl, Txt::Title, ImVec2(tx, p.y + LineH(Txt::Caption) + U(1)), contentW - (tx - p.x), C::Text,
-                VarHudController::ActionLabel(g_controller.DraftAction()));
+                g_controller.DraftTitle());
         ImGui::SetCursorScreenPos(p);
         ImGui::Dummy(ImVec2(contentW, std::max(bs, LineH(Txt::Caption) + LineH(Txt::Title) + U(2)) + U(12)));
     }
@@ -2162,9 +2197,16 @@ void RenderDecisionPage(ImDrawList* dl, float contentW, float radarH, const HudC
                 break;
             }
             case ConfigField::Offender: {
-                lbl = Tr("Jogador");
+                // The player who commits the foul (or is carded, for a card edit): "Jogador" alone was ambiguous
+                lbl = (g_controller.DraftAction() == VarAction::EditCard) ? Tr("Jogador")
+                    : (g_controller.DraftAnnulGoal() == 1) ? Tr("Impedido")
+                    : Tr("Infrator");
                 const int32_t s = g_controller.DraftOffenderSlot();
-                g_controller.FormatPlayerBroadcastBuf(s, nameBuf, sizeof(nameBuf));
+                if (IsValidSlot(s)) {
+                    g_controller.FormatPlayerBroadcastBuf(s, nameBuf, sizeof(nameBuf));
+                } else {
+                    std::snprintf(nameBuf, sizeof(nameBuf), "%s", Tr("Escolha o jogador"));
+                }
                 value = nameBuf;
                 if (IsValidSlot(s)) {
                     dotRgb = teams[players[s].team == 1 ? 1 : 0].primaryColor;

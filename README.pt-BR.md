@@ -35,9 +35,9 @@ O VAR para PES 2021 é um módulo de revisão de vídeo para partidas offline do
 
 | Área | Descrição |
 | --- | --- |
-| **Detecção de lances** | A partida é amostrada a 60 Hz. Carrinhos, botes, trancos, quedas e simulações são marcados na barra do replay junto com as faltas, cartões e vantagens do árbitro, cada um com infrator, vítima, local e zona. |
-| **Indicador de falta não marcada** | Os lances que o árbitro não puniu recebem uma nota pelo tipo de entrada, se o adversário caiu pelo contato, posição em relação à área e distância do contato. A maior nota é destacada na barra do replay e indicada no cartão do lance. |
-| **Decisões** | Marcar falta ou pênalti num lance anterior, anular falta ou pênalti, converter em pênalti, inverter a falta, ajustar os cartões de qualquer jogador e dar escanteio, tiro de meta ou lateral. |
+| **Detecção de lances** | A partida é amostrada a 60 Hz. Carrinhos, botes, trancos, quedas e simulações são marcados na barra do replay junto com as faltas, cartões e vantagens do árbitro, cada um com local e zona. Infrator e vítima só aparecem numa marcação do árbitro ou num contato comprovado, uma disputa sem reação de contato aparece sem papéis. |
+| **Indicador de falta não marcada** | Os lances que o árbitro não puniu recebem uma nota pelo tipo de entrada, se o adversário caiu pelo contato, posição em relação à área e distância do contato. A maior nota é destacada na barra do replay e indicada no cartão do lance. Só um lance em que o adversário reagiu ao contato pode ser destacado, e o contato de um lance que o árbitro já marcou nunca é oferecido de novo. |
+| **Decisões** | Marcar falta ou pênalti num lance anterior, anular gol (falta, mão ou impedimento), anular falta ou pênalti, converter em pênalti, inverter a falta, ajustar os cartões de qualquer jogador e dar escanteio, tiro de meta ou lateral. |
 | **Pool de decisões** | Uma decisão de lance e até 32 ajustes de cartão, aplicados juntos e em ordem ao sair do replay. |
 | **Integração com a engine** | As decisões passam pela máquina de estados da partida (`MatchFSM`) e pelo registro de cartões da própria engine. Se a engine não montar a cobrança, todas as alterações daquele tick são desfeitas. |
 | **Replay após a decisão** | Numa falta ou pênalti marcado com a bola rolando, a engine repete o momento revisado depois das cenas da parada, pelo próprio mecanismo de clipe pendente. Pode ser desligado. |
@@ -167,7 +167,7 @@ Todos os atalhos podem ser alterados em **OPÇÕES > Controles**. Com o painel e
 
 - Suporta apenas o executável Steam `v1.7.2.0`.
 - Apenas partidas offline: Exibição, Master Liga, Rumo ao Estrelato e Copas. Rede, DRM e modos online não são tocados.
-- Uma decisão vale para a parada em que foi tomada. Gols não podem ser anulados.
+- Uma decisão vale para a parada em que foi tomada. Um gol pode ser anulado até a saída de bola.
 - O replay após a decisão exige falta ou pênalti marcado com a bola rolando e o momento revisado ainda na memória de replay do jogo (cerca de 11 s de jogo). O replay instantâneo da engine pode ser exibido antes.
 - O controle abre e recolhe o painel e controla o replay. A navegação dentro do painel usa teclado e mouse.
 

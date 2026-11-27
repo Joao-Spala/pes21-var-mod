@@ -50,6 +50,7 @@ struct HudMenuOption {
     bool        openSquad    = false;
     bool        invertRoles  = false;
     bool        useLiveFoul  = false; // acts on the foul / penalty the match is currently stopped for
+    int8_t      annulGoal    = -1;    // annuls the goal the match is stopped for (0 foul or handball, 1 offside)
 };
 
 // Pure geometric viewport for the 2D Broadcast Pitch Radar (supports full pitch + auto penalty-box zoom)
@@ -140,6 +141,8 @@ public:
     int SelectedIndex() const { return selectedIndex_; }
     int SquadTeamFilter() const { return squadTeamFilter_; }
     int SelectedMarkerIndex() const { return selectedMarkerIndex_; }
+    // The selected marker is the play shown on the card (its context was applied, cursor within 1.8 s of it)
+    bool SelectedMarkerApplied() const { return selectedMarkerApplied_; }
     int RadarZoomOverride() const { return radarZoomOverride_; }
     bool GetLockedMarkerTime(int32_t& outPhase, float& outTime) const;
 
@@ -158,6 +161,9 @@ public:
     int32_t      DetectedOffenderSlot() const { return detectedOffenderSlot_; }
     int32_t      DetectedVictimSlot() const { return detectedVictimSlot_; }
     bool         HasDetectedContact() const { return hasDetectedContact_; }
+    // Offender / victim are real roles (official call, proven contact or set by the user); otherwise the two
+    // players are only shown as a duel
+    bool         DetectedRolesConfirmed() const { return detectedRolesConfirmed_; }
     IncidentKind DetectedIncidentKind() const { return detectedKind_; }
     // Stored in PT-BR, returned in the selected UI language
     const char*  DetectedIncidentLabel() const { return Tr(detectedLabel_); }
@@ -176,6 +182,8 @@ public:
     int32_t   DraftVictimSlot() const { return draftVictimSlot_; }
     uint32_t  DraftSourceEventId() const { return draftSourceEventId_; }
     bool      DraftTargetsLive() const { return draftTargetsLive_; }
+    int8_t    DraftAnnulGoal() const { return draftAnnulGoal_; }
+    const char* DraftTitle() const; // translated
     int8_t    CurrentRosterOf(int32_t slot) const {
         return (slot >= 0 && slot < 22) ? players_[static_cast<size_t>(slot)].rosterIdx : static_cast<int8_t>(-1);
     }
@@ -271,10 +279,14 @@ private:
     bool     hasLiveFoul_ = false;
     VarEvent liveFoulEvent_{};
     bool     draftTargetsLive_ = false;
+    int8_t   draftAnnulGoal_ = -1;
+    int      mainIndexBeforeConfigure_ = 0; // Back returns to the option the user came from
+    bool     selectedMarkerApplied_ = false;
     bool     draftFromLiveFoul_ = false;
     bool     IsActiveEventTheLiveFoul() const;
 
     bool         hasDetectedContact_   = false;
+    bool         detectedRolesConfirmed_ = false;
     int32_t      detectedOffenderSlot_ = -1;
     int32_t      detectedVictimSlot_   = -1;
     Vec3         detectedSpotPos_{};

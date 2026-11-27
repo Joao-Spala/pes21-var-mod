@@ -357,6 +357,7 @@ HRESULT __fastcall Detour_GrSwapChainPresent(void* grSwapChain, UINT syncInterva
     ++g_presentDepth;
     const uint64_t workStart = PresentQpc();
     MaybeLogPeriodicPerf();
+    MatchHooks::CheckSimStall();
 
     if (IsValidPtr(grSwapChain) && !g_stopRequested.load(std::memory_order_acquire)) {
         IDXGISwapChain* swapChain = *reinterpret_cast<IDXGISwapChain* const*>(

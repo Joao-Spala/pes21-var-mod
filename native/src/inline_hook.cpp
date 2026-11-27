@@ -450,8 +450,9 @@ bool InlineHook::Uninstall() {
 
     // The stub (relay + trampoline) is never freed or reused: another thread may still be executing the
     // trampoline it entered before the unpatch. Keeping a few dozen bytes per hook is the safe trade.
+    // trampoline_ stays valid: a detour that was already running (or blocked on a lock) when the target was
+    // unpatched still calls Original() afterwards, and the stub it points to is never freed.
     stubMem_ = nullptr;
-    trampoline_ = nullptr;
     originalBytes_.clear();
     target_ = 0;
     stolenLen_ = 0;

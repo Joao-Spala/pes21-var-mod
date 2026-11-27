@@ -181,6 +181,12 @@ const char* VarHudController::ActionLabel(VarAction a) {
     }
 }
 
+const char* VarHudController::DraftTitle() const {
+    if (draftAnnulGoal_ == 1) return Tr("Anular gol por impedimento");
+    if (draftAnnulGoal_ == 0) return Tr("Anular gol");
+    return ActionLabel(draftAction_);
+}
+
 const char* VarHudController::ScalePresetLabel(int preset) {
     switch (preset) {
         case 0:  return Tr("Compacto");
@@ -270,6 +276,7 @@ bool VarHudController::IsSameStoppage(const VarEvent& a, const VarEvent& b) {
 
 void VarHudController::ApplySelectedMarkerToContext(const ReplayMarker& m) {
     hasDetectedContact_   = IsValidSlot(m.offenderSlot);
+    detectedRolesConfirmed_ = m.rolesConfirmed || m.nearFoul; // a contact reaction proves who caused it
     detectedOffenderSlot_ = m.offenderSlot;
     detectedOffenderUnknown_ = false;
     detectedVictimSlot_   = m.victimSlot;
@@ -354,6 +361,7 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
             focused_ = false;
             page_ = HudPage::Main;
             returnPage_ = HudPage::Main;
+            mainOptions_.clear();
             selectedIndex_ = 0;
             selectedMarkerIndex_ = -1;
             manualMarkerLock_ = false;
@@ -438,6 +446,7 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
 
         if (hasActiveEvent_ && IsValidSlot(activeEvent_.offenderSlot)) {
             hasDetectedContact_ = true;
+            detectedRolesConfirmed_ = true;
             detectedOffenderSlot_ = activeEvent_.offenderSlot;
             detectedOffenderUnknown_ = false;
             detectedVictimSlot_ = IsValidSlot(activeEvent_.victimSlot) ? activeEvent_.victimSlot : -1;
@@ -449,29 +458,23 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
                           : (activeEvent_.type == VarEventType::Advantage) ? IncidentKind::Advantage
                           : IncidentKind::Foul;
             VarState::FormatIncidentLabel(detectedKind_, ActiveSignedBoxDistance() < 0.0f, detectedLabel_, sizeof(detectedLabel_));
-        } else if (sync.hasSnapshot && IsValidSlot(sync.snapshot.closestA) && IsValidSlot(sync.snapshot.closestB)) {
-            int32_t vic = sync.snapshot.closestA;
-            int32_t off = sync.snapshot.closestB;
-            if (sync.snapshot.ballOwnerSlot == sync.snapshot.closestB ||
-                sync.snapshot.recentBallOwnerSlot == sync.snapshot.closestB) {
-                vic = sync.snapshot.closestB;
-                off = sync.snapshot.closestA;
-            }
-            hasDetectedContact_ = (sync.snapshot.closestDistSq <= 6.25f);
-            detectedOffenderSlot_ = off;
+        } else if (DetectedIncident inc{}; sync.hasSnapshot &&
+                   VarState::DetectPhysicalIncident(sync.snapshot, tel.pitchDims, tel.teamAttackDir, inc)) {
+            // Same rules as the replay markers: a contact reaction caused by an opponent, a simulation, or a
+            // challenge within reach (a duel, without roles). Two players merely close to each other are nothing.
+            hasDetectedContact_ = true;
+            detectedRolesConfirmed_ = inc.rolesConfirmed;
+            detectedOffenderSlot_ = inc.offenderSlot;
             detectedOffenderUnknown_ = false;
-            detectedVictimSlot_ = vic;
-            detectedSpotPos_ = Vec3{
-                0.5f * (sync.snapshot.playerPos[off].x + sync.snapshot.playerPos[vic].x),
-                0.0f,
-                0.5f * (sync.snapshot.playerPos[off].z + sync.snapshot.playerPos[vic].z)
-            };
-            detectedKind_ = hasDetectedContact_ ? IncidentKind::CloseContact : IncidentKind::None;
-            std::snprintf(detectedLabel_, sizeof(detectedLabel_), "%s",
-                          hasDetectedContact_ ? "CONTATO" : "JOGO SEGUE");
+            detectedVictimSlot_ = inc.victimSlot;
+            detectedSpotPos_ = inc.pos;
+            detectedKind_ = inc.kind;
+            VarState::FormatIncidentLabel(inc.kind, inc.insideBox, detectedLabel_, sizeof(detectedLabel_));
         } else if (tel.replayFocusSlot >= 1 && tel.replayFocusSlot <= 22) {
+            // The camera follows a player (usually the attacker): that says nothing about a foul
             hasDetectedContact_ = false;
-            detectedOffenderSlot_ = tel.replayFocusSlot - 1;
+            detectedRolesConfirmed_ = false;
+            detectedOffenderSlot_ = -1;
             detectedOffenderUnknown_ = false;
             detectedVictimSlot_ = -1;
             detectedSpotPos_ = tel.liveBallPos;
@@ -479,6 +482,7 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
             std::snprintf(detectedLabel_, sizeof(detectedLabel_), "%s", "JOGO SEGUE");
         } else {
             hasDetectedContact_ = false;
+            detectedRolesConfirmed_ = false;
             detectedOffenderSlot_ = -1;
             detectedOffenderUnknown_ = false;
             detectedVictimSlot_ = -1;
@@ -496,6 +500,7 @@ void VarHudController::UpdateContext(const LiveTelemetry& tel,
             focused_ = true;
             page_ = HudPage::Main;
             returnPage_ = HudPage::Main;
+            mainOptions_.clear(); // the first option of this stoppage (annul goal / overturn call) is selected
             selectedIndex_ = 0;
         }
     }
@@ -551,10 +556,12 @@ void VarHudController::UpdateReplayMarkers(const std::vector<ReplayMarker>& mark
     }
 
     selectedMarkerIndex_ = bestIdx;
+    selectedMarkerApplied_ = false;
     if (bestIdx >= 0 && page_ != HudPage::Configure) {
         // Snap detected offender/victim/label to the active timeline marker if within 1.8s of cursor
         if (bestDt <= 108.0f) {
             ApplySelectedMarkerToContext(markers[bestIdx]);
+            selectedMarkerApplied_ = true;
         }
     }
 }
@@ -647,6 +654,13 @@ std::string VarHudController::FormatNextCameraFocusLabel() const {
 
 void VarHudController::InvertDetectedRoles() {
     if (!IsValidSlot(detectedOffenderSlot_) && !IsValidSlot(detectedVictimSlot_)) return;
+    if (!detectedRolesConfirmed_ && IsValidSlot(detectedOffenderSlot_) && IsValidSlot(detectedVictimSlot_)) {
+        // A duel had no roles: the first press names them as shown (left = offender), the next ones swap
+        detectedRolesConfirmed_ = true;
+        manualMarkerLock_ = true;
+        seekLockUntilMs_ = GetTickCount64() + 500ULL;
+        return;
+    }
     // (an unknown opponent after a first invert has only the victim set)
     if (IsValidSlot(detectedOffenderSlot_) && IsValidSlot(detectedVictimSlot_)) {
         std::swap(detectedOffenderSlot_, detectedVictimSlot_);
@@ -660,6 +674,7 @@ void VarHudController::InvertDetectedRoles() {
         detectedVictimSlot_ = -1;
         detectedOffenderUnknown_ = false;
     }
+    detectedRolesConfirmed_ = true; // the user set who is who
     manualMarkerLock_ = true;
     seekLockUntilMs_ = GetTickCount64() + 500ULL;
     if (page_ == HudPage::Configure) {
@@ -705,19 +720,26 @@ bool VarHudController::IsEffectiveRadarZoomed() const {
 }
 
 void VarHudController::RebuildMainOptions() {
+    // The list is rebuilt while the user scrubs: keep the selection on the same option, never on whatever now
+    // sits at the same index (it could be a different decision)
+    const char* prevLabel = nullptr;
+    int8_t prevAnnul = -1;
+    if (page_ == HudPage::Main && selectedIndex_ >= 0 && selectedIndex_ < static_cast<int>(mainOptions_.size())) {
+        prevLabel = mainOptions_[static_cast<size_t>(selectedIndex_)].label;
+        prevAnnul = mainOptions_[static_cast<size_t>(selectedIndex_)].annulGoal;
+    }
     mainOptions_.clear();
 
     const VarEventType ctxType = hasActiveEvent_ ? activeEvent_.type : VarEventType::NoFoul;
     const bool inBoxNow = (ActiveSignedBoxDistance() < 0.0f);
 
     if (ctxType == VarEventType::NoFoul) {
-        if (inBoxNow) {
-            mainOptions_.push_back({ "Marcar pênalti", "Infração dentro da área", VarAction::RetroactivePenalty, CardKind::None, false, false, false });
-            mainOptions_.push_back({ "Marcar falta", "Tiro livre fora da área", VarAction::RetroactiveFreeKick, CardKind::None, false, false, false });
-        } else {
-            mainOptions_.push_back({ "Marcar falta", "Infrator e local já preenchidos", VarAction::RetroactiveFreeKick, CardKind::None, false, false, false });
-            mainOptions_.push_back({ "Marcar pênalti", "Cobrança da marca penal", VarAction::RetroactivePenalty, CardKind::None, false, false, false });
-        }
+        // Fixed order (falta, pênalti): the position of an option never changes while scrubbing
+        const bool knownOffender = IsValidSlot(detectedOffenderSlot_);
+        mainOptions_.push_back({ "Marcar falta", knownOffender ? "Confira o infrator e o local" : "Escolha o infrator e o local",
+                                 VarAction::RetroactiveFreeKick, CardKind::None, false, false, false });
+        mainOptions_.push_back({ "Marcar pênalti", inBoxNow ? "Infração dentro da área" : "Cobrança da marca penal",
+                                 VarAction::RetroactivePenalty, CardKind::None, false, false, false });
         mainOptions_.push_back({ "Aplicar cartão", "Qualquer jogador, com ou sem falta", VarAction::EditCard, CardKind::Yellow, false, true, false });
         mainOptions_.push_back({ "Bola parada", "Escanteio, tiro de meta ou lateral", VarAction::RestartCorner, CardKind::None, false, false, false });
     } else if (ctxType == VarEventType::Foul) {
@@ -737,6 +759,22 @@ void VarHudController::RebuildMainOptions() {
         mainOptions_.push_back({ "Anular marcação", "Retira o cartão e devolve a posse", VarAction::OverturnCancel, CardKind::None, false, false, false });
     }
 
+    // The goal the match is stopped for can be annulled until the kickoff: a free kick for the defending team
+    // replaces the kickoff and the goal leaves the score, the scorer's stats and the scorers list
+    HudMenuOption annulOptions[2];
+    int annulCount = 0;
+    if (tel_.goalAnnulAvailable && (tel_.goalCreditedTeam == 0 || tel_.goalCreditedTeam == 1)) {
+        HudMenuOption foul{ "Anular gol", "Falta ou mão do ataque · tiro livre à defesa",
+                            VarAction::RetroactiveFreeKick, CardKind::None, false, false, false };
+        foul.annulGoal = 0;
+        HudMenuOption offside{ "Anular gol por impedimento", "Tiro livre indireto para a defesa",
+                               VarAction::RetroactiveFreeKick, CardKind::None, false, false, false };
+        offside.annulGoal = 1;
+        annulOptions[0] = foul;
+        annulOptions[1] = offside;
+        annulCount = 2;
+    }
+
     // The foul / penalty the match is stopped for can always be overturned, even while the cursor is on an
     // earlier play (review an earlier incident, mark it, and cancel the current call in the same pool)
     if (hasLiveFoul_ && !IsActiveEventTheLiveFoul()) {
@@ -745,7 +783,21 @@ void VarHudController::RebuildMainOptions() {
                          livePen ? "Cancela o pênalti da parada atual" : "Cancela a falta da parada atual",
                          VarAction::OverturnCancel, CardKind::None, false, false, false };
         o.useLiveFoul = true;
-        mainOptions_.push_back(o);
+        // The match is stopped for this call: overturning it is the decision most likely wanted, first in the list
+        mainOptions_.insert(mainOptions_.begin(), o);
+    }
+    // During a goal stoppage the annulment comes first: "Marcar falta" would add a free kick and keep the goal
+    if (annulCount > 0) mainOptions_.insert(mainOptions_.begin(), annulOptions, annulOptions + annulCount);
+    if (prevLabel) {
+        bool kept = false;
+        for (size_t i = 0; i < mainOptions_.size(); ++i) {
+            if (std::strcmp(mainOptions_[i].label, prevLabel) == 0 && mainOptions_[i].annulGoal == prevAnnul) {
+                selectedIndex_ = static_cast<int>(i);
+                kept = true;
+                break;
+            }
+        }
+        if (!kept) selectedIndex_ = 0; // the selected decision is gone: never leave the cursor on another one
     }
 
     if (page_ == HudPage::Main && selectedIndex_ >= static_cast<int>(mainOptions_.size())) {
@@ -765,7 +817,12 @@ bool VarHudController::IsActiveEventTheLiveFoul() const {
 void VarHudController::RebuildConfigFields() {
     configFields_.clear();
 
-    if (draftAction_ == VarAction::OverturnCancel) {
+    if (draftAnnulGoal_ >= 0) {
+        // The kick always goes to the defending team: no team field. Offside carries no card.
+        if (draftAnnulGoal_ == 0) configFields_.push_back(ConfigField::Card);
+        configFields_.push_back(ConfigField::Offender);
+        configFields_.push_back(ConfigField::Spot);
+    } else if (draftAction_ == VarAction::OverturnCancel) {
         configFields_.push_back(ConfigField::Team);
     } else if (IsManualRestartAction(draftAction_)) {
         configFields_.push_back(ConfigField::RestartType);
@@ -891,6 +948,7 @@ void VarHudController::ApplySpotPreset(int preset) {
 }
 
 void VarHudController::PreFillDraft(VarAction action, CardKind presetCard, bool invertRoles) {
+    draftAnnulGoal_ = -1;
     draftAction_ = action;
     draftCard_ = presetCard;
     draftOrigCard_ = hasActiveEvent_ ? activeEvent_.cardKind : CardKind::None;
@@ -914,26 +972,14 @@ void VarHudController::PreFillDraft(VarAction action, CardKind presetCard, bool 
         vicSlot = detectedVictimSlot_;
     } else if (IsValidSlot(detectedOffenderSlot_)) {
         offSlot = detectedOffenderSlot_;
-        vicSlot = IsValidSlot(detectedVictimSlot_) ? detectedVictimSlot_ : -1;
+        // A duel (no proven contact) only suggests the challenger: nobody is named as the fouled player
+        vicSlot = (detectedRolesConfirmed_ && IsValidSlot(detectedVictimSlot_)) ? detectedVictimSlot_ : -1;
     } else if (hasActiveEvent_ && IsValidSlot(activeEvent_.offenderSlot)) {
         offSlot = activeEvent_.offenderSlot;
         vicSlot = IsValidSlot(activeEvent_.victimSlot) ? activeEvent_.victimSlot : -1;
-    } else if (tel_.replayFocusSlot >= 1 && tel_.replayFocusSlot <= 22) {
-        offSlot = tel_.replayFocusSlot - 1;
-        if (sync_.hasSnapshot) {
-            if (sync_.snapshot.closestA == offSlot) vicSlot = sync_.snapshot.closestB;
-            else if (sync_.snapshot.closestB == offSlot) vicSlot = sync_.snapshot.closestA;
-        }
-    } else if (sync_.hasSnapshot && IsValidSlot(sync_.snapshot.closestA) && IsValidSlot(sync_.snapshot.closestB)) {
-        if (sync_.snapshot.ballOwnerSlot == sync_.snapshot.closestA ||
-            sync_.snapshot.recentBallOwnerSlot == sync_.snapshot.closestA) {
-            vicSlot = sync_.snapshot.closestA;
-            offSlot = sync_.snapshot.closestB;
-        } else {
-            vicSlot = sync_.snapshot.closestB;
-            offSlot = sync_.snapshot.closestA;
-        }
     }
+    // Nothing detected: no guess from the camera focus or from two players being close. The decision page asks
+    // for the offender ("Escolha o jogador").
 
     // No placeholder offender (a goalkeeper would be carded): when nobody was identified the decision page
     // shows "Jogador" and the user must pick him before confirming. No placeholder victim either: a filler slot would be written to FoulInfo and the history as the fouled player
@@ -976,6 +1022,7 @@ void VarHudController::PreFillDraft(VarAction action, CardKind presetCard, bool 
 }
 
 void VarHudController::PreFillDirectCardForSlot(int32_t slot) {
+    draftAnnulGoal_ = -1;
     draftAction_ = VarAction::EditCard;
     draftOrigCard_ = CardKind::None;
     draftOrigOffenderSlot_ = -1;
@@ -1098,6 +1145,18 @@ void VarHudController::AdjustField(ConfigField field, int delta, VarState& state
             break;
         }
         case ConfigField::Offender: {
+            if (draftAnnulGoal_ >= 0 && (tel_.goalCreditedTeam == 0 || tel_.goalCreditedTeam == 1)) {
+                const int32_t base = tel_.goalCreditedTeam * 11;
+                if (!IsValidSlot(draftOffenderSlot_) || SlotToTeam(draftOffenderSlot_) != tel_.goalCreditedTeam) {
+                    draftOffenderSlot_ = (delta >= 0) ? base + 1 : base + 10; // outfield first (slot 0 is the keeper)
+                } else {
+                    draftOffenderSlot_ = base + ((draftOffenderSlot_ - base + delta) % 11 + 11) % 11;
+                }
+                draftBenefitedTeam_ = 1 - tel_.goalCreditedTeam;
+                if (IsValidSlot(draftVictimSlot_) && SlotToTeam(draftVictimSlot_) == tel_.goalCreditedTeam) draftVictimSlot_ = -1;
+                if (draftSpotPreset_ == 0) ApplySpotPreset(0);
+                break;
+            }
             if (!IsValidSlot(draftOffenderSlot_)) {
                 const int32_t offTeam = IsValidSlot(draftVictimSlot_) ? 1 - SlotToTeam(draftVictimSlot_)
                                                                       : 1 - draftBenefitedTeam_;
@@ -1136,7 +1195,7 @@ void VarHudController::AdjustField(ConfigField field, int delta, VarState& state
         }
         case ConfigField::Back: {
             page_ = returnPage_;
-            selectedIndex_ = 0;
+            selectedIndex_ = (returnPage_ == HudPage::Main) ? mainIndexBeforeConfigure_ : 0;
             break;
         }
     }
@@ -1315,6 +1374,7 @@ void VarHudController::SelectTab(HudPage tab) {
 void VarHudController::SelectMainOption(int index, VarState& state) {
     if (index < 0 || index >= static_cast<int>(mainOptions_.size())) return;
     selectedIndex_ = index;
+    mainIndexBeforeConfigure_ = index;
     const auto& opt = mainOptions_[index];
     if (opt.keepDecision) {
         // Keep the referee's call on THIS event: drop only a pending play decision about this event.
@@ -1346,6 +1406,7 @@ void VarHudController::SelectMainOption(int index, VarState& state) {
         hasActiveEvent_ = true;
         activeEvent_ = liveFoulEvent_;
         hasDetectedContact_ = IsValidSlot(liveFoulEvent_.offenderSlot);
+        detectedRolesConfirmed_ = true;
         detectedOffenderSlot_ = liveFoulEvent_.offenderSlot;
         detectedOffenderUnknown_ = false;
         detectedVictimSlot_ = IsValidSlot(liveFoulEvent_.victimSlot) ? liveFoulEvent_.victimSlot : -1;
@@ -1355,7 +1416,7 @@ void VarHudController::SelectMainOption(int index, VarState& state) {
     const bool targetsLive = (opt.action == VarAction::OverturnCancel) &&
                              ((opt.useLiveFoul && hasLiveFoul_) || IsActiveEventTheLiveFoul());
     PreFillDraft(opt.action, opt.presetCard, opt.invertRoles);
-    if (!opt.invertRoles && draftSourceEventId_ != 0 &&
+    if (!opt.invertRoles && draftSourceEventId_ != 0 && opt.annulGoal < 0 &&
         (opt.action == VarAction::ConvertToPenalty || opt.action == VarAction::ConvertToFreeKick ||
          opt.action == VarAction::RetroactivePenalty || opt.action == VarAction::RetroactiveFreeKick)) {
         VarVerdict probe{};
@@ -1373,8 +1434,32 @@ void VarHudController::SelectMainOption(int index, VarState& state) {
             RebuildConfigFields();
         }
     }
+    if (opt.annulGoal >= 0) {
+        // Offender from the team that scored, kick for the other one. The detected pair is swapped when the
+        // contact was read the other way round, and left empty (the user picks) when nobody fits.
+        const int32_t scorer = tel_.goalCreditedTeam;
+        draftAnnulGoal_ = opt.annulGoal;
+        // A new call about the goal: nothing of the event under the replay cursor (its card, its id) carries over
+        draftSourceEventId_ = 0;
+        draftOrigCard_ = CardKind::None;
+        draftOrigOffenderSlot_ = -1;
+        draftEventOffSlot_ = draftEventVicSlot_ = -1;
+        draftEventOffRoster_ = draftEventVicRoster_ = -1;
+        if (opt.annulGoal == 0) draftCard_ = CardKind::None;
+        // Only a detected offender of the scoring team is kept. A contact the other way round (a defender on an
+        // attacker) is no reason to annul the goal: the offender is left for the user to pick.
+        if (!(IsValidSlot(draftOffenderSlot_) && SlotToTeam(draftOffenderSlot_) == scorer)) draftOffenderSlot_ = -1;
+        if (IsValidSlot(draftVictimSlot_) && SlotToTeam(draftVictimSlot_) == scorer) draftVictimSlot_ = -1;
+        if (opt.annulGoal == 1) {
+            draftVictimSlot_ = -1;
+            draftCard_ = CardKind::None;
+        }
+        draftBenefitedTeam_ = 1 - scorer;
+        if (draftSpotPreset_ == 0) ApplySpotPreset(0); // spot of the (possibly swapped) offender
+        RebuildConfigFields();
+    }
     draftTargetsLive_ = targetsLive;
-    draftFromLiveFoul_ = (opt.useLiveFoul && hasLiveFoul_) || IsActiveEventTheLiveFoul();
+    draftFromLiveFoul_ = opt.annulGoal < 0 && ((opt.useLiveFoul && hasLiveFoul_) || IsActiveEventTheLiveFoul());
     returnPage_ = HudPage::Main;
     page_ = HudPage::Configure;
     selectedIndex_ = (opt.action == VarAction::OverturnCancel)
@@ -1397,6 +1482,23 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     const bool needsOffender = draftAction_ == VarAction::ConvertToPenalty || draftAction_ == VarAction::ConvertToFreeKick ||
                                draftAction_ == VarAction::RetroactivePenalty || draftAction_ == VarAction::RetroactiveFreeKick ||
                                draftAction_ == VarAction::EditCard;
+    if (draftAnnulGoal_ >= 0 && !tel_.goalAnnulAvailable) {
+        // The kickoff was taken (or the match moved on) while the page was open: nothing left to decide here
+        poolNoticeMsg_ = "O gol já não pode ser anulado";
+        poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
+        draftAnnulGoal_ = -1;
+        page_ = HudPage::Main;
+        selectedIndex_ = 0;
+        return;
+    }
+    if (draftAnnulGoal_ >= 0 && IsValidSlot(draftOffenderSlot_) && SlotToTeam(draftOffenderSlot_) != tel_.goalCreditedTeam) {
+        poolNoticeMsg_ = "Escolha um jogador do time que marcou o gol";
+        poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
+        for (size_t i = 0; i < configFields_.size(); ++i) {
+            if (configFields_[i] == ConfigField::Offender) { selectedIndex_ = static_cast<int>(i); break; }
+        }
+        return;
+    }
     if (needsOffender && !IsValidSlot(draftOffenderSlot_)) {
         poolNoticeMsg_ = "Escolha o jogador antes de confirmar";
         poolNoticeUntilMs_ = GetTickCount64() + 3600ULL;
@@ -1436,6 +1538,11 @@ void VarHudController::ArmCurrentDraft(VarState& state) {
     v.spotPos = draftSpotPos_;
     v.customSpot = draftCustomSpot_;
     v.targetsLiveSetPlay = (draftAction_ == VarAction::OverturnCancel) && draftTargetsLive_;
+    v.annulGoal = draftAnnulGoal_;
+    if (draftAnnulGoal_ >= 0) {
+        v.benefitedTeam = 1 - tel_.goalCreditedTeam;
+        if (draftAnnulGoal_ == 1) v.targetCard = CardKind::None;
+    }
     v.fromLiveFoul = draftFromLiveFoul_ && !draftDirectCardMode_;
     v.liveSetPlayKind = v.targetsLiveSetPlay ? static_cast<int8_t>(tel_.activeSetPlayKind) : static_cast<int8_t>(-1);
     v.armStoppage = tel_.stoppageCount;
@@ -1580,6 +1687,10 @@ std::string VarHudController::FormatSummaryOf(const VarVerdict& v) const {
         std::snprintf(buf, sizeof(buf), Tr("Lateral para %s"), teamStr);
     } else if (v.action == VarAction::ConvertToPenalty || v.action == VarAction::RetroactivePenalty) {
         std::snprintf(buf, sizeof(buf), Tr("Pênalti para %s · %s"), teamStr, CardLabel(v.targetCard));
+    } else if (v.annulGoal == 1) {
+        std::snprintf(buf, sizeof(buf), Tr("Gol anulado (impedimento) · tiro livre indireto para %s"), teamStr);
+    } else if (v.annulGoal == 0) {
+        std::snprintf(buf, sizeof(buf), Tr("Gol anulado · tiro livre para %s · %s"), teamStr, CardLabel(v.targetCard));
     } else if (v.action == VarAction::ConvertToFreeKick || v.action == VarAction::RetroactiveFreeKick) {
         std::snprintf(buf, sizeof(buf), Tr("Falta para %s · %s"), teamStr, CardLabel(v.targetCard));
     } else if (v.action == VarAction::EditCard) {
@@ -1801,11 +1912,14 @@ void VarHudController::HandleAction(NavAction action, VarState& state) {
             if (f != ConfigField::Confirm && f != ConfigField::Back) AdjustField(f, +1, state);
         } else if (action == NavAction::Back) {
             page_ = returnPage_;
-            selectedIndex_ = 0;
+            selectedIndex_ = (returnPage_ == HudPage::Main) ? mainIndexBeforeConfigure_ : 0;
         } else if (action == NavAction::Confirm) {
             const ConfigField f = configFields_[selectedIndex_];
             if (f == ConfigField::Confirm) ArmCurrentDraft(state);
-            else if (f == ConfigField::Back) { page_ = returnPage_; selectedIndex_ = 0; }
+            else if (f == ConfigField::Back) {
+                page_ = returnPage_;
+                selectedIndex_ = (returnPage_ == HudPage::Main) ? mainIndexBeforeConfigure_ : 0;
+            }
             else {
                 // Enter on a value row goes to the Confirm button (values change with left / right),
                 // so following the "Enter Confirmar" hint never silently changes a value.

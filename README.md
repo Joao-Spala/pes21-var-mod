@@ -35,9 +35,9 @@ It ships as a Sider module: a native x64 DLL and a Lua script.
 
 | Area | Description |
 | --- | --- |
-| **Incident detection** | The match is sampled at 60 Hz. Slide tackles, standing tackles, shoulder charges, falls and simulation are marked on the replay bar together with the referee's fouls, cards and advantages, each with offender, fouled player, location and zone. |
-| **Missed-foul indicator** | Plays the referee did not penalize are scored by challenge type, whether the opponent went down from the contact, location relative to the box and contact distance. The highest score is highlighted on the replay bar and labelled on the incident card. |
-| **Decisions** | Award a foul or penalty on an earlier play, overturn a foul or penalty, upgrade to penalty, reverse a foul, edit any player's cards and award a corner, goal kick or throw-in. |
+| **Incident detection** | The match is sampled at 60 Hz. Slide tackles, standing tackles, shoulder charges, falls and simulation are marked on the replay bar together with the referee's fouls, cards and advantages, each with location and zone. Offender and fouled player are named only for a call or a proven contact, a challenge nobody reacted to is shown as a duel. |
+| **Missed-foul indicator** | Plays the referee did not penalize are scored by challenge type, whether the opponent went down from the contact, location relative to the box and contact distance. The highest score is highlighted on the replay bar and labelled on the incident card. Only a play where the opponent reacted to the contact can be highlighted, and the contact of a play the referee already called is never offered again. |
+| **Decisions** | Award a foul or penalty on an earlier play, disallow a goal (foul, handball or offside), overturn a foul or penalty, upgrade to penalty, reverse a foul, edit any player's cards and award a corner, goal kick or throw-in. |
 | **Decision pool** | One play decision and up to 32 card edits, applied together and in order when leaving the replay. |
 | **Engine integration** | Decisions go through the match state machine (`MatchFSM`) and the engine's own card commit. If the engine does not set up the restart, every change made on that tick is rolled back. |
 | **Replay after the decision** | For a foul or penalty given with the ball in play, the engine replays the reviewed moment after the stoppage cutscenes, through its own pending clip mechanism. Can be disabled. |
@@ -167,7 +167,7 @@ All shortcuts can be changed in **OPTIONS > Controls**. While the panel has focu
 
 - Supports only the Steam executable `v1.7.2.0`.
 - Offline matches only: Exhibition, Master League, Become a Legend and Cups. Network, DRM and online modes are not touched.
-- A decision applies to the stoppage in which it was made. Goals cannot be overturned.
+- A decision applies to the stoppage in which it was made. A goal can be disallowed until its kickoff is taken.
 - The replay after the decision requires a foul or penalty given with the ball in play and the reviewed moment still in the game's replay memory (about 11 s of play). The engine's own instant replay may play first.
 - The gamepad opens and collapses the panel and controls the replay. Navigation inside the panel uses keyboard and mouse.
 

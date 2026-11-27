@@ -8,6 +8,7 @@
 #include "var_state.h"
 
 #include <windows.h>
+#include <tlhelp32.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -16,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 namespace var_mod {
 
@@ -81,6 +83,8 @@ std::atomic<void*> g_lastMatchControl{ nullptr };
 
 // Simulation-thread-only counters/state (accessed solely inside MatchFSM/MatchControl thread)
 uint64_t g_mainTickCount = 0;
+std::atomic<DWORD>    g_simThreadId{ 0 };      // thread that runs MainTick (stall sampler)
+std::atomic<uint64_t> g_lastMainTickMs{ 0 };   // GetTickCount64 of the last MainTick
 uint64_t g_finalizeFrameCount = 0;
 uint64_t g_foulCommitCount = 0;
 uint32_t g_lastSnapshotTick = 0;
@@ -956,6 +960,385 @@ bool IsMatchEligibleForExecution(uint8_t* gmatch, uint8_t* matchInfo, uint8_t* r
 }
 
 // ============================================================================
+// Goal annulment (re_notes/09_goal_annulment.md)
+// ============================================================================
+// Every effect of a goal lands in the record history object H in one record update: its event lists, the
+// protected team score, the scorer's stats, the scorers list and the lead markers. RecordHistory::AddEvent
+// (0x140A3E260) receives the goal before the stats dispatcher reads it back from H, so a copy of H taken at its
+// entry for a category 0x1F event is "the match right before this goal". Annulling restores that copy, after
+// proving with the engine's own decode and hash check that it differs from the live H by exactly this goal.
+namespace GoalAnnul {
+using FnHistoryAddEvent = void(__fastcall*)(void* history, void* event);
+using FnHistoryResetPending = void(__fastcall*)(void* history);
+InlineHook g_hookHistoryAdd;
+InlineHook g_hookResetPending;
+InlineHook g_hookSimMainScore;
+using FnSimMainUpdateScore = void(__fastcall*)(void* simMain);
+std::atomic<uint8_t*> g_simMainModel{ nullptr }; // scoreboard model of the current match (UI thread writes it)
+constexpr uintptr_t kSimMain_Data = 0x38;         // data object of the match HUD (Manager@Screen@match2D + 0x1818)
+constexpr uintptr_t kHudData_Score = 0x9E;        // uint8 home, uint8 away (also what Sider's match.stats() reads)
+
+// Every field below is guarded by g_mutex. Writers of H: the engine (record update) and Detour_HistoryResetPending
+// (the same record update, between its steps). The sim thread only requests.
+std::mutex g_mutex;
+std::vector<uint8_t> g_snapshot;     // H right before the goal (allocated once, on the first goal of the session)
+std::vector<uint8_t> g_withGoal;     // H right before the removal, to put the goal back if the decision fails
+uint8_t* g_history = nullptr;
+bool     g_valid = false;            // the snapshot describes the goal the match is stopped for
+uint32_t g_goalMatchTick = 0;
+int32_t  g_goalPhase = -1;
+int32_t  g_creditedTeam = -1;
+bool     g_removePending = false;    // requested by the execution, done at the next record update step
+bool     g_removed = false;          // H holds the snapshot (goal off the record), not yet committed
+bool     g_putBackPending = false;   // the decision failed: H gets g_withGoal back at the next step
+bool     g_committed = false;        // the engine confirmed the free kick: the removal is final
+uint32_t g_scoreWithGoal[2] = {};    // score the scoreboard shows before the removal
+uint32_t g_scoreWithoutGoal[2] = {}; // score after it
+uint64_t g_scoreboardWrittenTick = 0; // g_mainTickCount when the scoreboard copy was set (0 = not watching)
+uint64_t g_removeRequestTick = 0;    // g_mainTickCount when the removal was requested
+
+void PutBackLocked(); // caller holds g_mutex
+
+// Sim thread (record update), before the engine processes the event
+void OnHistoryAddEvent(uint8_t* history, const uint8_t* event) {
+    if (!IsValidPtr(history) || !IsValidPtr(event) || !IsMemoryRangeReadable(event, GoalRecord::kEventReadableBytes)) return;
+    if (*reinterpret_cast<const int32_t*>(event) != GoalRecord::kGoalEventCategory) return;
+    const int32_t team = *reinterpret_cast<const int32_t*>(event + GoalRecord::Event_CreditedTeam);
+    if (team != 0 && team != 1) return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_removePending || g_removed || g_putBackPending) {
+        // A goal while a removal is in flight cannot happen (the match is stopped); never mix two goals. The
+        // earlier goal goes back on the record first if its removal was not committed.
+        VAR_LOG_WRN("Goal recorded while a goal removal was in progress: annulment disabled for both");
+        if (g_removed && !g_committed && history == g_history) PutBackLocked();
+        g_valid = g_removePending = g_removed = g_putBackPending = false;
+        return;
+    }
+    g_valid = false;
+    if (!IsMemoryRangeReadable(history, GoalRecord::kHistoryBytes)) {
+        VAR_LOG_WRN("Goal recorded but the record history is not readable: this goal cannot be annulled");
+        return;
+    }
+    uint32_t goals[2] = {};
+    if (!GoalRecord::ReadTeamGoals(history, 0, goals[0]) || !GoalRecord::ReadTeamGoals(history, 1, goals[1])) {
+        VAR_LOG_WRN("Goal recorded but the score layout did not validate: this goal cannot be annulled");
+        return;
+    }
+    uint32_t matchTick = 0;
+    int32_t phase = -1;
+    if (uint8_t* gm = GetGmatch()) {
+        uint8_t* mi = *reinterpret_cast<uint8_t**>(gm + Offsets::GMATCH_MatchInfo);
+        if (IsValidPtr(mi)) {
+            matchTick = *reinterpret_cast<const uint32_t*>(mi + Offsets::MatchInfo_MatchTick);
+            phase = *reinterpret_cast<const int32_t*>(mi + Offsets::MatchInfo_MatchPhase);
+        }
+    }
+    try {
+        if (g_snapshot.size() != GoalRecord::kHistoryBytes) g_snapshot.resize(GoalRecord::kHistoryBytes);
+        if (g_withGoal.size() != GoalRecord::kHistoryBytes) g_withGoal.resize(GoalRecord::kHistoryBytes);
+    } catch (...) {
+        VAR_LOG_WRN("Goal recorded but there was no memory for its copy: this goal cannot be annulled");
+        return;
+    }
+    std::memcpy(g_snapshot.data(), history, GoalRecord::kHistoryBytes);
+    g_history = history;
+    g_valid = true;
+    g_committed = false;
+    g_goalMatchTick = matchTick;
+    g_goalPhase = phase;
+    g_creditedTeam = team;
+    VAR_LOG_INF("Goal for team %d recorded at match tick %u (score before it %u-%u): annulment available until the kickoff",
+                team, matchTick, goals[0], goals[1]);
+}
+
+void __fastcall Detour_HistoryAddEvent(void* history, void* event) {
+    OnHistoryAddEvent(static_cast<uint8_t*>(history), static_cast<const uint8_t*>(event));
+    g_hookHistoryAdd.Original<FnHistoryAddEvent>()(history, event);
+}
+
+// Caller holds g_mutex
+void InvalidateLocked(const char* why, bool historyStillLive = true) {
+    if (g_valid && why) VAR_LOG_INF("Goal annulment no longer available: %s", why);
+    // An uncommitted removal never outlives its decision: the goal goes back now, while H is still the live one.
+    // After a match reset H may already be freed: nothing is written then.
+    if (historyStillLive && g_removed && !g_committed && g_history &&
+        IsMemoryRangeReadable(g_history, GoalRecord::kHistoryBytes)) PutBackLocked();
+    if ((g_removePending || g_removed) && !g_committed) {
+        VAR_LOG_WRN("Goal removal in progress dropped (%s)", why ? why : "hooks removed");
+    }
+    g_valid = g_removePending = g_removed = g_putBackPending = g_committed = false;
+}
+
+void Invalidate(const char* why, bool historyStillLive = true) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    InvalidateLocked(why, historyStillLive);
+}
+
+// Sim thread: the copy only describes the goal stoppage of its own half
+void OnSimTick(uint8_t* matchInfo, int32_t matchStatus) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_scoreboardWrittenTick != 0) {
+        // Confirms in the log when the scoreboard drew the restored score (SimMain caches it at +0x4C / +0x50)
+        uint8_t* model = g_simMainModel.load(std::memory_order_acquire);
+        if (IsValidPtr(model) && IsMemoryRangeReadable(model + 0x4C, 8) &&
+            *reinterpret_cast<const uint32_t*>(model + 0x4C) == g_scoreWithoutGoal[0] &&
+            *reinterpret_cast<const uint32_t*>(model + 0x50) == g_scoreWithoutGoal[1]) {
+            VAR_LOG_INF("Scoreboard shows %u-%u (%llu ticks after the annulment)", g_scoreWithoutGoal[0], g_scoreWithoutGoal[1],
+                        static_cast<unsigned long long>(g_mainTickCount - g_scoreboardWrittenTick));
+            g_scoreboardWrittenTick = 0;
+        } else if (g_mainTickCount - g_scoreboardWrittenTick > 1800) {
+            VAR_LOG_WRN("Scoreboard did not redraw within 30 s of the annulment");
+            g_scoreboardWrittenTick = 0;
+        }
+    }
+    if ((g_removePending || g_putBackPending) && g_mainTickCount - g_removeRequestTick > 600) {
+        // The record update never ran for this history again (match left or object replaced)
+        if (g_removePending && g_committed) {
+            VAR_LOG_ERR("Free kick applied but the record update never removed the goal");
+        }
+        g_removePending = false; // InvalidateLocked puts an uncommitted removal back itself
+        g_putBackPending = false;
+        InvalidateLocked("the record update did not run the pending step");
+        return;
+    }
+    if (!g_valid || g_removePending || g_removed || g_putBackPending) return;
+    const uint32_t tick = *reinterpret_cast<const uint32_t*>(matchInfo + Offsets::MatchInfo_MatchTick);
+    const int32_t phase = *reinterpret_cast<const int32_t*>(matchInfo + Offsets::MatchInfo_MatchPhase);
+    if (matchStatus == static_cast<int32_t>(MatchStatus::InPlay) && tick > g_goalMatchTick + 30) {
+        InvalidateLocked("the ball is in play again");
+    } else if (g_goalPhase >= 0 && phase != g_goalPhase) {
+        InvalidateLocked("the period changed");
+    }
+}
+
+bool Available(int32_t& creditedTeam) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const bool open = g_valid && !g_removePending && !g_removed && !g_putBackPending;
+    creditedTeam = open ? g_creditedTeam : -1;
+    return open;
+}
+
+// Live H must equal the copy plus exactly this goal: credited team one goal more, the other team the same,
+// both decoded with the engine's hash check. Caller holds g_mutex.
+bool CheckLocked(const char** why) {
+    if (!g_valid || !g_history || g_snapshot.size() != GoalRecord::kHistoryBytes) { *why = "no goal to annul"; return false; }
+    if (!IsMemoryRangeReadable(g_history, GoalRecord::kHistoryBytes)) { *why = "record history not readable"; return false; }
+    uint32_t live[2] = {}, before[2] = {};
+    for (int t = 0; t < 2; ++t) {
+        if (!GoalRecord::ReadTeamGoals(g_history, t, live[t]) || !GoalRecord::ReadTeamGoals(g_snapshot.data(), t, before[t])) {
+            *why = "score did not validate";
+            return false;
+        }
+    }
+    const int32_t c = g_creditedTeam;
+    if (before[c] + 1 != live[c] || before[1 - c] != live[1 - c]) {
+        *why = "score changed since the goal";
+        VAR_LOG_WRN("Goal annulment refused: score %u-%u now, %u-%u before the goal (team %d)",
+                    live[0], live[1], before[0], before[1], c);
+        return false;
+    }
+    return true;
+}
+
+// Caller holds g_mutex and has just run CheckLocked
+bool RemoveLocked(const char** why) {
+    GoalRecord::ReadTeamGoals(g_history, 0, g_scoreWithGoal[0]);
+    GoalRecord::ReadTeamGoals(g_history, 1, g_scoreWithGoal[1]);
+    std::memcpy(g_withGoal.data(), g_history, GoalRecord::kHistoryBytes);
+    std::memcpy(g_history, g_snapshot.data(), GoalRecord::kHistoryBytes);
+    // Pending event list of the goal's update: the engine clears it at the start of every update anyway
+    std::memset(g_history + GoalRecord::History_PendingCount, 0, 8);
+    uint32_t after[2] = {};
+    const bool ok = GoalRecord::ReadTeamGoals(g_history, 0, after[0]) && GoalRecord::ReadTeamGoals(g_history, 1, after[1]);
+    g_removed = true;
+    g_scoreWithoutGoal[0] = after[0];
+    g_scoreWithoutGoal[1] = after[1];
+    VAR_LOG_INF("Goal taken off the record: score %u-%u (%s)", after[0], after[1], ok ? "verified" : "NOT verified");
+    if (!ok) { *why = "restored score did not validate"; return false; }
+    return true;
+}
+
+// Caller holds g_mutex
+void PutBackLocked() {
+    std::memcpy(g_history, g_withGoal.data(), GoalRecord::kHistoryBytes);
+    g_removed = false;
+    VAR_LOG_INF("Decision not applied: the goal is back on the record");
+}
+
+// The scoreboard keeps its own copy of the score, refreshed by the engine only at later points of the stoppage:
+// once the annulment is final the copy is set to the restored score, and the scoreboard's own update
+// (SimMain vfunc 19) redraws it on its next frame. Written only when the copy still shows exactly the score
+// with the annulled goal, so the bytes are proven to be the score. Caller holds g_mutex.
+void SyncScoreboardLocked() {
+    uint8_t* model = g_simMainModel.load(std::memory_order_acquire);
+    const uintptr_t simMainVtable = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) + 0x2BF58F8; // SimMain@Screen@match2D
+    if (!IsValidPtr(model) || !IsMemoryRangeReadable(model, kSimMain_Data + 8) ||
+        *reinterpret_cast<const uintptr_t*>(model) != simMainVtable) {
+        VAR_LOG_INF("Scoreboard copy not known yet: it updates when the engine refreshes it");
+        return;
+    }
+    uint8_t* data = *reinterpret_cast<uint8_t**>(model + kSimMain_Data);
+    if (!IsValidPtr(data) || !IsMemoryRangeReadable(data + kHudData_Score, 2)) return;
+    uint8_t* sc = data + kHudData_Score;
+    if (sc[0] == g_scoreWithoutGoal[0] && sc[1] == g_scoreWithoutGoal[1]) return; // the engine already did it
+    if (sc[0] != g_scoreWithGoal[0] || sc[1] != g_scoreWithGoal[1]) {
+        VAR_LOG_WRN("Scoreboard copy shows %u-%u (expected %u-%u): left to the engine", sc[0], sc[1],
+                    g_scoreWithGoal[0], g_scoreWithGoal[1]);
+        return;
+    }
+    sc[0] = static_cast<uint8_t>(g_scoreWithoutGoal[0]);
+    sc[1] = static_cast<uint8_t>(g_scoreWithoutGoal[1]);
+    g_scoreboardWrittenTick = g_mainTickCount;
+    VAR_LOG_INF("Scoreboard copy set to %u-%u", g_scoreWithoutGoal[0], g_scoreWithoutGoal[1]);
+}
+
+void __fastcall Detour_SimMainUpdateScore(void* simMain) {
+    g_simMainModel.store(static_cast<uint8_t*>(simMain), std::memory_order_release);
+    g_hookSimMainScore.Original<FnSimMainUpdateScore>()(simMain);
+}
+
+// Record update thread, at the start of one of its steps: the only place the history is written
+void __fastcall Detour_HistoryResetPending(void* history) {
+    bool failedAfterCommit = false;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (history == g_history && IsValidPtr(history)) {
+            if (g_putBackPending) {
+                g_putBackPending = false;
+                if (g_removed) PutBackLocked();
+            } else if (g_removePending) {
+                g_removePending = false;
+                const char* why = nullptr;
+                if (!CheckLocked(&why) || !RemoveLocked(&why)) {
+                    VAR_LOG_ERR("Goal could not be taken off the record: %s", why ? why : "?");
+                    if (g_removed) PutBackLocked();
+                    failedAfterCommit = g_committed;
+                    g_valid = false;
+                } else if (g_committed) {
+                    g_removed = false;
+                    g_valid = false; // final
+                    SyncScoreboardLocked();
+                }
+            }
+        }
+    }
+    // Outside g_mutex: VarState's lock is taken under ours nowhere else (ConsumeGate takes them the other way)
+    if (failedAfterCommit) {
+        VarState::Instance().SetPostApplyBanner("TIRO LIVRE APLICADO  ·  O gol não pôde ser retirado do placar",
+                                                6000, BannerStyle::Amber);
+    }
+    g_hookResetPending.Original<FnHistoryResetPending>()(history);
+}
+
+// Sim thread, when the pool takes the annulment: the goal comes off the record before the free kick is
+// injected, so whatever the engine records for that free kick is kept
+bool BeginRemoval(int32_t creditedTeam, const char** why) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_removePending || g_removed || g_putBackPending) { *why = "a goal removal is still in progress"; return false; }
+    if (!CheckLocked(why)) return false;
+    if (creditedTeam != g_creditedTeam) { *why = "the goal belongs to the other team"; return false; }
+    g_committed = false;
+    if (g_hookResetPending.IsInstalled()) {
+        g_removePending = true;
+        g_removeRequestTick = g_mainTickCount;
+        return true;
+    }
+    if (!RemoveLocked(why)) { PutBackLocked(); return false; }
+    return true;
+}
+
+// Sim thread: the engine confirmed the free kick. False only when the removal already failed.
+bool Commit() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_removed) {
+        g_removed = false;
+        g_valid = false;
+        g_committed = true;
+        SyncScoreboardLocked();
+        return true;
+    }
+    if (g_removePending) { g_committed = true; return true; } // finalized by the record update step
+    return false;
+}
+
+// Sim thread: the execution ended without a commit (failed, undone or re-armed)
+void Cancel() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_committed) return;
+    if (g_removePending) { g_removePending = false; return; }
+    if (g_removed) {
+        if (g_hookResetPending.IsInstalled()) {
+            g_putBackPending = true;
+            g_removeRequestTick = g_mainTickCount; // same timeout as a pending removal
+        } else {
+            PutBackLocked();
+        }
+    }
+}
+
+// Before the hooks go away: an uncommitted removal is undone right here (no record step will run again)
+void OnUninstall() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_removed && !g_committed && g_history && IsMemoryRangeReadable(g_history, GoalRecord::kHistoryBytes)) PutBackLocked();
+    if (g_removePending && g_committed) VAR_LOG_WRN("Mod unloaded before the goal removal ran: the free kick stays, so does the goal");
+    InvalidateLocked(nullptr);
+}
+} // namespace GoalAnnul
+
+// ============================================================================
+// Cutscene map guard: the end-of-match teardown of FixDemoMain walks its cutscene map; a node whose links were
+// overwritten (parent and right child zeroed, seen in a crash dump of 27/11/2026) made it read address 0x19.
+// The links are rebuilt from the tree itself before the engine walks it. Nothing is written on a healthy tree.
+// ============================================================================
+namespace FixDemoGuard {
+using FnClearMap = void(__fastcall*)(void* self, uint8_t flag);
+InlineHook g_hook;
+std::atomic<int> g_logged{ 0 };
+constexpr uintptr_t kMapHead = 0xB08;
+constexpr uintptr_t kMapSize = 0xB10;
+constexpr uintptr_t kMapHead2 = 0xB18;
+constexpr uintptr_t kMapSize2 = 0xB20;
+
+// Heap nodes are read-write: anything else is not a node of this map and is never written
+bool Writable(const void* p, size_t len) {
+    if (!IsMemoryRangeReadable(p, len)) return false;
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (VirtualQuery(p, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
+    const DWORD prot = mbi.Protect & 0xFF;
+    return prot == PAGE_READWRITE || prot == PAGE_EXECUTE_READWRITE;
+}
+
+void GuardMap(void* self, uint8_t* obj, uintptr_t headOff, uintptr_t sizeOff, const char* which) {
+    if (!Writable(obj + headOff, 8) || !Writable(obj + sizeOff, 8)) return;
+    uint8_t* head = *reinterpret_cast<uint8_t**>(obj + headOff);
+    const size_t size = *reinterpret_cast<const size_t*>(obj + sizeOff);
+    if (size == 0) return;
+    const int fixes = MsvcTree::RepairMsvcTreeLinks(head, size, &Writable);
+    if (fixes < 0 && IsValidPtr(head) && Writable(head, 0x20)) {
+        // Not walkable at all: present it as empty (its nodes leak) rather than let the engine walk into it
+        *reinterpret_cast<uint8_t**>(head + 0x00) = head;
+        *reinterpret_cast<uint8_t**>(head + 0x08) = head;
+        *reinterpret_cast<uint8_t**>(head + 0x10) = head;
+        *reinterpret_cast<size_t*>(obj + sizeOff) = 0;
+    }
+    if (fixes != 0 && g_logged.fetch_add(1) < 8) {
+        VAR_LOG_WRN("Cutscene %s of FixDemoMain %p was corrupted (%s, %zu entries): %s", which, self,
+                    fixes < 0 ? "not walkable" : "bad links", size,
+                    fixes < 0 ? "emptied, its entries leak" : "links rebuilt before the teardown");
+    }
+}
+
+void __fastcall Detour_ClearMap(void* self, uint8_t flag) {
+    auto* obj = static_cast<uint8_t*>(self);
+    if (IsValidPtr(obj)) {
+        GuardMap(self, obj, kMapHead, kMapSize, "map");
+        GuardMap(self, obj, kMapHead2, kMapSize2, "second map"); // walked by the same function (0x141F3F447)
+    }
+    g_hook.Original<FnClearMap>()(self, flag);
+}
+} // namespace FixDemoGuard
+
+// ============================================================================
 // Native-first VAR execution
 // ============================================================================
 // Engine facts this design relies on (PES2021.exe 1.7.2.0, see re_notes/05_native_decision_pipeline.md):
@@ -988,6 +1371,7 @@ struct ExecRequest {
     Vec3            spot{};
     StoppageReason  stopReason    = StoppageReason::SilentRestart;
     bool            foulValid     = false;
+    FoulKind        foulKind      = FoulKind::StandardFoul; // Offside for an annulled goal (indirect free kick)
     CardKind        card          = CardKind::None; // applied by the engine's CommitToRegistry
     int32_t         offenderSlot  = -1;
     int32_t         victimSlot    = -1;
@@ -1074,6 +1458,7 @@ void ExecEnter(ExecState s, uint64_t ticks) {
 }
 
 void ExecResetToIdle() {
+    GoalAnnul::Cancel(); // no-op once the annulment was committed or when none is in flight
     g_exec = ExecCtx{};
 }
 
@@ -1307,7 +1692,7 @@ void WriteSetPlayAndFoulToStruct(uint8_t* baseSetPlay, uint8_t* baseFoul, const 
     *reinterpret_cast<int32_t*>(raw + 0x30) = 4;
     if (req.foulValid) {
         fi->isValid           = 1;
-        fi->foulKind          = static_cast<int32_t>(FoulKind::StandardFoul);
+        fi->foulKind          = static_cast<int32_t>(req.foulKind);
         fi->foulJudgementKind = (req.card == CardKind::Yellow) ? 3 : (req.card == CardKind::Red) ? 4 : 1;
         fi->offenderSlot      = IsValidSlot(req.offenderSlot) ? req.offenderSlot : 0xFF;
         fi->victimSlot        = IsValidSlot(req.victimSlot) ? req.victimSlot : 0xFF;
@@ -1351,6 +1736,8 @@ struct DecisionClipState {
     uint64_t waitTicksIn1F = 0;
     uint8_t* matchInfo = nullptr;
     uint8_t* writeBuf = nullptr;
+    int32_t  focusTeam = -1;   // player the replay camera follows: (team, roster index), -1 = none
+    int32_t  focusRoster = -1;
 };
 DecisionClipState g_decisionClip;
 
@@ -1386,7 +1773,14 @@ bool FsmQueueContains(uint8_t* fsm, int32_t state) {
 
 // Fills one request exactly as 0x140A68D40 does (type 0x11 prio 0x5B, segment 1 cleared, flag bit 4 cleared). The
 // status goes last, after a compiler barrier, so a reader never sees status 0 with half-written fields.
-void WriteClipRequest(uint8_t* r, uint8_t minute, uint8_t second, uint8_t phase, uint16_t framesBackStart, uint16_t framesBackEnd) {
+// +0x1C / +0x20: the player the replay director follows, (team 0..1, roster index 0..39) as validated by
+// 0x140A60BA0. The engine copies it from its event right after building the slot 3 request (0x14042DCA3) and never
+// resets it, so a request without it keeps the player of an earlier clip. An invalid pair means no player.
+void WriteClipRequest(uint8_t* r, uint8_t minute, uint8_t second, uint8_t phase, uint16_t framesBackStart, uint16_t framesBackEnd,
+                      int32_t focusTeam, int32_t focusRoster) {
+    const bool focusOk = (focusTeam == 0 || focusTeam == 1) && focusRoster >= 0 && focusRoster <= 0x27;
+    *reinterpret_cast<int32_t*>(r + 0x1C) = focusOk ? focusTeam : -1;
+    *reinterpret_cast<int32_t*>(r + 0x20) = focusOk ? focusRoster : -1;
     *reinterpret_cast<uint16_t*>(r + 0x0C) = framesBackStart;
     *reinterpret_cast<uint16_t*>(r + 0x0E) = framesBackEnd;
     r[0x06] = static_cast<uint8_t>(r[0x06] & ~0x10);
@@ -1403,7 +1797,7 @@ void WriteClipRequest(uint8_t* r, uint8_t minute, uint8_t second, uint8_t phase,
     *reinterpret_cast<volatile int32_t*>(r + 0x00) = 0; // commit on the next recorder pass
 }
 
-// Back to the idle state of the request constructor 0x140A68200 (time stamp at +0x1C left as it was)
+// Back to the idle state of the request constructor 0x140A68200 (focus player at +0x1C left as it was, like the engine)
 void ResetClipRequest(uint8_t* r) {
     *reinterpret_cast<volatile int32_t*>(r + 0x00) = -1;
     std::atomic_signal_fence(std::memory_order_release);
@@ -1438,6 +1832,13 @@ bool QueueDecisionReplayClip(uint8_t* matchInfo, const ExecRequest& req) {
     g_decisionClip.clipTime60Hz = req.clipTime60Hz;
     g_decisionClip.sinceTick = g_mainTickCount;
     g_decisionClip.matchInfo = matchInfo;
+    // The replay follows the fouled player (he had the ball), else the offender
+    const int32_t slot = IsValidSlot(req.victimSlot) ? req.victimSlot : req.offenderSlot;
+    const int32_t roster = IsValidSlot(req.victimSlot) ? req.victimRoster : req.offenderRoster;
+    if (IsValidSlot(slot)) {
+        g_decisionClip.focusTeam = SlotToTeam(slot);
+        g_decisionClip.focusRoster = (roster >= 0) ? roster : ReadActiveRosterIndex(GetGmatch(), slot);
+    }
     return true;
 }
 
@@ -1506,13 +1907,14 @@ bool ArmDecisionReplayClip(uint8_t* matchInfo) {
     const uint8_t mm = static_cast<uint8_t>(std::clamp(minute, 0, 255));
     const uint8_t ss = static_cast<uint8_t>(std::clamp(second, 0, 59));
     const uint8_t ph = static_cast<uint8_t>(std::clamp(miPhase, 0, 255));
-    if (reqWrite) WriteClipRequest(reqWrite, mm, ss, ph, a, b);
-    WriteClipRequest(reqRead, mm, ss, ph, a, b);
+    if (reqWrite) WriteClipRequest(reqWrite, mm, ss, ph, a, b, g_decisionClip.focusTeam, g_decisionClip.focusRoster);
+    WriteClipRequest(reqRead, mm, ss, ph, a, b, g_decisionClip.focusTeam, g_decisionClip.focusRoster);
     g_decisionClip.stage = DecisionClipState::Stage::Armed;
     g_decisionClip.sinceTick = g_mainTickCount;
     g_decisionClip.waitTicksIn1F = 0;
     g_decisionClip.writeBuf = wb;
-    VAR_LOG_INF("Decision replay requested: %02d:%02d phase %u, frames back %u..%u", minute, second, ph, a, b);
+    VAR_LOG_INF("Decision replay requested: %02d:%02d phase %u, frames back %u..%u, camera on team %d roster %d", minute, second, ph, a, b,
+                g_decisionClip.focusTeam, g_decisionClip.focusRoster);
     return true;
 }
 
@@ -1555,7 +1957,7 @@ void TickDecisionReplayClip(uint8_t* fsm, uint8_t* matchInfo, int32_t fsmState) 
         uint8_t* reg = ClipRegistry();
         const int32_t recType = reg ? *reinterpret_cast<const int32_t*>(reg + Offsets::ClipRegistry_PendingRecord3 + Offsets::ClipRecord_Type) : -1;
         if (recType == 0x11) VAR_LOG_INF("Decision replay clip recorded by the engine (status %d)", st);
-        else VAR_LOG_WRN("Decision replay request rejected by the engine (status %d, record type 0x%X)", st, recType);
+        else VAR_LOG_INF("Decision replay request taken by the engine (status %d, record type 0x%X)", st, recType);
         g_decisionClip = DecisionClipState{};
         return;
     }
@@ -1666,6 +2068,16 @@ void ExecCommitLedger() {
 
 void ExecFinish(bool applied, const char* failBannerPt) {
     if (!applied && g_exec.clipQueued) CancelDecisionReplayClip(); // never replay a decision that did not happen
+    if (!applied) GoalAnnul::Cancel(); // the goal goes back on the record now, not after the cooldown
+    if (applied && g_exec.hasPlayLedger && g_exec.playVerdict.annulGoal >= 0 &&
+        g_exec.req.kind == ExecRequestKind::InjectSetPlay) {
+        if (!GoalAnnul::Commit()) {
+            VAR_LOG_ERR("Free kick applied but the goal was not taken off the record");
+            std::snprintf(g_exec.bannerText, sizeof(g_exec.bannerText), "%s",
+                          "TIRO LIVRE APLICADO  ·  O gol não pôde ser retirado do placar");
+            g_exec.bannerStyle = BannerStyle::Amber;
+        }
+    }
     if (applied) {
         if (g_exec.redInvolved) g_exec.bannerStyle = BannerStyle::RedCard;
         ExecCommitLedger();
@@ -1798,9 +2210,14 @@ bool ConsumeGate(const VerdictPool& pool, void* user) {
     const auto* g = static_cast<const ConsumeGateCtx*>(user);
     if (!pool.HasExecutableItems()) return false;
     if (!g->inPlay) {
-        // SetPlayReady of a kick-off (half start, after a goal): the pool waits for a real stoppage
+        // SetPlayReady of a kick-off (half start, after a goal): the pool waits for a real stoppage, except a goal
+        // annulment, whose free kick replaces exactly this kick-off
         const auto* sp = reinterpret_cast<const RawSetPlayInfo*>(g->matchInfo + Offsets::MatchInfo_SetPlayInfo);
-        return sp->setPlayKind != static_cast<int32_t>(SetPlayKind::KickOff);
+        if (sp->setPlayKind == static_cast<int32_t>(SetPlayKind::KickOff)) {
+            int32_t team = -1;
+            return pool.hasPlayDecision && pool.playDecision.annulGoal >= 0 && GoalAnnul::Available(team);
+        }
+        return true;
     }
     // With the ball in play, a pool that changes who is on the pitch only runs when its own play makes the engine
     // run the roster states; otherwise it waits for the next stoppage (the engine never removes / restores an
@@ -2106,6 +2523,7 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
         req.wantClip = (pv->playPhase >= 0);
         req.clipPhase = pv->playPhase;
         req.clipTime60Hz = pv->playTime60Hz;
+        bool annulRefused = false;
 
         switch (pv->action) {
             case VarAction::ConvertToPenalty:
@@ -2118,6 +2536,33 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
                 break;
             case VarAction::ConvertToFreeKick:
             case VarAction::RetroactiveFreeKick:
+                if (pv->annulGoal >= 0) {
+                    // Only on the kickoff of the goal it was made for, and only when the record copy is proven to
+                    // be this goal: otherwise nothing is injected (a free kick without the goal removed would be
+                    // worse than no decision)
+                    const auto curSp = *reinterpret_cast<const RawSetPlayInfo*>(matchInfo + Offsets::MatchInfo_SetPlayInfo);
+                    const char* why = nullptr;
+                    if (!inSetPlayReady || curSp.setPlayKind != static_cast<int32_t>(SetPlayKind::KickOff)) {
+                        why = "the kickoff of the goal is not the pending restart";
+                    } else if (!GoalAnnul::BeginRemoval(1 - req.benefitedTeam, &why)) {
+                        // why set by BeginRemoval
+                    }
+                    if (why) {
+                        annulRefused = true;
+                        VAR_LOG_WRN("Goal annulment not applied: %s", why);
+                        std::snprintf(g_exec.bannerText, sizeof(g_exec.bannerText), "%s",
+                                      "GOL NÃO ANULADO  ·  A saída de bola já foi dada ou o placar mudou");
+                        break;
+                    }
+                    req.kind = ExecRequestKind::InjectSetPlay;
+                    req.spKind = SetPlayKind::FreeKick;
+                    // The defending team's free kick may be inside its own box (no penalty for the attack)
+                    req.spot = PitchGeometry::ClampToPitch(dims, pv->spotPos);
+                    req.stopReason = StoppageReason::SilentRestart;
+                    req.foulValid = true;
+                    req.foulKind = (pv->annulGoal == 1) ? FoulKind::Offside : FoulKind::StandardFoul;
+                    break;
+                }
                 req.kind = ExecRequestKind::InjectSetPlay;
                 req.spKind = SetPlayKind::FreeKick;
                 req.spot = PitchGeometry::ProjectOutsideDefendingBox(dims, pv->spotPos, offenderAttackDir, 0.7f);
@@ -2184,8 +2629,9 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
                               ? "ANULAÇÃO REGISTRADA  ·  A cobrança já tinha sido feita, o cartão foi retirado"
                               : "ANULAÇÃO REGISTRADA  ·  A cobrança já tinha sido feita");
         }
-        g_exec.hasPlayLedger = true;
+        g_exec.hasPlayLedger = !annulRefused; // a refused annulment never enters the decision history
         g_exec.playVerdict = *pv;
+        if (annulRefused) g_exec.bannerStyle = BannerStyle::Amber;
 
         // Card of the injected foul: the play's own target, overridden by a LATER edit of the same event (absorbed:
         // the engine applies the final card once, to the player that edit chose) or by a LATER direct edit of the
@@ -2225,7 +2671,7 @@ void ExecStartPool(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, int32_t fs
     // No set play to inject: the manual writes are the decision itself
     ApplyPlanCards(gmatch);
     g_exec.bannerStyle = g_exec.redInvolved ? BannerStyle::RedCard
-                       : isOverturnOrRestart ? BannerStyle::Amber
+                       : (isOverturnOrRestart || (pv && pv->annulGoal >= 0)) ? BannerStyle::Amber
                        : BannerStyle::Applied;
     if (g_exec.sentOffChanged && inSetPlayReady) {
         // Card-only change of who is on the pitch: native rebuild of the same set play (states 0x12 / 0x13),
@@ -2358,6 +2804,7 @@ void ExecStep(uint8_t* fsm, uint8_t* gmatch, uint8_t* matchInfo, uint8_t* replay
                 }
             }
             if (g_requeueSeq != g_exec.poolSeq) { g_requeueSeq = g_exec.poolSeq; g_requeueCount = 0; }
+            if (!g_exec.cardsPlanApplied && !g_exec.injected && g_requeueCount < 3) GoalAnnul::Cancel();
             if (!g_exec.cardsPlanApplied && !g_exec.injected && ++g_requeueCount <= 3 &&
                 VarState::Instance().RequeueVerdictPool(g_exec.pool, g_exec.matchGen)) {
                 // Nothing was written (the engine produced its own result this tick): the decision waits for the
@@ -2616,6 +3063,7 @@ void ResetSimTrackersOnSimThread() {
     ExecResetToIdle();
     g_loggedDeferredOnPitch = false;
     ReplayDiag::ResetForMatch();
+    GoalAnnul::Invalidate("new match", false);
     g_verifiedReplayRingBufPtr.store(nullptr, std::memory_order_release);
     g_syncedTeamRosterTable = nullptr;
     g_syncedTeamKitIds[0] = 0xFFFFFFFFU;
@@ -2640,6 +3088,8 @@ void ResetSimTrackersOnSimThread() {
 // ============================================================================
 uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
     ++g_mainTickCount;
+    g_simThreadId.store(GetCurrentThreadId(), std::memory_order_release);
+    g_lastMainTickMs.store(GetTickCount64(), std::memory_order_release);
     g_pollSuspended.store(false, std::memory_order_release);
     g_lastMatchFsm.store(matchFsm, std::memory_order_relaxed);
 
@@ -2733,6 +3183,7 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
 
         CalibrateSidesAtKickoff(gmatch, matchInfo, matchStatus);
         ReplayDiag::OnSimTick(matchInfo, matchStatus);
+        GoalAnnul::OnSimTick(matchInfo, matchStatus);
         TickDecisionReplayClip(fsm, matchInfo, fsmState);
         ReplayDiag::OnFsmState(fsmState, replayMgr, matchTick);
 
@@ -2778,6 +3229,7 @@ uint32_t __fastcall Detour_MainTick(void* matchFsm, void* runCtx, void* arg3) {
             const auto* fi = reinterpret_cast<const RawFoulInfo*>(matchInfo + Offsets::MatchInfo_FoulInfo);
             tel.activeSetPlayKind   = sp->setPlayKind;
             tel.stoppageCount       = g_stoppageCount;
+            tel.goalAnnulAvailable  = GoalAnnul::Available(tel.goalCreditedTeam);
             tel.activeBenefitedTeam = sp->benefitedTeam;
             tel.activeFoulValid     = fi->isValid;
             tel.activeFoulKind      = fi->foulKind;
@@ -3155,6 +3607,11 @@ uintptr_t ResolveCallChecked(uintptr_t site, const char* name) {
 }
 
 void UninstallLocked() {
+    FixDemoGuard::g_hook.Uninstall();
+    GoalAnnul::OnUninstall();
+    GoalAnnul::g_hookSimMainScore.Uninstall();
+    GoalAnnul::g_hookResetPending.Uninstall();
+    GoalAnnul::g_hookHistoryAdd.Uninstall();
     g_hookFoulSnapshotFind.Uninstall();
     g_hookReplayCtrlSync.Uninstall();
     g_hookUpdateFoulCounters.Uninstall();
@@ -3165,6 +3622,180 @@ void UninstallLocked() {
     VarState::Instance().SetHooksInstalled(false);
 }
 
+// ---------------------------------------------------------------------------
+// Sim stall sampler (diagnostic, read only). If MainTick stops for 4 s while frames keep being presented and no
+// replay is on screen, the sim thread is suspended for the copy of its registers and 2 KB of stack, resumed, and
+// the code addresses found are logged (3 samples, 300 ms apart). Pause menus also stop MainTick: the samples
+// then show the thread waiting, which is harmless.
+// ---------------------------------------------------------------------------
+
+// Every thread of the game, so the one that holds the frame is found (the sim job's worker only waits when the
+// main loop stops scheduling it). Per thread, while suspended: GetThreadContext + VirtualQuery + memcpy only
+// (nothing that can take a user-mode lock); module names are resolved after every thread was resumed.
+struct ModRange { uintptr_t base; uintptr_t end; char name[40]; bool skip; };
+struct ThreadSample { DWORD tid; uintptr_t rip; uint8_t n; uintptr_t hits[12]; };
+ModRange     g_stallMods[256];
+int          g_stallModCount = 0;
+ThreadSample g_stallThreads[160];
+uintptr_t    g_stallStack[512];
+
+const ModRange* FindMod(uintptr_t a) {
+    for (int i = 0; i < g_stallModCount; ++i) {
+        if (a >= g_stallMods[i].base && a < g_stallMods[i].end) return &g_stallMods[i];
+    }
+    return nullptr;
+}
+
+void LoadModuleRanges() {
+    g_stallModCount = 0;
+    HANDLE ms = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+    if (ms == INVALID_HANDLE_VALUE) return;
+    MODULEENTRY32W me{};
+    me.dwSize = sizeof(me);
+    for (BOOL ok = Module32FirstW(ms, &me); ok && g_stallModCount < 256; ok = Module32NextW(ms, &me)) {
+        ModRange& m = g_stallMods[g_stallModCount++];
+        m.base = reinterpret_cast<uintptr_t>(me.modBaseAddr);
+        m.end = m.base + me.modBaseSize;
+        std::snprintf(m.name, sizeof(m.name), "%ls", me.szModule);
+        // System plumbing (waits, heap, CRT) says nothing about who holds the frame
+        static const char* kSkip[] = { "ntdll.dll", "kernel32.dll", "kernelbase.dll", "win32u.dll", "ucrtbase.dll",
+                                       "vcruntime140.dll", "msvcp140.dll", "user32.dll", "combase.dll", "rpcrt4.dll" };
+        m.skip = false;
+        for (const char* k : kSkip) if (_stricmp(m.name, k) == 0) m.skip = true;
+    }
+    CloseHandle(ms);
+}
+
+// Engine job-system plumbing: an idle worker shows only these
+bool IsIdleJobAddress(uintptr_t exeRel) {
+    return (exeRel >= 0x1403DE000ULL && exeRel < 0x1403F9000ULL) || (exeRel >= 0x141B3C000ULL && exeRel < 0x141B7D000ULL);
+}
+
+void SampleAllThreads(int sample, uint64_t silentMs) {
+    if (g_stallModCount == 0) LoadModuleRanges(); // modules of a running game do not change between stalls
+    const uintptr_t exeBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    const DWORD self = GetCurrentThreadId();
+    const DWORD pid = GetCurrentProcessId();
+    DWORD tids[160];
+    int nt = 0;
+    HANDLE ts = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (ts == INVALID_HANDLE_VALUE) return;
+    THREADENTRY32 te{};
+    te.dwSize = sizeof(te);
+    for (BOOL ok = Thread32First(ts, &te); ok && nt < 160; ok = Thread32Next(ts, &te)) {
+        if (te.th32OwnerProcessID == pid && te.th32ThreadID != self) tids[nt++] = te.th32ThreadID;
+    }
+    CloseHandle(ts);
+
+    int count = 0;
+    for (int i = 0; i < nt; ++i) {
+        HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tids[i]);
+        if (!th) continue;
+        CONTEXT c{};
+        c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        bool haveCtx = false, haveStack = false;
+        if (SuspendThread(th) != static_cast<DWORD>(-1)) {
+            if (GetThreadContext(th, &c)) {
+                haveCtx = true;
+                if (IsMemoryRangeReadable(reinterpret_cast<const void*>(c.Rsp), sizeof(g_stallStack))) {
+                    std::memcpy(g_stallStack, reinterpret_cast<const void*>(c.Rsp), sizeof(g_stallStack));
+                    haveStack = true;
+                }
+            }
+            ResumeThread(th);
+        }
+        CloseHandle(th);
+        if (!haveCtx) continue;
+        ThreadSample& t = g_stallThreads[count++];
+        t.tid = tids[i];
+        t.rip = c.Rip;
+        t.n = 0;
+        for (size_t k = 0; haveStack && k < 512 && t.n < 12; ++k) {
+            const ModRange* m = FindMod(g_stallStack[k]);
+            if (m && !m->skip) t.hits[t.n++] = g_stallStack[k];
+        }
+    }
+
+    const DWORD simTid = g_simThreadId.load(std::memory_order_acquire);
+    // Celebrations, cutscenes and the pause menu also stop MainTick with every thread parked: one line is enough
+    int busy = 0;
+    for (int i = 0; i < count; ++i) {
+        const ModRange* rm = FindMod(g_stallThreads[i].rip);
+        if (!(rm && rm->skip)) ++busy;
+    }
+    if (busy == 0) {
+        if (sample == 1) {
+            VAR_LOG_INF("MainTick silent %llu ms with every thread waiting (cutscene, celebration or pause)",
+                        static_cast<unsigned long long>(silentMs));
+        }
+        return;
+    }
+    VAR_LOG_WRN("Stall sample %d: MainTick silent %llu ms, %d threads, %d running (sim job last ran on %lu)", sample,
+                static_cast<unsigned long long>(silentMs), count, busy, static_cast<unsigned long>(simTid));
+    auto fmt = [&](uintptr_t a, char* out, size_t n) {
+        const ModRange* m = FindMod(a);
+        if (!m) { std::snprintf(out, n, "?%llX", static_cast<unsigned long long>(a)); return; }
+        if (m->base == exeBase) std::snprintf(out, n, "0x%llX", static_cast<unsigned long long>(0x140000000ULL + (a - m->base)));
+        else std::snprintf(out, n, "%s+0x%llX", m->name, static_cast<unsigned long long>(a - m->base));
+    };
+    for (int i = 0; i < count; ++i) {
+        const ThreadSample& t = g_stallThreads[i];
+        const ModRange* rm = FindMod(t.rip);
+        const bool waiting = rm && rm->skip; // parked in a system wait / syscall
+        bool idle = waiting;
+        for (int k = 0; idle && k < t.n; ++k) {
+            const ModRange* m = FindMod(t.hits[k]);
+            if (!m || m->base != exeBase || !IsIdleJobAddress(0x140000000ULL + (t.hits[k] - m->base))) idle = false;
+        }
+        if (idle || waiting) continue; // only the threads that are running code are worth a line
+        char line[700];
+        char one[64];
+        fmt(t.rip, one, sizeof(one));
+        int used = std::snprintf(line, sizeof(line), "  tid %lu%s rip=%s%s |", static_cast<unsigned long>(t.tid),
+                                 t.tid == simTid ? " (sim)" : "", one, waiting ? " (wait)" : "");
+        for (int k = 0; k < t.n && used > 0 && used < static_cast<int>(sizeof(line)) - 70; ++k) {
+            fmt(t.hits[k], one, sizeof(one));
+            used += std::snprintf(line + used, sizeof(line) - static_cast<size_t>(used), " %s", one);
+        }
+        VAR_LOG_WRN("%s", line);
+    }
+}
+} // namespace
+
+// Render thread, every presented frame
+void MatchHooks::CheckSimStall() {
+    static int s_samples = 0;
+    // Only inside a match: after a reset (menus, match end) the GMATCH block can be released while the global
+    // still points at it, so nothing is read then
+    if (!g_installed.load(std::memory_order_acquire) || g_pollSuspended.load(std::memory_order_acquire)) return;
+    const uint64_t last = g_lastMainTickMs.load(std::memory_order_acquire);
+    if (last == 0) return;
+    const uint64_t now = GetTickCount64();
+    const uint64_t silent = now - last;
+    static uint64_t s_stallFrom = 0;
+    if (silent < 4000) {
+        if (s_samples > 0 && last > s_stallFrom) {
+            VAR_LOG_INF("MainTick resumed after %llu ms", static_cast<unsigned long long>(last - s_stallFrom));
+        }
+        s_samples = 0;
+        return;
+    }
+    if (s_samples == 0) s_stallFrom = last;
+    if (s_samples >= 3 || silent < 4000ULL + 300ULL * static_cast<uint64_t>(s_samples)) return;
+    uint8_t* gm = GetGmatch();
+    if (!IsValidPtr(gm) || !IsMemoryRangeReadable(gm + Offsets::GMATCH_MatchInfo, 8)) return;
+    uint8_t* rm = GetReplayMgr(gm);
+    if (IsValidPtr(rm) && IsMemoryRangeReadable(rm + Offsets::ReplayMgr_Mode, 1) &&
+        *reinterpret_cast<const uint8_t*>(rm + Offsets::ReplayMgr_Mode) != 0) return; // replays pause the sim
+    // Celebrations, cutscenes and the full-time screen stop MainTick with the ball out of play: only a stop with
+    // the ball in play is worth suspending every thread for
+    uint8_t* mi = GetMatchInfo(gm);
+    if (!IsValidPtr(mi) || !IsMemoryRangeReadable(mi + Offsets::MatchInfo_MatchStatus, 4) ||
+        *reinterpret_cast<const int32_t*>(mi + Offsets::MatchInfo_MatchStatus) != static_cast<int32_t>(MatchStatus::InPlay)) return;
+    SampleAllThreads(++s_samples, silent);
+}
+
+namespace {
 } // namespace
 
 bool MatchHooks::Install(bool quietOnMiss) {
@@ -3307,6 +3938,46 @@ bool MatchHooks::Install(bool quietOnMiss) {
         }
     }
 
+    // Optional: protects the end-of-match cutscene teardown from a corrupted map node
+    const uintptr_t addrFixDemoClear = resolveUnique("FixDemoMain::ClearMap", Aobs::FixDemoMain_ClearMap,
+                                                     AobHints::FixDemoMain_ClearMap);
+    if (addrFixDemoClear &&
+        FixDemoGuard::g_hook.Install(addrFixDemoClear, reinterpret_cast<void*>(&FixDemoGuard::Detour_ClearMap), 11)) {
+        VAR_LOG_INF("Cutscene map guard installed at 0x%llX", static_cast<unsigned long long>(addrFixDemoClear));
+    } else {
+        VAR_LOG_WRN("Cutscene map guard not installed");
+    }
+
+    // Optional: without it a goal simply cannot be annulled (the option never shows)
+    const uintptr_t addrHistoryAdd = resolveUnique("RecordHistory::AddEvent", Aobs::RecordHistory_AddEvent,
+                                                   AobHints::RecordHistory_AddEvent);
+    if (addrHistoryAdd &&
+        GoalAnnul::g_hookHistoryAdd.Install(addrHistoryAdd, reinterpret_cast<void*>(&GoalAnnul::Detour_HistoryAddEvent), 11)) {
+        VAR_LOG_INF("Goal annulment ready: RecordHistory::AddEvent hooked at 0x%llX",
+                    static_cast<unsigned long long>(addrHistoryAdd));
+        const uintptr_t addrResetPending = resolveUnique("RecordHistory::ResetPending", Aobs::RecordHistory_ResetPending,
+                                                         AobHints::RecordHistory_ResetPending);
+        if (addrResetPending &&
+            GoalAnnul::g_hookResetPending.Install(addrResetPending,
+                                                  reinterpret_cast<void*>(&GoalAnnul::Detour_HistoryResetPending), 9)) {
+            VAR_LOG_INF("Goal removal runs inside the record update (ResetPending hooked at 0x%llX)",
+                        static_cast<unsigned long long>(addrResetPending));
+        } else {
+            VAR_LOG_WRN("RecordHistory::ResetPending hook not installed: goal removal runs on the sim thread");
+        }
+        const uintptr_t addrSimMain = resolveUnique("SimMain::UpdateScore", Aobs::SimMain_UpdateScore,
+                                                    AobHints::SimMain_UpdateScore);
+        if (addrSimMain &&
+            GoalAnnul::g_hookSimMainScore.Install(addrSimMain, reinterpret_cast<void*>(&GoalAnnul::Detour_SimMainUpdateScore), 9)) {
+            VAR_LOG_INF("Scoreboard follows an annulled goal at once (SimMain hooked at 0x%llX)",
+                        static_cast<unsigned long long>(addrSimMain));
+        } else {
+            VAR_LOG_WRN("SimMain::UpdateScore hook not installed: the scoreboard updates when the engine refreshes it");
+        }
+    } else {
+        VAR_LOG_WRN("RecordHistory::AddEvent hook not installed: goals cannot be annulled");
+    }
+
     VarState::Instance().SetReplaySeekReady(seekReady);
     g_installed.store(true, std::memory_order_release);
     VarState::Instance().SetHooksInstalled(true);
@@ -3326,6 +3997,9 @@ bool MatchHooks::IsInstalled() {
 
 void MatchHooks::OnMatchReset() {
     g_pollSuspended.store(true, std::memory_order_release);
+    g_lastMainTickMs.store(0, std::memory_order_release); // the stall sampler waits for the next match
+    GoalAnnul::g_simMainModel.store(nullptr, std::memory_order_release); // learnt again from the next scoreboard
+    g_simThreadId.store(0, std::memory_order_release);
     g_simResetPending.store(true, std::memory_order_release);
     g_lastMatchFsm.store(nullptr, std::memory_order_relaxed);
     g_lastMatchControl.store(nullptr, std::memory_order_relaxed);

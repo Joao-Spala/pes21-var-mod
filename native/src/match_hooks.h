@@ -82,6 +82,29 @@ namespace Aobs {
     constexpr const char* VanishingSpray_NativeReset =
         "48 89 5C 24 08 57 48 83 EC 20 48 8B D9 48 81 C1 A8 7C 01 00 E8 ?? ?? ?? ?? 48 85 C0 74 08 48 8B C8 "
         "E8 ?? ?? ?? ?? 48 8D 8B A8 7C 01 00 E8 ?? ?? ?? ?? C6 83 04 09 00 00 01";
+
+    // RecordHistory::AddEvent(history, event) at 0x140A3E260: every match event enters the record history here,
+    // before the stats dispatcher reads it back. Clean 11-byte prologue (40 55 / 56 / 57 / 48 81 EC 80 06 00 00).
+    constexpr const char* RecordHistory_AddEvent =
+        "40 55 56 57 48 81 EC 80 06 00 00 48 C7 44 24 28 FE FF FF FF 48 89 9C 24 B0 06 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4";
+
+    // RecordHistory::ResetPending(history) at 0x140A3E760 (xor eax,eax / mov [rcx+0x271F0],rax / ret): called only
+    // by the record manager update (0x140A0D842, 0x140A0DAF0, 0x140A0DC1D), so a write to the history made here
+    // runs on the record update's own thread, between its steps. 9-byte stolen prologue.
+    constexpr const char* RecordHistory_ResetPending =
+        "33 C0 48 89 81 F0 71 02 00 C3";
+
+    // SimMain@Screen@match2D vfunc 19 (0x142101130): compares the score bytes of its data object (*(this+0x38) +
+    // 0x9E home / +0x9F away) with the score on screen and redraws when they differ. Hooked only to learn `this`.
+    // Clean 9-byte prologue (40 53 / 48 83 EC 20 / 48 8B D9).
+    // FixDemoMain clear of its cutscene map (0x141F3F3A0, this + 0xB08 head / + 0xB10 size): walks the tree with
+    // the in-order successor. A corrupted node link crashed it at the end of a match (0x141F3F3FA). Clean 11-byte
+    // prologue (48 89 7C 24 20 / 41 56 / 48 83 EC 40).
+    constexpr const char* FixDemoMain_ClearMap =
+        "48 89 7C 24 20 41 56 48 83 EC 40 48 89 5C 24 50 48 8B F9 48 89 74 24 60 0F B6 F2 84 D2 0F 84";
+
+    constexpr const char* SimMain_UpdateScore =
+        "40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? 4C 8B 4B 38 4C 8D 43 4C 33 C9";
 } // namespace Aobs
 
 // Call sites of FoulSnapshotPool::Find whose callers dereference the result WITHOUT a NULL check
@@ -114,6 +137,10 @@ namespace AobHints {
     constexpr uintptr_t PesPad_Update              = 0x03F86E0;
     constexpr uintptr_t FoulSnapshotPool_Find      = 0x0A82120;
     constexpr uintptr_t VanishingSpray_NativeReset = 0x0452EB0;
+    constexpr uintptr_t RecordHistory_AddEvent     = 0x0A3E260;
+    constexpr uintptr_t RecordHistory_ResetPending = 0x0A3E760;
+    constexpr uintptr_t SimMain_UpdateScore        = 0x2101130;
+    constexpr uintptr_t FixDemoMain_ClearMap       = 0x1F3F3A0;
 } // namespace AobHints
 
 class MatchHooks {
@@ -126,6 +153,9 @@ public:
     // Safe read-only live poll callable from DX11 Present thread so Replay cursor & ManualFlag
     // stay 100% synced even when simulation (MatchFSM::MainTick) is paused during Replay.
     static void PollLiveReplayState();
+
+    // Render thread, every frame: logs where the sim thread is when MainTick stops for 4 s outside replays
+    static void CheckSimStall();
 };
 
 } // namespace var_mod
