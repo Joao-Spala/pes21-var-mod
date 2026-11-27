@@ -4,7 +4,7 @@
 -- Performance: o VAR carrega sob demanda (set_teams / overlay_on). Na abertura do jogo so a verificacao de
 -- atualizacao comeca, em segundo plano (sem hooks e sem tocar na memoria do jogo).
 
-local m = { version = "4.5.2" }
+local m = { version = "4.5.3" }
 
 local ffi = ffi
 local cdef_registered = false

@@ -506,6 +506,30 @@ inline uint16_t FindClosestFrameByTime(uint16_t winStart, uint16_t winEnd, uint1
     return foundSameHalf ? bestSameHalfFrame : bestAnyFrame;
 }
 
+// Continuous replay cursor. The engine's cursor (ReplayManager + 0x58, written by SyncToReplayManager
+// 0x1420C16A0) is the time of the INTEGER ring frame ctrl + 0x288, so it moves in whole recorded frames: in slow
+// motion or above 60 fps the same value repeats for several drawn frames, then jumps. The player keeps the real
+// position as a float frame (player + 0x14 = ctrl + 0x64), advanced by speed * dt in 0x14217BF20, and the integer
+// frame is trunc(float + 0.001) % cap. The continuous time is the current frame's time plus the fraction of the
+// step to the next frame. Used only when both frames are recorded, in the same match phase and consecutive (at
+// most 4 ticks apart): anything else (seek in progress, half change, missing frame) keeps the engine's value.
+inline bool PreciseCursorTime(float floatFrame, uint16_t ringCap, uint16_t curFrame,
+                              float t0, int32_t phase0, bool valid0, float t1, int32_t phase1, bool valid1,
+                              float& outTime) {
+    if (ringCap == 0 || !std::isfinite(floatFrame) || floatFrame < 0.0f ||
+        floatFrame > static_cast<float>(ringCap) + 1.0f) return false;
+    const float adj = floatFrame + 0.001f;
+    const uint32_t idx = static_cast<uint32_t>(adj) % ringCap;
+    if (idx != curFrame || !valid0 || !std::isfinite(t0)) return false;
+    float frac = adj - std::floor(adj);
+    frac = std::clamp(frac, 0.0f, 1.0f);
+    outTime = t0;
+    if (valid1 && phase1 == phase0 && std::isfinite(t1) && t1 > t0 && t1 - t0 <= 4.0f) {
+        outTime = t0 + frac * (t1 - t0);
+    }
+    return true;
+}
+
 } // namespace ReplayTimelineMath
 
 // ============================================================================

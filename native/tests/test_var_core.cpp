@@ -351,6 +351,8 @@ void CheckEngineBuild(const char* label, const char* path, const BuildExpect& e)
         { "FixDemoMain_ClearMap", Aobs::FixDemoMain_ClearMap, AobHints::FixDemoMain_ClearMap },
         { "SimMain_UpdateScore", Aobs::SimMain_UpdateScore, AobHints::SimMain_UpdateScore },
         { "HeapGuard_Win32Munmap", HeapGuardAob::Win32Munmap, HeapGuardAob::Win32MunmapHintRva },
+        { "VanishingSpray_FullReset", Aobs::VanishingSpray_FullReset, AobHints::VanishingSpray_FullReset },
+        { "VanishingSpray_ClearDrawn", Aobs::VanishingSpray_ClearDrawn, AobHints::VanishingSpray_ClearDrawn },
     };
     uintptr_t addr[sizeof(items) / sizeof(items[0])] = {};
     bool allUnique = true;
@@ -368,6 +370,11 @@ void CheckEngineBuild(const char* label, const char* path, const BuildExpect& e)
     }
     if (allUnique) {
         auto ripTarget = [&](uintptr_t insn) { return rva(AobScanner::ResolveRipRelative(insn, 3, 7)); };
+        // The complete spray clear tail-jumps exactly into the clear of the painted spray
+        const uintptr_t fullReset = addr[24], clearDrawn = addr[25];
+        EXPECT_TRUE(*reinterpret_cast<const uint8_t*>(fullReset + Aobs::VanishingSpray_FullResetTailJump) == 0xE9 &&
+                    AobScanner::ResolveRipRelative(fullReset + Aobs::VanishingSpray_FullResetTailJump, 1, 5) == clearDrawn,
+                    "complete spray clear jumps into the painted spray clear");
         const auto* mt = reinterpret_cast<const uint8_t*>(addr[0] + 0x30);
         EXPECT_TRUE(mt[0] == 0x48 && mt[1] == 0x8B && mt[2] == 0x05, "MainTick+0x30 is the GMATCH load");
         EXPECT_EQ(ripTarget(addr[0] + 0x30), e.gmatch, "GMATCH global");
@@ -1901,6 +1908,37 @@ void WriteAll(const std::wstring& p, const std::string& d) {
     CloseHandle(f);
 }
 } // namespace
+
+// Continuous replay cursor: between two consecutive recorded frames the time follows the player's float frame;
+// a seek in progress, a missing next frame, a half change or a gap keep the engine's integer-frame time
+void TestPreciseReplayCursor() {
+    using ReplayTimelineMath::PreciseCursorTime;
+    float t = 0.0f;
+    // 0.25x slow motion: float frame 100.25 between frames 100 (t=500) and 101 (t=501)
+    EXPECT_TRUE(PreciseCursorTime(100.25f, 300, 100, 500.0f, 1, true, 501.0f, 1, true, t) && std::fabs(t - 500.251f) < 0.01f,
+                "quarter of the way to the next frame");
+    float prev = -1.0f;
+    bool monotonic = true;
+    for (int k = 0; k < 40; ++k) {
+        const float ff = 100.0f + 0.025f * static_cast<float>(k);
+        const uint16_t cur = static_cast<uint16_t>(static_cast<uint32_t>(ff + 0.001f) % 300);
+        const float t0 = 500.0f + static_cast<float>(cur - 100), t1 = t0 + 1.0f;
+        float v = 0.0f;
+        if (!PreciseCursorTime(ff, 300, cur, t0, 1, true, t1, 1, true, v) || v < prev) monotonic = false;
+        prev = v;
+    }
+    EXPECT_TRUE(monotonic, "slow motion gives a time that grows every drawn frame (no steps)");
+    EXPECT_TRUE(!PreciseCursorTime(100.5f, 300, 57, 500.0f, 1, true, 501.0f, 1, true, t), "seek in progress (integer frame differs): engine time");
+    EXPECT_TRUE(PreciseCursorTime(100.5f, 300, 100, 500.0f, 1, true, 501.0f, 2, true, t) && t == 500.0f, "half change: no interpolation");
+    EXPECT_TRUE(PreciseCursorTime(100.5f, 300, 100, 500.0f, 1, true, 520.0f, 1, true, t) && t == 500.0f, "gap between frames: no interpolation");
+    EXPECT_TRUE(PreciseCursorTime(100.5f, 300, 100, 500.0f, 1, true, 501.0f, 1, false, t) && t == 500.0f, "next frame not recorded");
+    EXPECT_TRUE(!PreciseCursorTime(100.5f, 300, 100, 500.0f, 1, false, 501.0f, 1, true, t), "current frame not recorded");
+    EXPECT_TRUE(PreciseCursorTime(299.5f, 300, 299, 900.0f, 1, true, 900.5f, 1, true, t) && std::fabs(t - 900.25f) < 0.01f,
+                "wraps around the ring");
+    EXPECT_TRUE(!PreciseCursorTime(std::nanf(""), 300, 0, 0.0f, 1, true, 1.0f, 1, true, t) && !PreciseCursorTime(-3.0f, 300, 0, 0.0f, 1, true, 1.0f, 1, true, t),
+                "invalid float frame refused");
+    MarkPass("TestPreciseReplayCursor");
+}
 
 void TestUpdateChecker() {
     using namespace UpdateChecker;
@@ -3873,6 +3911,7 @@ int main() {
     TestCalledPlayNotSuspect();
     TestMsvcTreeRepair();
     TestUpdateChecker();
+    TestPreciseReplayCursor();
     TestEngineBuildsByImage();
     TestEngineGuards();
     TestRemapAndLanguage();

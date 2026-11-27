@@ -1,5 +1,10 @@
 # Changelog
 
+## v4.5.3
+
+- **Smooth tactical pitch in the replay**: players, ball, offside line and trails now move on every drawn frame, also in slow motion. The game's replay cursor only advances in whole recorded frames, so the pitch followed it in steps. The mod now reads the replay's own continuous position and interpolates between the two recorded frames around it (only when both are recorded, in the same half and consecutive, otherwise the game's cursor is used as before).
+- **No spray line when the ball is already placed**: awarding a foul with the game already stopped for another free kick no longer leaves a bugged spray line on the pitch. The mod now runs the game's own complete spray clear (the one that also removes the spray already painted on the grass), found and proven by its whole body in the running executable. Where it is not proven, the previous clear of the spray data is kept.
+
 ## v4.5.2
 
 - **Fixes on the same launch**: the update check now starts as soon as the game opens (before, only at the first match, and at most every 6 hours) and runs at every launch. A signed update that is in place before the first match is used right away: the mod loads the new `var_core.dll` from the copy `var_core.next.dll` instead of the old one, so the fixes apply in that same session. An update that finishes later applies at the next launch. The first replay after an update shows "VAR MOD ATUALIZADO PARA" with the version. Players never run anything.

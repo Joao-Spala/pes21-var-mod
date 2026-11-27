@@ -1401,7 +1401,7 @@ void VarState::CaptureHudRenderSnapshot(HudRenderSnapshot& io) const {
     if (io.tel.matchActive && io.tel.replayMode >= 1 && io.tel.replayMode <= 3) {
         if (io.syncDataRev != dataRevision_ || io.syncSnapRev != snapRevision_ ||
             io.syncPhase != io.tel.replayCursorPhase ||
-            std::fabs(io.syncCursorTime - io.tel.replayCursorTime) > 0.05f) {
+            std::fabs(io.syncCursorTime - io.tel.replayCursorTime) > 0.01f) { // the cursor is continuous (slow motion too)
             io.sync = SyncToReplayCursorLocked(io.tel.replayCursorPhase, io.tel.replayCursorTime, 210.0f);
             io.syncDataRev    = dataRevision_;
             io.syncSnapRev    = snapRevision_;

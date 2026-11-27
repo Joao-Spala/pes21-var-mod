@@ -87,6 +87,19 @@ namespace Aobs {
 
     // RecordHistory::AddEvent(history, event) at 0x140A3E260: every match event enters the record history here,
     // before the stats dispatcher reads it back. Clean 11-byte prologue (40 55 / 56 / 57 / 48 81 EC 80 06 00 00).
+    // Complete spray clear the engine runs for message 0x105001A (0x140445FD0, called from the MatchControl
+    // message handler 0x140423B80): the same data reset as VanishingSpray_NativeReset, then a tail jump to
+    // VanishingSpray_ClearDrawn, which removes the spray already painted on the pitch under the renderer lock.
+    // Whole bodies, address fields masked: the match itself proves both functions.
+    constexpr const char* VanishingSpray_FullReset =
+        "40 53 48 83 EC 20 48 8D 99 A8 7C 01 00 48 8B CB E8 ?? ?? ?? ?? 48 85 C0 74 08 48 8B C8 E8 ?? ?? ?? ?? "
+        "48 8B CB E8 ?? ?? ?? ?? 48 83 C4 20 5B E9 ?? ?? ?? ??";
+    constexpr size_t VanishingSpray_FullResetTailJump = 0x2F; // E9 rel32 -> VanishingSpray_ClearDrawn
+    constexpr const char* VanishingSpray_ClearDrawn =
+        "40 53 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 8D 1D ?? ?? ?? ?? 48 89 5C 24 40 48 8B CB E8 ?? ?? ?? ?? 90 "
+        "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 1B 48 8B 90 68 01 00 00 48 85 D2 74 0F 48 8B 4A 08 48 85 C9 74 06 "
+        "E8 ?? ?? ?? ?? 90 48 8B CB E8 ?? ?? ?? ?? 90 48 83 C4 30 5B C3";
+
     constexpr const char* RecordHistory_AddEvent =
         "40 55 56 57 48 81 EC 80 06 00 00 48 C7 44 24 28 FE FF FF FF 48 89 9C 24 B0 06 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4";
 
@@ -162,6 +175,8 @@ namespace AobHints {
     constexpr uintptr_t FoulSnapshotPool_Find      = 0x0A82120;
     constexpr uintptr_t VanishingSpray_NativeReset = 0x0452EB0;
     constexpr uintptr_t RecordHistory_AddEvent     = 0x0A3E260;
+    constexpr uintptr_t VanishingSpray_FullReset   = 0x0445FD0;
+    constexpr uintptr_t VanishingSpray_ClearDrawn  = 0x1EB3700;
     constexpr uintptr_t RecordHistory_ResetPending = 0x0A3E760;
     constexpr uintptr_t SimMain_UpdateScore        = 0x2101130;
     constexpr uintptr_t FixDemoMain_ClearMap       = 0x1F3F3A0;

@@ -47,6 +47,9 @@ using FnSprayReset       = void(__fastcall*)(void* spray);
 using FnSprayRefCommit   = void(__fastcall*)(void* ref);
 FnSprayRefGetWrite g_fnSprayRefGetWrite = nullptr;
 FnSprayReset       g_fnSprayReset       = nullptr;
+// Engine routine of message 0x105001A: data reset plus the clear of the spray painted on the pitch (proven at install)
+using FnSprayFullReset = void(__fastcall*)(void* fsm);
+FnSprayFullReset   g_fnSprayFullReset   = nullptr;
 FnSprayRefCommit   g_fnSprayRefCommit   = nullptr;
 using FnRebuildSetPlay = void(__fastcall*)(void* matchFsm);
 FnRebuildSetPlay   g_fnRebuildSetPlay   = nullptr; // MatchFSM_RebuildSetPlay 0x140454280
@@ -1705,14 +1708,21 @@ void WriteSetPlayAndFoulToStruct(uint8_t* baseSetPlay, uint8_t* baseFoul, const 
     }
 }
 
-// Clears the referee's vanishing spray exactly like the engine does before every new set piece
-// (0x140452EB0 without its +0x904 flag). Without it, re-placing a free kick while the old spray is still on
-// the pitch draws a straight spray stroke from the old spot to the new one.
+// Clears the referee's vanishing spray before a set piece the VAR places. Without it, re-placing a free kick
+// while the old spray is still on the pitch draws a straight spray stroke from the old spot to the new one.
+// Preferred: the engine's own complete clear (message 0x105001A, 0x140445FD0), which also removes the spray
+// already painted on the pitch. Clearing only the spray data (0x140452EB0's steps, the earlier fix) left the
+// painted spray behind when the ball was already placed for a free kick.
 void ResetVanishingSpray(uint8_t* fsm) {
-    if (!g_fnSprayRefGetWrite || !g_fnSprayReset || !g_fnSprayRefCommit || !IsValidPtr(fsm)) return;
+    if (!IsValidPtr(fsm)) return;
     uint8_t* ref = fsm + Offsets::MatchFSM_VanishingSprayRef;
     if (!IsMemoryRangeReadable(ref, 0x28)) return;
     if (!g_sprayRefVtable || *reinterpret_cast<const uintptr_t*>(ref) != g_sprayRefVtable) return; // not the spray reference
+    if (g_fnSprayFullReset) {
+        g_fnSprayFullReset(fsm);
+        return;
+    }
+    if (!g_fnSprayRefGetWrite || !g_fnSprayReset || !g_fnSprayRefCommit) return;
     uint8_t* spray = g_fnSprayRefGetWrite(ref);
     if (spray) {
         g_fnSprayReset(spray);
@@ -3407,6 +3417,65 @@ void __fastcall Detour_UpdateFoulCounters(void* matchControl, void* matchInfo, v
 // (+0x64D, +0x80, 0x14217EC70, ReplayCamera +0x18 -> +0x00/+0x44) right before
 // the engine mirrors all ReplayController state into ReplayManager.
 // ============================================================================
+// Continuous cursor for the tactical pitch (see ReplayTimelineMath::PreciseCursorTime). Written on the replay
+// thread after each SyncToReplayManager, read by the per-frame poll on the render thread.
+namespace PreciseCursor {
+std::atomic<uint64_t>  g_value{ 0 };    // float time bits << 32 | phase
+std::atomic<uintptr_t> g_mgr{ 0 };      // ReplayManager the value belongs to
+std::atomic<uint64_t>  g_stampMs{ 0 };
+
+void Publish(uint8_t* ctrl) {
+    if (!g_replaySingletonPtrAddr) return;
+    const uint16_t cap = *reinterpret_cast<const uint16_t*>(ctrl + Offsets::ReplayCtrl_RingCap);
+    const uint16_t cur = *reinterpret_cast<const uint16_t*>(ctrl + Offsets::ReplayCtrl_CurFrame);
+    const float ff = *reinterpret_cast<const float*>(ctrl + Offsets::ReplayCtrl_FloatFrame);
+    if (cap == 0 || cap > 4096 || cur >= cap) return;
+    const uint8_t* singleton = *reinterpret_cast<const uint8_t* const*>(g_replaySingletonPtrAddr);
+    if (!IsValidPtr(singleton)) return;
+    const uint8_t* holder = *reinterpret_cast<const uint8_t* const*>(singleton + Offsets::ReplaySingleton_RingHolder);
+    if (!IsValidPtr(holder)) return;
+    const uint8_t* ringBuf = *reinterpret_cast<const uint8_t* const*>(holder + Offsets::ReplayRingHolder_BufferPtr);
+    if (!IsValidPtr(ringBuf)) return;
+    if (ringBuf != g_verifiedReplayRingBufPtr.load(std::memory_order_acquire)) {
+        if (!IsMemoryRangeReadable(ringBuf, static_cast<size_t>(cap) * Offsets::ReplayRing_FrameStride)) return;
+        g_verifiedReplayRingBufPtr.store(ringBuf, std::memory_order_release);
+    }
+    auto frame = [&](uint16_t i, float& t, int32_t& ph, bool& valid) {
+        const uint8_t* f = ringBuf + static_cast<size_t>(i) * Offsets::ReplayRing_FrameStride;
+        t = *reinterpret_cast<const float*>(f + Offsets::ReplayRing_FrameTimeOff);
+        ph = static_cast<int32_t>(f[Offsets::ReplayRing_FramePhaseOff] & 0x0FU);
+        valid = *reinterpret_cast<const uint16_t*>(f + Offsets::ReplayRing_FrameInvalidMarkOff) != 0x7FFF;
+    };
+    float t0 = 0.0f, t1 = 0.0f;
+    int32_t p0 = 0, p1 = 0;
+    bool v0 = false, v1 = false;
+    frame(cur, t0, p0, v0);
+    frame(static_cast<uint16_t>((cur + 1U) % cap), t1, p1, v1);
+    float t = 0.0f;
+    if (!ReplayTimelineMath::PreciseCursorTime(ff, cap, cur, t0, p0, v0, t1, p1, v1, t)) return;
+    uint32_t bits = 0;
+    std::memcpy(&bits, &t, sizeof(bits));
+    const auto mgr = *reinterpret_cast<const uintptr_t*>(ctrl + Offsets::ReplayCtrl_ReplayMgrPtr);
+    g_mgr.store(mgr, std::memory_order_relaxed);
+    g_value.store((static_cast<uint64_t>(bits) << 32) | static_cast<uint32_t>(p0), std::memory_order_relaxed);
+    g_stampMs.store(GetTickCount64(), std::memory_order_release);
+}
+
+// Continuous time for this ReplayManager when fresh (< 250 ms) and in the same phase as the engine cursor
+bool Read(uintptr_t mgr, int32_t phase, float engineTime, float& out) {
+    const uint64_t stamp = g_stampMs.load(std::memory_order_acquire);
+    if (!stamp || GetTickCount64() - stamp > 250 || g_mgr.load(std::memory_order_relaxed) != mgr) return false;
+    const uint64_t v = g_value.load(std::memory_order_relaxed);
+    if (static_cast<int32_t>(v & 0xFFFFFFFFULL) != phase) return false;
+    const uint32_t bits = static_cast<uint32_t>(v >> 32);
+    float t = 0.0f;
+    std::memcpy(&t, &bits, sizeof(t));
+    if (!std::isfinite(t) || std::fabs(t - engineTime) > 4.0f) return false;
+    out = t;
+    return true;
+}
+} // namespace PreciseCursor
+
 void __fastcall Detour_ReplayCtrlSync(void* replayCtrl) {
     auto* ctrl = static_cast<uint8_t*>(replayCtrl);
     if (IsValidPtr(ctrl) &&
@@ -3540,6 +3609,10 @@ void __fastcall Detour_ReplayCtrlSync(void* replayCtrl) {
     }
 
     g_hookReplayCtrlSync.Original<FnReplayCtrlSync>()(replayCtrl);
+    if (IsValidPtr(ctrl) && ctrl[Offsets::ReplayCtrl_Mode] == 0x0A &&
+        IsMemoryRangeReadable(ctrl, Offsets::ReplayCtrl_FocusSlotByte + 1)) {
+        PreciseCursor::Publish(ctrl);
+    }
 }
 
 // ============================================================================
@@ -3872,6 +3945,24 @@ bool MatchHooks::Install(bool quietOnMiss) {
     } else {
         VAR_LOG_WRN("Vanishing spray reset AOB not found: re-placed free kicks may show a spray stroke");
     }
+    // Complete spray clear (also removes the painted spray): accepted only when its tail jump lands exactly on
+    // the proven ClearDrawn body
+    {
+        g_fnSprayFullReset = nullptr;
+        const uintptr_t full = resolveUnique("VanishingSpray full reset", Aobs::VanishingSpray_FullReset,
+                                             AobHints::VanishingSpray_FullReset);
+        const uintptr_t clear = resolveUnique("VanishingSpray clear drawn", Aobs::VanishingSpray_ClearDrawn,
+                                              AobHints::VanishingSpray_ClearDrawn);
+        const auto* jmp = reinterpret_cast<const uint8_t*>(full + Aobs::VanishingSpray_FullResetTailJump);
+        if (full && clear && jmp[0] == 0xE9 &&
+            AobScanner::ResolveRipRelative(full + Aobs::VanishingSpray_FullResetTailJump, 1, 5) == clear) {
+            g_fnSprayFullReset = reinterpret_cast<FnSprayFullReset>(full);
+            VAR_LOG_INF("Vanishing spray: complete clear (data and painted spray) at 0x%llX",
+                        static_cast<unsigned long long>(full));
+        } else {
+            VAR_LOG_WRN("Vanishing spray complete clear not proven in this executable: only the spray data is cleared");
+        }
+    }
 
     // FoulSnapshotPool::Find is critical: without its guard an applied foul can crash the game.
     if (!addrMainTick || !addrJudgeFinalize || !addrUpdateFoul ||
@@ -4167,6 +4258,11 @@ void MatchHooks::PollLiveReplayState() {
         rHidden        = *reinterpret_cast<const uint8_t*>(replayMgr + Offsets::ReplayMgr_UiHidden);
         rCursorTime    = *reinterpret_cast<const float*>(replayMgr + Offsets::ReplayMgr_CursorTime);
         rCursorPhase   = *reinterpret_cast<const int32_t*>(replayMgr + Offsets::ReplayMgr_CursorPhase);
+        // The engine cursor moves in whole recorded frames: the continuous one keeps the pitch moving smoothly
+        float precise = 0.0f;
+        if (PreciseCursor::Read(reinterpret_cast<uintptr_t>(replayMgr), rCursorPhase, rCursorTime, precise)) {
+            rCursorTime = precise;
+        }
         rWinStartTime  = *reinterpret_cast<const float*>(replayMgr + Offsets::ReplayMgr_WindowStartTime);
         rWinStartPhase = *reinterpret_cast<const int32_t*>(replayMgr + Offsets::ReplayMgr_WindowStartPhase);
         rWinEndTime    = *reinterpret_cast<const float*>(replayMgr + Offsets::ReplayMgr_WindowEndTime);
