@@ -149,7 +149,7 @@ As configurações ficam em `<pasta do sider>\modules\var_mod\var_mod.ini`.
 | Atualização automática | Ligado |
 | Controles | Duas teclas por ação, remapeáveis |
 
-**Atualização automática**: no máximo a cada 6 horas, em segundo plano, o mod lê o número da última release deste repositório (uma consulta ao `api.github.com`, nada sobre você, seu PC ou suas partidas é enviado). Quando existe versão mais nova, ele baixa e instala sozinho, sem você fazer nada. A nova versão vale a partir da próxima vez que o jogo abrir, e um aviso no replay do VAR informa isso. Antes de instalar, o mod confere a assinatura digital da release com uma chave que só o autor tem, além do tamanho e do SHA-256 de cada arquivo. Uma release sem essa assinatura nunca é instalada (só aparece o aviso com a página da release), então uma conta do GitHub roubada não consegue colocar código no seu PC. A versão anterior fica em `modules\var_mod\previous\` para voltar manualmente. Desligue a opção para o mod não usar a rede em nenhum momento.
+**Atualização automática**: toda vez que o jogo abre, em segundo plano, o mod lê o número da última release deste repositório (uma consulta ao `api.github.com`, nada sobre você, seu PC ou suas partidas é enviado). Quando existe versão mais nova, ele baixa e instala sozinho, sem você fazer nada e sem rodar nada. Isso costuma levar um ou dois segundos, então a versão nova já é a usada na sua primeira partida, e um aviso no replay do VAR informa isso. Se o download só terminar depois que a primeira partida começou, a versão nova vale na próxima vez que o jogo abrir. Antes de instalar, o mod confere a assinatura digital da release com uma chave que só o autor tem, além do tamanho e do SHA-256 de cada arquivo. Uma release sem essa assinatura nunca é instalada (só aparece o aviso com a página da release), então uma conta do GitHub roubada não consegue colocar código no seu PC. A versão anterior fica em `modules\var_mod\previous\` para voltar manualmente. Desligue a opção para o mod não usar a rede em nenhum momento.
 
 ## Atalhos
 
@@ -169,7 +169,7 @@ Todos os atalhos podem ser alterados em **OPÇÕES > Controles**. Com o painel e
 
 ## Limitações
 
-- Suporta apenas o executável Steam `v1.7.2.0`.
+- Feito e testado no executável Steam `v1.7.2.0`. Antes de instalar qualquer coisa, o mod confere se o executável em uso tem o código e a estrutura de memória da engine para os quais foi feito, então outros executáveis da mesma engine (outras versões do jogo, patches com executável próprio) funcionam quando passam nessa verificação. Um que não passa deixa o VAR desligado, com o motivo em `modules\var_mod\var_core.log` e no menu do Sider (`EXECUTÁVEL NÃO RECONHECIDO`). Executáveis diferentes da `v1.7.2.0` foram verificados no arquivo, não em partida.
 - Apenas partidas offline: Exibição, Master Liga, Rumo ao Estrelato e Copas. Rede, DRM e modos online do jogo não são tocados. A única conexão que o mod faz é a atualização automática opcional descrita acima.
 - Uma decisão vale para a parada em que foi tomada. Um gol pode ser anulado até a saída de bola.
 - O replay após a decisão exige falta ou pênalti marcado com a bola rolando e o momento revisado ainda na memória de replay do jogo (cerca de 11 s de jogo). O replay instantâneo da engine pode ser exibido antes.

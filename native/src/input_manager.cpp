@@ -308,7 +308,7 @@ bool InputManager::InstallNativeInputBlockHooks(bool quietOnMiss) {
 
     if (!g_hookDInputKb.IsInstalled()) {
         const AobMatchResult kb = AobScanner::ScanModuleTextWithHint(
-            nullptr, Aobs::DInputKeyboard_Poll, AobHints::DInputKeyboard_Poll);
+            nullptr, Aobs::DInputKeyboard_Poll, AobHints::DInputKeyboard_Poll, true);
         if (kb.unique()) {
             if (g_hookDInputKb.Install(kb.address, reinterpret_cast<void*>(&Detour_DInputKeyboardPoll), 5)) {
                 VAR_LOG_INF("Native DInput8 Keyboard blocker installed at 0x%llX",
@@ -324,7 +324,7 @@ bool InputManager::InstallNativeInputBlockHooks(bool quietOnMiss) {
 
     if (!g_hookDInputJoy.IsInstalled()) {
         const AobMatchResult joy = AobScanner::ScanModuleTextWithHint(
-            nullptr, Aobs::DInputJoystick_Poll, AobHints::DInputJoystick_Poll);
+            nullptr, Aobs::DInputJoystick_Poll, AobHints::DInputJoystick_Poll, true);
         if (joy.unique()) {
             if (g_hookDInputJoy.Install(joy.address, reinterpret_cast<void*>(&Detour_DInputJoystickPoll), 5)) {
                 VAR_LOG_INF("Native DInput8 Joystick blocker installed at 0x%llX",
@@ -336,7 +336,7 @@ bool InputManager::InstallNativeInputBlockHooks(bool quietOnMiss) {
 
     if (!g_hookDInputMouse.IsInstalled()) {
         const AobMatchResult mouse = AobScanner::ScanModuleTextWithHint(
-            nullptr, Aobs::DInputMouse_Poll, AobHints::DInputMouse_Poll);
+            nullptr, Aobs::DInputMouse_Poll, AobHints::DInputMouse_Poll, true);
         if (mouse.unique()) {
             if (g_hookDInputMouse.Install(mouse.address, reinterpret_cast<void*>(&Detour_DInputMousePoll), 5)) {
                 VAR_LOG_INF("Native DInput8 Mouse blocker installed at 0x%llX",
@@ -348,7 +348,7 @@ bool InputManager::InstallNativeInputBlockHooks(bool quietOnMiss) {
 
     if (!g_hookPesPadUpdate.IsInstalled()) {
         const AobMatchResult pad = AobScanner::ScanModuleTextWithHint(
-            nullptr, Aobs::PesPad_Update, AobHints::PesPad_Update);
+            nullptr, Aobs::PesPad_Update, AobHints::PesPad_Update, true);
         if (pad.unique()) {
             if (g_hookPesPadUpdate.Install(pad.address, reinterpret_cast<void*>(&Detour_PesPadUpdate), 8)) {
                 VAR_LOG_INF("Native PES2021 PesPad::Update blocker installed at 0x%llX",

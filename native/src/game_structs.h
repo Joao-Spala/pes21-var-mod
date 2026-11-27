@@ -261,8 +261,7 @@ namespace Offsets {
     // target, mode 3 (free cam) ignores both.
     constexpr uintptr_t ReplayCam_ControllerPtr    = 0x00;
     constexpr uintptr_t ReplayCamCtrl_CachedTarget = 0x34; // Vec3
-    constexpr uintptr_t ReplayCamCtrlMode0VtableRva = 0x2BDFB40;
-    constexpr uintptr_t ReplayCamCtrlMode1VtableRva = 0x2BDFB88;
+    // The controller vtables (CameraLow / CameraUp) are resolved by RTTI at install: RttiVtables in match_hooks.h
     constexpr uintptr_t ReplayCamState_FocusTarget = 0x44; // int32_t (0=ball, 1..22=player)
 
     // Replay ring buffer singleton (*(*(0x143703558) + 0x6A8) + 0x40, stride 0x1FB0)
@@ -316,7 +315,7 @@ namespace Offsets {
     // without a reset is drawn as a stroke from the old spot to the new one, so the engine always resets it
     // (0x140A5CCE0: alphas = 0) before a new set piece.
     constexpr uintptr_t MatchFSM_VanishingSprayRef   = 0x17CA8;
-    constexpr uintptr_t VanishingSprayRefVtableRva   = 0x25A1570;
+    // VanishingSprayInfoRef vtable: resolved by RTTI at install (RttiVtables in match_hooks.h)
     constexpr uintptr_t MatchFSM_DelayedCardFlag   = 0x57F8; // uint8_t
 
     // Judge

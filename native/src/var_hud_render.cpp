@@ -1899,7 +1899,11 @@ void RenderOptionsPage(ImDrawList* dl, float contentW, const HudConfig& cfg, boo
         char line[96];
         const char* second = nullptr;
         ImU32 col = C::Text3;
-        if (newer && phase == UpdateChecker::Phase::Installed) {
+        if (newer && phase == UpdateChecker::Phase::Updated) {
+            std::snprintf(line, sizeof(line), Tr("Atualizado para a versão %s"), newer);
+            second = UpdateChecker::kReleasesUrl;
+            col = C::Green;
+        } else if (newer && phase == UpdateChecker::Phase::Installed) {
             std::snprintf(line, sizeof(line), Tr("Versão %s instalada"), newer);
             second = Tr("Vale ao reiniciar o jogo");
             col = C::Green;
@@ -2858,13 +2862,16 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
         static int s_updateNoticeShown = 0; // phase already announced
         const UpdateChecker::Phase phase = UpdateChecker::CurrentPhase();
         const char* newer = UpdateChecker::NewerVersion();
-        const bool announce = newer && (phase == UpdateChecker::Phase::Installed ||
+        const bool announce = newer && (phase == UpdateChecker::Phase::Installed || phase == UpdateChecker::Phase::Updated ||
                                         (phase == UpdateChecker::Phase::Available && cfg.autoUpdate));
         if (announce && static_cast<int>(phase) > s_updateNoticeShown && g_controller.IsInManualReplay() &&
             !tel.siderOverlayOpen && GetTickCount64() >= tel.lastBannerUntilMs) {
             s_updateNoticeShown = static_cast<int>(phase);
             char text[128];
-            if (phase == UpdateChecker::Phase::Installed) {
+            if (phase == UpdateChecker::Phase::Updated) {
+                std::snprintf(text, sizeof(text), "%s %s  \xC2\xB7  %s", Tr("VAR MOD ATUALIZADO PARA"), newer, UpdateChecker::kReleasesUrl);
+                state.SetPostApplyBanner(text, 8000, BannerStyle::Applied);
+            } else if (phase == UpdateChecker::Phase::Installed) {
                 std::snprintf(text, sizeof(text), "%s %s  \xC2\xB7  %s", Tr("VAR MOD ATUALIZADO PARA"), newer, Tr("vale ao reiniciar o jogo"));
                 state.SetPostApplyBanner(text, 8000, BannerStyle::Applied);
             } else {

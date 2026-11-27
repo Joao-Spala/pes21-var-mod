@@ -8,6 +8,7 @@
 #include "input_manager.h"
 #include "match_hooks.h"
 #include "update_checker.h"
+#include "engine_guards.h"
 #include "var_hud.h"
 #include "var_state.h"
 #include "version.h"
@@ -78,12 +79,29 @@ void TestAobScannerBasic() {
 // ---------------------------------------------------------------------------
 // Test 2: Real PES2021.exe .text AOB & RIP-relative verification on disk
 // ---------------------------------------------------------------------------
+// PES2021_EXE, else the default Steam folders on C: and F:
+bool FindReferenceExe(char* out, size_t size) {
+    if (GetEnvironmentVariableA("PES2021_EXE", out, static_cast<DWORD>(size)) > 0 &&
+        GetFileAttributesA(out) != INVALID_FILE_ATTRIBUTES) return true;
+    const char* candidates[] = {
+        "C:\\Program Files (x86)\\Steam\\steamapps\\common\\eFootball PES 2021\\PES2021.exe",
+        "F:\\SteamLibrary\\steamapps\\common\\eFootball PES 2021\\PES2021.exe",
+    };
+    for (const char* c : candidates) {
+        if (GetFileAttributesA(c) != INVALID_FILE_ATTRIBUTES) {
+            std::snprintf(out, size, "%s", c);
+            return true;
+        }
+    }
+    return false;
+}
+
 void TestRealPes2021BinaryAobs() {
     // Set PES2021_EXE to your game executable to run this check; defaults to the standard Steam location
     char exePath[MAX_PATH] = {};
-    if (GetEnvironmentVariableA("PES2021_EXE", exePath, MAX_PATH) == 0) {
-        std::snprintf(exePath, sizeof(exePath), "%s",
-                      "C:\\Program Files (x86)\\Steam\\steamapps\\common\\eFootball PES 2021\\PES2021.exe");
+    if (!FindReferenceExe(exePath, sizeof(exePath))) {
+        std::printf("[SKIP] PES2021.exe not found (set PES2021_EXE)\n");
+        return;
     }
     std::ifstream f(exePath, std::ios::binary);
     if (!f.is_open()) {
@@ -214,7 +232,7 @@ void TestRealPes2021BinaryAobs() {
     EXPECT_EQ(rosterVa, 0x143714240ULL, "MatchRoster RIP-relative resolution mismatch");
 
     // FoulSnapshotPool::Find guard: 6-byte prologue and every unchecked call site must be `E8 rel32` to it
-    for (uintptr_t rva : FoulSnapshotUncheckedCallSites::Rvas) {
+    for (uintptr_t rva : FoulSnapshotUncheckedCallSites::HintRvas) {
         const uint64_t siteVa = imageBase + rva;
         const uintptr_t siteBuf = bufBase + static_cast<uintptr_t>(siteVa - textVaBase);
         const auto* sp = reinterpret_cast<const uint8_t*>(siteBuf);
@@ -275,7 +293,7 @@ void TestRealPes2021BinaryAobs() {
         const auto* lp = reinterpret_cast<const uint8_t*>(leaBuf);
         const uint64_t leaTarget = 0x14044201EULL + 7 + static_cast<int64_t>(*reinterpret_cast<const int32_t*>(leaBuf + 3));
         EXPECT_TRUE(lp[0] == 0x48 && lp[1] == 0x8D && lp[2] == 0x0D, "FSM ctor must load the spray ref vtable with lea rcx");
-        EXPECT_EQ(leaTarget, imageBase + Offsets::VanishingSprayRefVtableRva, "Live spray ref vtable RVA mismatch");
+        EXPECT_EQ(leaTarget, imageBase + RttiVtables::VanishingSprayRefHint, "Live spray ref vtable RVA mismatch");
     }
 
     const int64_t replaySingDisp = *reinterpret_cast<const int32_t*>(replaySyncBufAddr + 0x32 + 3);
@@ -283,6 +301,158 @@ void TestRealPes2021BinaryAobs() {
     EXPECT_EQ(replaySingVa, 0x143703558ULL, "ReplaySingleton RIP-relative resolution mismatch");
 
     MarkPass("TestRealPes2021BinaryAobs");
+}
+
+// ---------------------------------------------------------------------------
+// Engine builds: the executable is mapped as an image (never run) and the mod's own lookup code runs on it
+// exactly as in the game: every AOB unique in the executable sections, the derived globals, the FoulSnapshot
+// call sites by signature and the four vtables by RTTI. Reference build (PES2021.exe) and, when VAR_OTHER_BUILD_EXE points
+// to it, a build with other section names and other addresses.
+// ---------------------------------------------------------------------------
+struct BuildExpect {
+    uint32_t gmatch, roster, replaySingleton, cameraLow, cameraUp, spray, simMain;
+    uint32_t foulSites[3];
+};
+
+void CheckEngineBuild(const char* label, const char* path, const BuildExpect& e) {
+    wchar_t wpath[MAX_PATH] = {};
+    MultiByteToWideChar(CP_ACP, 0, path, -1, wpath, MAX_PATH);
+    HMODULE h = LoadLibraryExW(wpath, nullptr, LOAD_LIBRARY_AS_IMAGE_RESOURCE | LOAD_LIBRARY_AS_DATAFILE);
+    if (!h) {
+        std::printf("[FAIL] %s: could not map %s as an image (error %lu)\n", label, path, GetLastError());
+        ++g_failed;
+        return;
+    }
+    auto* base = reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(h) & ~static_cast<uintptr_t>(3));
+    auto rva = [&](uintptr_t a) { return static_cast<uint32_t>(a - reinterpret_cast<uintptr_t>(base)); };
+    struct Item { const char* name; const char* pattern; uintptr_t hint; };
+    const Item items[] = {
+        { "MainTick", Aobs::MainTick, AobHints::MainTick },
+        { "JudgeFinalizeFrame", Aobs::JudgeFinalizeFrame, AobHints::JudgeFinalizeFrame },
+        { "UpdateFoulCounters", Aobs::UpdateFoulCounters, AobHints::UpdateFoulCounters },
+        { "MatchFSM_EnterOutOfPlay", Aobs::MatchFSM_EnterOutOfPlay, AobHints::MatchFSM_EnterOutOfPlay },
+        { "MatchFSM_RebuildSetPlay", Aobs::MatchFSM_RebuildSetPlay, AobHints::MatchFSM_RebuildSetPlay },
+        { "MatchInfo_GetTimeFloat", Aobs::MatchInfo_GetTimeFloat, AobHints::MatchInfo_GetTimeFloat },
+        { "MatchInfo_SetPlayerOnPitch", Aobs::MatchInfo_SetPlayerOnPitch, AobHints::MatchInfo_SetPlayerOnPitch },
+        { "CommitCardsCallSite", Aobs::CommitCardsCallSite, AobHints::CommitCardsCallSite },
+        { "MatchRosterGetter", Aobs::MatchRosterGetter, AobHints::MatchRosterGetter },
+        { "ReplayCtrl_SyncToManager", Aobs::ReplayCtrl_SyncToManager, AobHints::ReplayCtrl_SyncToManager },
+        { "ReplayPlayer_SetFrame", Aobs::ReplayPlayer_SetFrame, AobHints::ReplayPlayer_SetFrame },
+        { "ReplayPlayer_GetFocusPos", Aobs::ReplayPlayer_GetFocusPos, AobHints::ReplayPlayer_GetFocusPos },
+        { "GrSwapChain_Present0", Aobs::GrSwapChain_Present0, AobHints::GrSwapChain_Present0 },
+        { "DInputKeyboard_Poll", Aobs::DInputKeyboard_Poll, AobHints::DInputKeyboard_Poll },
+        { "DInputJoystick_Poll", Aobs::DInputJoystick_Poll, AobHints::DInputJoystick_Poll },
+        { "DInputMouse_Poll", Aobs::DInputMouse_Poll, AobHints::DInputMouse_Poll },
+        { "PesPad_Update", Aobs::PesPad_Update, AobHints::PesPad_Update },
+        { "FoulSnapshotPool_Find", Aobs::FoulSnapshotPool_Find, AobHints::FoulSnapshotPool_Find },
+        { "VanishingSpray_NativeReset", Aobs::VanishingSpray_NativeReset, AobHints::VanishingSpray_NativeReset },
+        { "RecordHistory_AddEvent", Aobs::RecordHistory_AddEvent, AobHints::RecordHistory_AddEvent },
+        { "RecordHistory_ResetPending", Aobs::RecordHistory_ResetPending, AobHints::RecordHistory_ResetPending },
+        { "FixDemoMain_ClearMap", Aobs::FixDemoMain_ClearMap, AobHints::FixDemoMain_ClearMap },
+        { "SimMain_UpdateScore", Aobs::SimMain_UpdateScore, AobHints::SimMain_UpdateScore },
+        { "HeapGuard_Win32Munmap", HeapGuardAob::Win32Munmap, HeapGuardAob::Win32MunmapHintRva },
+    };
+    uintptr_t addr[sizeof(items) / sizeof(items[0])] = {};
+    bool allUnique = true;
+    for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); ++i) {
+        // Full scan (no hint) proves uniqueness in this build, the hinted lookup must land on the same address
+        const AobMatchResult full = AobScanner::ScanModuleText(base, items[i].pattern);
+        const AobMatchResult hinted = AobScanner::ScanModuleTextWithHint(base, items[i].pattern, items[i].hint);
+        if (!full.unique() || !hinted.unique() || full.address != hinted.address) {
+            std::printf("[FAIL] %s: AOB %s count=%zu (hinted 0x%X)\n", label, items[i].name, full.matchCount, rva(hinted.address));
+            ++g_failed;
+            allUnique = false;
+            continue;
+        }
+        addr[i] = full.address;
+    }
+    if (allUnique) {
+        auto ripTarget = [&](uintptr_t insn) { return rva(AobScanner::ResolveRipRelative(insn, 3, 7)); };
+        const auto* mt = reinterpret_cast<const uint8_t*>(addr[0] + 0x30);
+        EXPECT_TRUE(mt[0] == 0x48 && mt[1] == 0x8B && mt[2] == 0x05, "MainTick+0x30 is the GMATCH load");
+        EXPECT_EQ(ripTarget(addr[0] + 0x30), e.gmatch, "GMATCH global");
+        EXPECT_EQ(ripTarget(addr[8]), e.roster, "MatchRoster global");
+        EXPECT_EQ(ripTarget(addr[9] + 0x32), e.replaySingleton, "ReplaySingleton global");
+        auto at = [&](uint32_t r) { return reinterpret_cast<uintptr_t>(base) + r; };
+        EXPECT_TRUE(AobScanner::IsInWritableSection(base, at(e.gmatch), 8) && AobScanner::IsInWritableSection(base, at(e.roster), 8) &&
+                    AobScanner::IsInWritableSection(base, at(e.replaySingleton), 8), "globals are writable data");
+        EXPECT_TRUE(!AobScanner::IsInWritableSection(base, addr[0], 8), "code is never accepted as a global");
+        for (size_t i = 0; i < 3; ++i) {
+            const uintptr_t hint = FoulSnapshotUncheckedCallSites::HintRvas[i] - FoulSnapshotUncheckedCallSites::kCallOffset;
+            const AobMatchResult full = AobScanner::ScanModuleText(base, FoulSnapshotUncheckedCallSites::Patterns[i]);
+            const AobMatchResult hinted = AobScanner::ScanModuleTextWithHint(base, FoulSnapshotUncheckedCallSites::Patterns[i], hint);
+            EXPECT_TRUE(full.unique() && hinted.address == full.address, "FoulSnapshot call site signature unique");
+            if (!full.unique()) continue;
+            const uintptr_t site = full.address + FoulSnapshotUncheckedCallSites::kCallOffset;
+            EXPECT_EQ(rva(site), e.foulSites[i], "FoulSnapshot call site address");
+            const int32_t rel = *reinterpret_cast<const int32_t*>(site + 1);
+            EXPECT_TRUE(*reinterpret_cast<const uint8_t*>(site) == 0xE8 && site + 5 + rel == addr[17],
+                        "FoulSnapshot call site calls FoulSnapshotPool::Find");
+        }
+    }
+    struct Vt { const char* name; uintptr_t hint; uint32_t expect; };
+    const Vt vts[] = {
+        { RttiVtables::ReplayCameraLow, RttiVtables::ReplayCameraLowHint, e.cameraLow },
+        { RttiVtables::ReplayCameraUp, RttiVtables::ReplayCameraUpHint, e.cameraUp },
+        { RttiVtables::VanishingSprayRef, RttiVtables::VanishingSprayRefHint, e.spray },
+        { RttiVtables::SimMain, RttiVtables::SimMainHint, e.simMain },
+    };
+    for (const Vt& v : vts) {
+        const uintptr_t scanned = AobScanner::FindVtableByRtti(base, v.name, 0);
+        const uintptr_t hinted = AobScanner::FindVtableByRtti(base, v.name, v.hint);
+        if (!scanned || scanned != hinted || rva(scanned) != v.expect) {
+            std::printf("[FAIL] %s: vtable %s scanned 0x%X hinted 0x%X expected 0x%X\n", label, v.name,
+                        scanned ? rva(scanned) : 0, hinted ? rva(hinted) : 0, v.expect);
+            ++g_failed;
+        }
+    }
+    EXPECT_TRUE(AobScanner::FindVtableByRtti(base, ".?AVNoSuchClass@var@@", 0) == 0, "unknown class gives 0");
+    FreeLibrary(h);
+}
+
+void TestEngineBuildsByImage() {
+    char ref[MAX_PATH] = {};
+    if (FindReferenceExe(ref, sizeof(ref))) {
+        CheckEngineBuild("PES2021", ref, BuildExpect{ 0x3702208, 0x3714240, 0x3703558, 0x2BDFB40, 0x2BDFB88, 0x25A1570, 0x2BF58F8,
+                                                      { 0x4B49BD, 0x4B4BC7, 0x4B4EA0 } });
+    } else {
+        std::printf("[SKIP] reference PES2021.exe not found\n");
+    }
+    char other[MAX_PATH] = {};
+    if (GetEnvironmentVariableA("VAR_OTHER_BUILD_EXE", other, MAX_PATH) > 0) {
+        CheckEngineBuild("other build", other, BuildExpect{ 0x36F3DC8, 0x3705E10, 0x36F5118, 0x2BD3C80, 0x2BD3CC8, 0x2598490, 0x2BE9A88,
+                                                     { 0x4B3FFD, 0x4B4207, 0x4B44E0 } });
+    } else {
+        std::printf("[SKIP] VAR_OTHER_BUILD_EXE not set: second engine build not checked\n");
+    }
+    MarkPass("TestEngineBuildsByImage");
+}
+
+// Engine check (engine_guards.inc): both studied builds prove every guarded offset and hooked function body; an
+// executable that is not the game (this test binary) is refused.
+void TestEngineGuards() {
+    auto run = [](const char* label, const char* path, bool expectReference) {
+        wchar_t wpath[MAX_PATH] = {};
+        MultiByteToWideChar(CP_ACP, 0, path, -1, wpath, MAX_PATH);
+        HMODULE h = LoadLibraryExW(wpath, nullptr, LOAD_LIBRARY_AS_IMAGE_RESOURCE | LOAD_LIBRARY_AS_DATAFILE);
+        if (!h) { std::printf("[FAIL] %s not mapped\n", label); ++g_failed; return; }
+        void* base = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(h) & ~static_cast<uintptr_t>(3));
+        const EngineGuards::Report r = EngineGuards::VerifyImage(base);
+        std::printf("[info] %s: %s\n", label, EngineGuards::Summary(r).c_str());
+        if (!r.missingOffsets.empty()) std::printf("[info]   missing offsets: %s\n", r.missingOffsets.c_str());
+        if (!r.missingBodies.empty()) std::printf("[info]   missing bodies: %s\n", r.missingBodies.c_str());
+        EXPECT_TRUE(r.ok, "studied build passes the engine check");
+        EXPECT_TRUE(r.referenceBuild == expectReference, "reference build recognized by its addresses");
+        EXPECT_TRUE(r.offsets > 50 && r.bodies >= 12, "the check covers the structure offsets and the hooked functions");
+        FreeLibrary(h);
+    };
+    char ref[MAX_PATH] = {};
+    if (FindReferenceExe(ref, sizeof(ref))) run("reference", ref, true);
+    char other[MAX_PATH] = {};
+    if (GetEnvironmentVariableA("VAR_OTHER_BUILD_EXE", other, MAX_PATH) > 0) run("other build", other, false);
+    const EngineGuards::Report self = EngineGuards::VerifyImage(GetModuleHandleW(nullptr));
+    EXPECT_TRUE(!self.ok && self.offsetsConfirmed == 0, "an executable that is not the game is refused");
+    MarkPass("TestEngineGuards");
 }
 
 // ---------------------------------------------------------------------------
@@ -1750,7 +1920,7 @@ void TestUpdateChecker() {
     EXPECT_TRUE(CompareVersions("4.5.0", "4.5.1") < 0, "patch");
     EXPECT_TRUE(CompareVersions("5.0.0", VAR_MOD_VERSION) > 0, "major above the installed one");
     EXPECT_TRUE(CheckDue(0, 1000000), "never checked");
-    EXPECT_TRUE(!CheckDue(1000000, 1000000 + 3600), "1 h later: not due");
+    EXPECT_TRUE(!CheckDue(1000000, 1000000 + 120), "2 min later (quick restart): not due");
     EXPECT_TRUE(CheckDue(1000000, 1000000 + kCheckIntervalSec), "interval elapsed: due");
     EXPECT_TRUE(CheckDue(1000000 + 86400 * 5, 1000000), "clock moved back: due");
     // No base dir in the tests: Start never starts a request, and nothing newer is known
@@ -1814,7 +1984,10 @@ void TestUpdateChecker() {
     EXPECT_TRUE(ReadAll(dllPath + L".old") == origDll && ReadAll(luaPath + L".old") == "old lua", "old files kept");
     if (loaded) FreeLibrary(loaded);
     // Next start: the replaced files move to the previous folder
-    FinishPreviousUpdate(base, luaPath);
+    WriteAll(base + L"var_core.next.dll", dll); // copy left for the session, not loaded at the next start
+    EXPECT_TRUE(FinishPreviousUpdate(base, luaPath), "an update had just been installed");
+    EXPECT_TRUE(GetFileAttributesW((base + L"var_core.next.dll").c_str()) == INVALID_FILE_ATTRIBUTES, "session copy removed");
+    EXPECT_TRUE(!FinishPreviousUpdate(base, luaPath), "nothing to finish the second time");
     EXPECT_TRUE(ReadAll(base + L"previous\\var_core.dll") == origDll && ReadAll(base + L"previous\\var_mod.lua") == "old lua",
                 "previous version kept for a manual rollback");
     EXPECT_TRUE(GetFileAttributesW((dllPath + L".old").c_str()) == INVALID_FILE_ATTRIBUTES, "no .old left");
@@ -3699,6 +3872,8 @@ int main() {
     TestCalledPlayNotSuspect();
     TestMsvcTreeRepair();
     TestUpdateChecker();
+    TestEngineBuildsByImage();
+    TestEngineGuards();
     TestRemapAndLanguage();
     TestHudRenderSmoke();
     TestCompositeVerdictPoolAndRcuOffsets();

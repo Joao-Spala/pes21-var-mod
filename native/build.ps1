@@ -79,6 +79,7 @@ $CoreSources = @(
     (Join-Path $SrcDir "var_hud_render.cpp"),
     (Join-Path $SrcDir "dx11_hook.cpp"),
     (Join-Path $SrcDir "update_checker.cpp"),
+    (Join-Path $SrcDir "engine_guards.cpp"),
     (Join-Path $SrcDir "dllmain.cpp")
 )
 
@@ -164,7 +165,8 @@ if (-not $SkipTests) {
             (Join-Path $BuildTmp "input_manager.o"),
             (Join-Path $BuildTmp "var_hud.o"),
             (Join-Path $BuildTmp "var_hud_render.o"),
-            (Join-Path $BuildTmp "update_checker.o")
+            (Join-Path $BuildTmp "update_checker.o"),
+            (Join-Path $BuildTmp "engine_guards.o")
         )
         $TestImguiObjs = @(
             (Join-Path $BuildTmp "imgui.o"),

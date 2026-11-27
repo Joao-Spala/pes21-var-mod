@@ -1,3 +1,4 @@
+#include "engine_guards.h"
 #include "match_hooks.h"
 
 #include "aob_scanner.h"
@@ -50,10 +51,14 @@ FnSprayRefCommit   g_fnSprayRefCommit   = nullptr;
 using FnRebuildSetPlay = void(__fastcall*)(void* matchFsm);
 FnRebuildSetPlay   g_fnRebuildSetPlay   = nullptr; // MatchFSM_RebuildSetPlay 0x140454280
 uintptr_t          g_sprayRefVtable     = 0;
+// Resolved by RTTI at install (0 = not found: the feature that compares against it stays off)
+uintptr_t          g_cameraLowVtable    = 0;
+uintptr_t          g_cameraUpVtable     = 0;
+uintptr_t          g_simMainVtable      = 0;
 
 // Foul snapshot guard (see Detour_FoulSnapshotFind)
 using FnFoulSnapshotFind = uint8_t*(__fastcall*)(uint8_t* pool, uint32_t id);
-constexpr size_t kUncheckedFindSites = sizeof(FoulSnapshotUncheckedCallSites::Rvas) / sizeof(uintptr_t);
+constexpr size_t kUncheckedFindSites = sizeof(FoulSnapshotUncheckedCallSites::HintRvas) / sizeof(uintptr_t);
 uintptr_t g_uncheckedFindReturnAddrs[kUncheckedFindSites] = {};
 std::atomic<uint32_t> g_foulSnapshotGuardHits{ 0 };
 // Zeroed stand-in snapshot: 0x3E4 bytes per snapshot, but the consumers index entries with
@@ -1171,8 +1176,8 @@ void PutBackLocked() {
 // with the annulled goal, so the bytes are proven to be the score. Caller holds g_mutex.
 void SyncScoreboardLocked() {
     uint8_t* model = g_simMainModel.load(std::memory_order_acquire);
-    const uintptr_t simMainVtable = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) + 0x2BF58F8; // SimMain@Screen@match2D
-    if (!IsValidPtr(model) || !IsMemoryRangeReadable(model, kSimMain_Data + 8) ||
+    const uintptr_t simMainVtable = g_simMainVtable; // SimMain@Screen@match2D, resolved by RTTI
+    if (!simMainVtable || !IsValidPtr(model) || !IsMemoryRangeReadable(model, kSimMain_Data + 8) ||
         *reinterpret_cast<const uintptr_t*>(model) != simMainVtable) {
         VAR_LOG_INF("Scoreboard copy not known yet: it updates when the engine refreshes it");
         return;
@@ -1707,7 +1712,7 @@ void ResetVanishingSpray(uint8_t* fsm) {
     if (!g_fnSprayRefGetWrite || !g_fnSprayReset || !g_fnSprayRefCommit || !IsValidPtr(fsm)) return;
     uint8_t* ref = fsm + Offsets::MatchFSM_VanishingSprayRef;
     if (!IsMemoryRangeReadable(ref, 0x28)) return;
-    if (*reinterpret_cast<const uintptr_t*>(ref) != g_sprayRefVtable) return; // not the spray reference
+    if (!g_sprayRefVtable || *reinterpret_cast<const uintptr_t*>(ref) != g_sprayRefVtable) return; // not the spray reference
     uint8_t* spray = g_fnSprayRefGetWrite(ref);
     if (spray) {
         g_fnSprayReset(spray);
@@ -3520,10 +3525,9 @@ void __fastcall Detour_ReplayCtrlSync(void* replayCtrl) {
                         std::memcpy(camState + Offsets::ReplayCamState_LookAtPos, focus, sizeof(focus));
                         uint8_t* camCtrl = *reinterpret_cast<uint8_t**>(cam + Offsets::ReplayCam_ControllerPtr);
                         if (IsValidPtr(camCtrl)) {
-                            static const uintptr_t kImage = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
                             const uintptr_t vt = *reinterpret_cast<const uintptr_t*>(camCtrl);
-                            if (vt == kImage + Offsets::ReplayCamCtrlMode0VtableRva ||
-                                vt == kImage + Offsets::ReplayCamCtrlMode1VtableRva) {
+                            if ((g_cameraLowVtable && vt == g_cameraLowVtable) ||
+                                (g_cameraUpVtable && vt == g_cameraUpVtable)) {
                                 std::memcpy(camCtrl + Offsets::ReplayCamCtrl_CachedTarget, focus, sizeof(focus));
                             }
                         }
@@ -3565,13 +3569,16 @@ __attribute__((noinline)) uint8_t* __fastcall Detour_FoulSnapshotFind(uint8_t* p
     return nullptr;
 }
 
-// Validates each unchecked call site (`E8 rel32` -> FoulSnapshotPool_Find) and records its return address.
+// Finds each unchecked call site by signature, validates it (`E8 rel32` -> FoulSnapshotPool_Find) and records
+// its return address.
 size_t ArmFoulSnapshotGuardSites(uintptr_t findAddr) {
-    const auto imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     size_t armed = 0;
     for (size_t i = 0; i < kUncheckedFindSites; ++i) {
         g_uncheckedFindReturnAddrs[i] = 0;
-        const uintptr_t site = imageBase + FoulSnapshotUncheckedCallSites::Rvas[i];
+        const uintptr_t hint = FoulSnapshotUncheckedCallSites::HintRvas[i] - FoulSnapshotUncheckedCallSites::kCallOffset;
+        const AobMatchResult m = AobScanner::ScanModuleTextWithHint(nullptr, FoulSnapshotUncheckedCallSites::Patterns[i], hint);
+        if (!m.unique()) continue;
+        const uintptr_t site = m.address + FoulSnapshotUncheckedCallSites::kCallOffset;
         if (!IsMemoryRangeReadable(reinterpret_cast<const void*>(site), 5)) continue;
         const auto* p = reinterpret_cast<const uint8_t*>(site);
         if (p[0] != 0xE8) continue;
@@ -3801,9 +3808,13 @@ namespace {
 bool MatchHooks::Install(bool quietOnMiss) {
     std::lock_guard<std::mutex> lock(g_hooksLifecycleMutex);
     if (g_installed.load(std::memory_order_relaxed)) return true;
+    if (!EngineGuards::Verify().ok) return false; // logged once by the check
 
-    auto resolveUnique = [quietOnMiss](const char* name, const char* pat, uintptr_t hintRva) -> uintptr_t {
-        const AobMatchResult r = AobScanner::ScanModuleTextWithHint(nullptr, pat, hintRva);
+    // Function entries (hooked or called) accept a 5-byte jump another mod put there. Patterns that are not a
+    // function entry (a call site, the roster getter decoded at +0) never do.
+    auto resolveUnique = [quietOnMiss](const char* name, const char* pat, uintptr_t hintRva,
+                                       bool allowEntryJump = true) -> uintptr_t {
+        const AobMatchResult r = AobScanner::ScanModuleTextWithHint(nullptr, pat, hintRva, allowEntryJump);
         if (!r.unique()) {
             if (!quietOnMiss) {
                 VAR_LOG_ERR("AOB '%s' failed: matchCount=%zu addr=0x%llX",
@@ -3821,8 +3832,8 @@ bool MatchHooks::Install(bool quietOnMiss) {
     const uintptr_t addrEnterOutOfPlay = resolveUnique("MatchFSM_EnterOutOfPlay", Aobs::MatchFSM_EnterOutOfPlay, AobHints::MatchFSM_EnterOutOfPlay);
     const uintptr_t addrGetTimeFloat   = resolveUnique("MatchInfo_GetTimeFloat", Aobs::MatchInfo_GetTimeFloat, AobHints::MatchInfo_GetTimeFloat);
     const uintptr_t addrSetOnPitch     = resolveUnique("MatchInfo_SetPlayerOnPitch", Aobs::MatchInfo_SetPlayerOnPitch, AobHints::MatchInfo_SetPlayerOnPitch);
-    const uintptr_t addrCommitCards    = resolveUnique("CommitCardsCallSite", Aobs::CommitCardsCallSite, AobHints::CommitCardsCallSite);
-    const uintptr_t addrRosterGetter   = resolveUnique("MatchRosterGetter", Aobs::MatchRosterGetter, AobHints::MatchRosterGetter);
+    const uintptr_t addrCommitCards    = resolveUnique("CommitCardsCallSite", Aobs::CommitCardsCallSite, AobHints::CommitCardsCallSite, false);
+    const uintptr_t addrRosterGetter   = resolveUnique("MatchRosterGetter", Aobs::MatchRosterGetter, AobHints::MatchRosterGetter, false);
 
     // Native Replay Seek & Camera Focus AOBs
     const uintptr_t addrReplayCtrlSync = resolveUnique("ManualReplayController::SyncToReplayManager",
@@ -3847,7 +3858,13 @@ bool MatchHooks::Install(bool quietOnMiss) {
             g_fnSprayReset       = reinterpret_cast<FnSprayReset>(rs);
             g_fnSprayRefCommit   = reinterpret_cast<FnSprayRefCommit>(cm);
         }
-        g_sprayRefVtable     = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) + Offsets::VanishingSprayRefVtableRva;
+        static bool s_sprayVtableResolved = false; // once per process, not on every Install retry
+        if (!s_sprayVtableResolved) {
+            s_sprayVtableResolved = true;
+            g_sprayRefVtable = AobScanner::FindVtableByRtti(nullptr, RttiVtables::VanishingSprayRef,
+                                                            RttiVtables::VanishingSprayRefHint);
+            if (!g_sprayRefVtable) VAR_LOG_WRN("VanishingSprayInfoRef vtable not found by RTTI: the spray reset stays off");
+        }
         VAR_LOG_INF("Vanishing spray reset resolved: getWrite=0x%llX reset=0x%llX commit=0x%llX",
                     static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_fnSprayRefGetWrite)),
                     static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_fnSprayReset)),
@@ -3866,14 +3883,41 @@ bool MatchHooks::Install(bool quietOnMiss) {
         return false;
     }
 
-    g_gmatchPtrAddr = AobScanner::ResolveRipRelative(addrMainTick + 0x30, 3, 7);
+    // GMATCH global: `mov rax, [rip+disp32]` at MainTick + 0x30, inside the AOB (disp wildcarded). The target
+    // must be writable data of the image.
+    {
+        const auto* insn = reinterpret_cast<const uint8_t*>(addrMainTick + 0x30);
+        const uintptr_t target = (insn[0] == 0x48 && insn[1] == 0x8B && insn[2] == 0x05)
+            ? AobScanner::ResolveRipRelative(addrMainTick + 0x30, 3, 7) : 0;
+        if (!target || !AobScanner::IsInWritableSection(nullptr, target, 8)) {
+            VAR_LOG_ERR("MatchHooks::Install aborted: the GMATCH global of this build is not in writable data");
+            return false;
+        }
+        g_gmatchPtrAddr = target;
+    }
     VAR_LOG_INF("Resolved GMATCH global ptr -> 0x%llX", static_cast<unsigned long long>(g_gmatchPtrAddr));
+    // The image never changes: the RTTI lookups run once per process, not on every Install retry
+    static bool s_rttiResolved = false;
+    if (!s_rttiResolved) {
+        s_rttiResolved = true;
+        g_cameraLowVtable = AobScanner::FindVtableByRtti(nullptr, RttiVtables::ReplayCameraLow, RttiVtables::ReplayCameraLowHint);
+        g_cameraUpVtable  = AobScanner::FindVtableByRtti(nullptr, RttiVtables::ReplayCameraUp, RttiVtables::ReplayCameraUpHint);
+        g_simMainVtable   = AobScanner::FindVtableByRtti(nullptr, RttiVtables::SimMain, RttiVtables::SimMainHint);
+        VAR_LOG_INF("RTTI vtables: CameraLow 0x%llX CameraUp 0x%llX SimMain 0x%llX (0 = feature off)",
+                    static_cast<unsigned long long>(g_cameraLowVtable), static_cast<unsigned long long>(g_cameraUpVtable),
+                    static_cast<unsigned long long>(g_simMainVtable));
+    }
 
     const uintptr_t addrGetPlayerBySlot = ResolveCallChecked(addrCommitCards + 6, "TeamInfo_GetPlayerBySlot");
     VAR_LOG_INF("Resolved TeamInfo_GetPlayerBySlot -> 0x%llX", static_cast<unsigned long long>(addrGetPlayerBySlot));
 
     if (addrRosterGetter) {
         g_matchRosterPtrAddr = AobScanner::ResolveRipRelative(addrRosterGetter, 3, 7);
+        if (!AobScanner::IsInWritableSection(nullptr, g_matchRosterPtrAddr, 8)) {
+            VAR_LOG_WRN("MatchRoster global 0x%llX is not in writable data: team names and kits are not read",
+                        static_cast<unsigned long long>(g_matchRosterPtrAddr));
+            g_matchRosterPtrAddr = 0;
+        }
         VAR_LOG_INF("Resolved MatchRoster global ptr -> 0x%llX", static_cast<unsigned long long>(g_matchRosterPtrAddr));
     }
 
@@ -3922,7 +3966,8 @@ bool MatchHooks::Install(bool quietOnMiss) {
     if (addrReplayCtrlSync && addrReplaySetFrame) {
         // Resolve ReplaySingleton global (0x143703558) from `48 8B 05 disp32` at SyncToReplayManager + 0x32
         const auto* ripInsn = reinterpret_cast<const uint8_t*>(addrReplayCtrlSync + 0x32);
-        if (ripInsn[0] == 0x48 && ripInsn[1] == 0x8B && ripInsn[2] == 0x05) {
+        if (ripInsn[0] == 0x48 && ripInsn[1] == 0x8B && ripInsn[2] == 0x05 &&
+            AobScanner::IsInWritableSection(nullptr, AobScanner::ResolveRipRelative(addrReplayCtrlSync + 0x32, 3, 7), 8)) {
             g_replaySingletonPtrAddr = AobScanner::ResolveRipRelative(addrReplayCtrlSync + 0x32, 3, 7);
             VAR_LOG_INF("Resolved ReplaySingleton global ptr -> 0x%llX",
                         static_cast<unsigned long long>(g_replaySingletonPtrAddr));

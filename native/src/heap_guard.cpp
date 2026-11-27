@@ -189,7 +189,7 @@ namespace HeapGuard {
 
 bool Install() {
     if (g_installed.load(std::memory_order_acquire)) return true;
-    const AobMatchResult r = AobScanner::ScanModuleTextWithHint(nullptr, HeapGuardAob::Win32Munmap, HeapGuardAob::Win32MunmapHintRva);
+    const AobMatchResult r = AobScanner::ScanModuleTextWithHint(nullptr, HeapGuardAob::Win32Munmap, HeapGuardAob::Win32MunmapHintRva, true);
     if (!r.unique()) {
         VAR_LOG_ERR("HeapGuard: win32munmap AOB failed (matchCount=%zu), heap trim keeps the native release",
                     r.matchCount);

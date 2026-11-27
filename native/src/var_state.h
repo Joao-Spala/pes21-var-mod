@@ -147,7 +147,7 @@ struct HudConfig {
     bool autoZoomBox     = true;  // Automatically zoom 2D radar into penalty area when play is near box
     bool autoOpenPanel   = true;  // Open VAR panel automatically upon entering Manual Replay
     bool replayAfterDecision = true; // After a decision applied with the ball in play, the engine replays the reviewed moment
-    bool autoUpdate      = true;  // Every 6 h, read the latest release on GitHub and install a signed newer version
+    bool autoUpdate      = true;  // At each game start, read the latest release on GitHub and install a signed newer version
 };
 
 struct TeamDisplayInfo {

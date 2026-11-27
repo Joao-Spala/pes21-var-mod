@@ -4,7 +4,8 @@
 #include <cstdint>
 #include <string>
 
-// Automatic update. Option "Atualizacao automatica" (on by default). At most every 6 h a background thread reads
+// Automatic update. Option "Atualizacao automatica" (on by default). Each time the game opens (at most once every
+// 10 min) a background thread reads
 // the tag of the latest release of the public repository (HTTPS GET to api.github.com, no cookies, no identifiers,
 // nothing about the user or the game is sent). When it is newer than the running version it downloads the
 // release's update_manifest.txt, its signature, var_core.dll and var_mod.lua, and installs them only if:
@@ -13,19 +14,22 @@
 //   - the manifest version equals the release tag and is above the running version (no downgrade),
 //   - both files match the SHA-256 and size written in the signed manifest.
 // The running DLL is renamed to var_core.dll.old (Windows allows it while loaded), the new files take the
-// original names, and the new version runs from the next game start. Any failure rolls back and leaves the
-// notice "new version available" with the release page instead. Next start, the previous files are kept in
-// modules\var_mod\previous\ for a manual rollback.
+// original names, and a copy var_core.next.dll is left for this session: the Lua module starts the check when
+// the game opens and, if the update is in place before the first match, loads that copy instead of the old DLL,
+// so the fixes apply in the same session. Otherwise they apply at the next start. Any failure rolls back and
+// leaves the notice "new version available" with the release page instead. Next start, the previous files are
+// kept in modules\var_mod\previous\ for a manual rollback.
 namespace var_mod::UpdateChecker {
 
 constexpr const char* kReleasesUrl = "github.com/Joao-Spala/pes21-var-mod/releases";
-constexpr int64_t kCheckIntervalSec = 6 * 60 * 60;
+constexpr int64_t kCheckIntervalSec = 10 * 60; // every game start, quick restarts aside
 
 enum class Phase : int {
     Idle       = 0, // nothing newer known
     Available  = 1, // newer version known, not installed (option off, unsigned release or a failure)
     Installing = 2, // downloading and checking
-    Installed  = 3, // new files in place, active from the next game start
+    Installed  = 3, // new files in place (var_core.next.dll ready for this session)
+    Updated    = 4, // this DLL is the version an earlier update installed (announced once)
 };
 
 // Folder of var_mod.ini and var_core.dll (modules\var_mod\). var_mod.lua is one level up. Without it Start does
@@ -66,7 +70,8 @@ bool ValidateUpdate(const std::string& manifest, const std::string& sigHex, cons
                     const std::string& lua, const uint8_t pubXY[64], Manifest& out, const char** why);
 // Puts both files in place (see the header comment). Rolls back on any failure.
 bool ApplyUpdate(const std::wstring& dllPath, const std::wstring& luaPath, const std::string& dll, const std::string& lua);
-// Next start after an update: replaced files go to <baseDir>previous\, leftovers are removed
-void FinishPreviousUpdate(const std::wstring& baseDir, const std::wstring& luaPath);
+// After an update (same session from var_core.next.dll, or the next start): replaced files go to
+// <baseDir>previous\, leftovers are removed. True when an update had just been installed.
+bool FinishPreviousUpdate(const std::wstring& baseDir, const std::wstring& luaPath);
 
 } // namespace var_mod::UpdateChecker

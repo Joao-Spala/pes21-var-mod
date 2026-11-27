@@ -1,3 +1,4 @@
+#include "engine_guards.h"
 #include "dx11_hook.h"
 
 #include "aob_scanner.h"
@@ -397,7 +398,7 @@ HRESULT __fastcall Detour_GrSwapChainPresent(void* grSwapChain, UINT syncInterva
 
 bool InstallNativePresentHook(bool quietOnMiss) {
     const AobMatchResult r = AobScanner::ScanModuleTextWithHint(
-        nullptr, Aobs::GrSwapChain_Present0, AobHints::GrSwapChain_Present0);
+        nullptr, Aobs::GrSwapChain_Present0, AobHints::GrSwapChain_Present0, true);
     if (!r.unique()) {
         if (!quietOnMiss) {
             VAR_LOG_ERR("AOB 'GrSwapChain::Present0' failed: matchCount=%zu addr=0x%llX",
@@ -428,6 +429,12 @@ bool InstallNativePresentHook(bool quietOnMiss) {
 void InitWorker() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     if (g_stopRequested.load(std::memory_order_acquire)) return;
+    // No hook at all (HUD, input, match) in an executable that does not prove the studied engine
+    if (!EngineGuards::Verify().ok) {
+        Logger::Flush();
+        g_initFinished.store(true, std::memory_order_release);
+        return;
+    }
 
     // Install MatchHooks + native Fox Engine Present & DirectInput blocker hooks (< 0.8 ms via shared 4KB slab)
     bool presentOk = false;

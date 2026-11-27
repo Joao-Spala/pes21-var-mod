@@ -149,7 +149,7 @@ Settings are saved in `<sider folder>\modules\var_mod\var_mod.ini`.
 | Automatic updates | On |
 | Controls | Two keys per action, remappable |
 
-**Automatic updates**: every 6 hours at most, in the background, the mod reads the number of the latest release on this repository (one request to `api.github.com`, nothing about you, your PC or your matches is sent). When a newer version exists, it downloads it and installs it by itself, with no action from you. The new version takes effect the next time the game starts, and a notice in the VAR replay says so. Before installing, the mod checks the digital signature of the release with a key that only the author has, and the size and SHA-256 of each file. A release without that signature is never installed (only the notice with the release page is shown), so a stolen GitHub account cannot push code to your PC. The previous version stays in `modules\var_mod\previous\` to go back by hand. Turn the option off to make the mod use no network at all.
+**Automatic updates**: each time the game opens, in the background, the mod reads the number of the latest release on this repository (one request to `api.github.com`, nothing about you, your PC or your matches is sent). When a newer version exists, it downloads it and installs it by itself, with no action from you and nothing to run. It usually takes a second or two, so the new version is already the one used in your first match, and a notice in the VAR replay says so. If the download only finishes after the first match has started, the new version takes effect the next time the game opens. Before installing, the mod checks the digital signature of the release with a key that only the author has, and the size and SHA-256 of each file. A release without that signature is never installed (only the notice with the release page is shown), so a stolen GitHub account cannot push code to your PC. The previous version stays in `modules\var_mod\previous\` to go back by hand. Turn the option off to make the mod use no network at all.
 
 ## Shortcuts
 
@@ -169,7 +169,7 @@ All shortcuts can be changed in **OPTIONS > Controls**. While the panel has focu
 
 ## Limitations
 
-- Supports only the Steam executable `v1.7.2.0`.
+- Made and tested on the Steam executable `v1.7.2.0`. Before installing anything, the mod checks that the running executable has the engine code and structure layout it was built for, so other executables of the same engine (other game versions, patches with their own executable) work when they pass that check. One that does not pass leaves the VAR off, with the reason in `modules\var_mod\var_core.log` and in the Sider menu (`EXECUTÁVEL NÃO RECONHECIDO`). Executables other than `v1.7.2.0` were checked against the file, not in a match.
 - Offline matches only: Exhibition, Master League, Become a Legend and Cups. The game's network, DRM and online modes are not touched. The only connection the mod makes is the optional automatic update above.
 - A decision applies to the stoppage in which it was made. A goal can be disallowed until its kickoff is taken.
 - The replay after the decision requires a foul or penalty given with the ball in play and the reviewed moment still in the game's replay memory (about 11 s of play). The engine's own instant replay may play first.

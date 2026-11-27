@@ -1,4 +1,5 @@
 #include "dx11_hook.h"
+#include "engine_guards.h"
 #include "i18n.h"
 #include "inline_hook.h"
 #include "input_manager.h"
@@ -106,21 +107,57 @@ __declspec(dllexport) int __cdecl var_init(const char* logDirUtf8) {
 
     var_mod::VarState::Instance().SetIniPath(baseDir.empty() ? L"var_mod.ini" : (baseDir + L"var_mod.ini"));
     var_mod::VarState::Instance().LoadHudConfig();
-    // Automatic update (option "Atualizacao automatica", on by default): background check every 6 h, a newer
-    // release is installed only with a valid signature and takes effect at the next game start
+    // Automatic update (option "Atualizacao automatica", on by default). Normally already started by
+    // var_update_start when the game opened (then these two calls do nothing). A newer release is installed only
+    // with a valid signature.
     var_mod::UpdateChecker::SetBaseDir(baseDir);
     var_mod::UpdateChecker::Start(var_mod::VarState::Instance().GetHudConfig().autoUpdate);
 
     // Engine heap fix, independent from the VAR itself: makes the dlmalloc segment release atomic so the
     // post-match heap trim cannot write into a segment it has just released (crash at PES2021.exe+0x3FE31D).
-    var_mod::HeapGuard::Install();
+    // Nothing is hooked in an executable that does not prove the engine code and layout the mod was built for
+    // (engine_guards.inc). The check runs once and is cached for every later install path.
+    const bool engineOk = var_mod::EngineGuards::Verify().ok;
+    if (engineOk) {
+        var_mod::HeapGuard::Install();
+    }
 
     // Install XInput IAT hook immediately (< 1 ms); defer all AOB scans and DX11 hooking
     // to the async background worker so Sider / patch startup never stalls the main thread.
-    var_mod::InputManager::InstallXInputHook();
+    if (engineOk) var_mod::InputManager::InstallXInputHook();
     var_mod::Dx11Hook::StartAsync();
     VAR_LOG_INF("var_core.dll v" VAR_MOD_VERSION " initialization started (async)");
     return 1;
+}
+
+// Called by the Lua module when the game opens, long before var_init (first match): only reads the settings and
+// starts the background update check. No hooks, no game memory. Its log goes to var_update.log until var_init
+// opens var_core.log. var_update_state reports the update phase (3 = installed, var_core.next.dll ready).
+__declspec(dllexport) int __cdecl var_update_start(const char* baseDirUtf8) {
+    static std::atomic<bool> s_started{ false };
+    if (s_started.exchange(true, std::memory_order_acq_rel)) return 1;
+    {
+        // The update thread runs code of this module: it must never be unmapped
+        HMODULE pinned = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                           reinterpret_cast<LPCWSTR>(&var_update_start), &pinned);
+    }
+    const std::wstring baseDir = ResolveBaseDir(baseDirUtf8);
+    if (baseDir.empty()) return 0;
+    if (!g_initialized.load(std::memory_order_acquire)) {
+        var_mod::Logger::Init(baseDir + L"var_update.log");
+        VAR_LOG_INF("PES 2021 VAR Mod v" VAR_MOD_VERSION ": update check at game start");
+        var_mod::VarState::Instance().SetIniPath(baseDir + L"var_mod.ini");
+        var_mod::VarState::Instance().LoadHudConfig();
+    }
+    var_mod::UpdateChecker::SetBaseDir(baseDir);
+    var_mod::UpdateChecker::Start(var_mod::VarState::Instance().GetHudConfig().autoUpdate);
+    var_mod::Logger::Flush();
+    return 1;
+}
+
+__declspec(dllexport) int __cdecl var_update_state() {
+    return static_cast<int>(var_mod::UpdateChecker::CurrentPhase());
 }
 
 __declspec(dllexport) void __cdecl var_shutdown() {
@@ -213,7 +250,8 @@ __declspec(dllexport) int __cdecl var_get_status_text(char* outBuf, int bufSize)
     const auto stats = var_mod::VarState::Instance().GetStats();
 
     using var_mod::Tr;
-    const char* stateStr = (!tel.hooksInstalled && !var_mod::Dx11Hook::IsInitFinished()) ? Tr("INICIALIZANDO")
+    const char* stateStr = var_mod::EngineGuards::Rejected() ? Tr("EXECUTÁVEL NÃO RECONHECIDO (VAR DESLIGADO, VEJA var_core.log)")
+                         : (!tel.hooksInstalled && !var_mod::Dx11Hook::IsInitFinished()) ? Tr("INICIALIZANDO")
                          : !tel.hooksInstalled ? Tr("ERRO HOOKS")
                          : !tel.offlineAllowed ? Tr("BLOQUEADO (ONLINE)")
                          : !tel.enabled        ? Tr("DESATIVADO")

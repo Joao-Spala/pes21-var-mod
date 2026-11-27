@@ -1,9 +1,10 @@
 -- PES 2021 VAR Mod (Sider 7.x Controller - Standalone & Zero-Boot-Overhead)
 -- Requer: PES2021.exe (Steam 1.7.2.0) + Sider 7.x (luajit.ext.enabled = 1) + modules\var_mod\var_core.dll
 -- Escopo: exclusivamente partidas offline (Exibicao, Master Liga, BAL, Copas, Ligas).
--- Performance: carregamento nativo sob demanda (lazy load em set_teams / overlay_on) -> 0.00 ms no boot do jogo!
+-- Performance: o VAR carrega sob demanda (set_teams / overlay_on). Na abertura do jogo so a verificacao de
+-- atualizacao comeca, em segundo plano (sem hooks e sem tocar na memoria do jogo).
 
-local m = { version = "4.5.1" }
+local m = { version = "4.5.2" }
 
 local ffi = ffi
 local cdef_registered = false
@@ -16,6 +17,8 @@ local var_enabled = true
 local ini_language = "pt"
 local saved_sider_dir = nil
 local config_path = nil
+local auto_update = true   -- auto_update (ou check_updates da v4.5.0) no var_mod.ini
+local updater_lib = nil    -- var_core.dll carregada na abertura so para a verificacao de atualizacao
 
 local STATUS_BUF_SIZE = 512
 local status_buf = nil
@@ -48,6 +51,8 @@ local function load_config()
             elseif k == "language" then
                 local lv = v:lower()
                 ini_language = (lv == "en" or lv == "english" or lv == "1") and "en" or "pt"
+            elseif k == "auto_update" or k == "check_updates" then
+                auto_update = (v == "1" or v == "true")
             end
         end
     end
@@ -82,6 +87,43 @@ local function save_config()
     f:close()
 end
 
+local function register_cdef()
+    if cdef_registered then return end
+    ffi.cdef[[
+        int  var_init(const char* logDirUtf8);
+        void var_shutdown(void);
+        void var_set_enabled(int enabled);
+        void var_set_offline_mode(int isOffline);
+        void var_set_sider_overlay_open(int isOpen);
+        void var_on_match_start(void);
+        void var_on_match_end(void);
+        void var_toggle_debug_overlay(void);
+        int  var_get_language(void);
+        int  var_get_status_text(char* outBuf, int bufSize);
+        int  var_update_start(const char* baseDirUtf8);
+        int  var_update_state(void);
+    ]]
+    cdef_registered = true
+end
+
+-- Na abertura do jogo: carrega a DLL so para verificar atualizacao em segundo plano. Se uma versao nova for
+-- instalada antes da primeira partida, ensure_native_loaded ja usa a nova. Sem pcall no Sider: cada passo
+-- confere antes de chamar.
+local function start_update_check()
+    if not auto_update or type(ffi) ~= "table" or not saved_sider_dir then return end
+    local base_dir = normalize_dir(saved_sider_dir) .. "modules\\var_mod\\"
+    local dll_path = base_dir .. "var_core.dll"
+    local f = io.open(dll_path, "rb")
+    if not f then return end
+    f:close()
+    register_cdef()
+    local lib = ffi.load(dll_path)
+    if not lib then return end
+    updater_lib = lib
+    lib.var_update_start(base_dir)
+    log("[var_mod] Verificacao de atualizacao iniciada em segundo plano (detalhes em modules\\var_mod\\var_update.log)")
+end
+
 local function ensure_native_loaded()
     if dll_loaded then return true end
     if dll_load_failed then return false end
@@ -93,21 +135,7 @@ local function ensure_native_loaded()
         return false
     end
 
-    if not cdef_registered then
-        ffi.cdef[[
-            int  var_init(const char* logDirUtf8);
-            void var_shutdown(void);
-            void var_set_enabled(int enabled);
-            void var_set_offline_mode(int isOffline);
-            void var_set_sider_overlay_open(int isOpen);
-            void var_on_match_start(void);
-            void var_on_match_end(void);
-            void var_toggle_debug_overlay(void);
-            int  var_get_language(void);
-            int  var_get_status_text(char* outBuf, int bufSize);
-        ]]
-        cdef_registered = true
-    end
+    register_cdef()
 
     local base_dir = normalize_dir(saved_sider_dir) .. "modules\\var_mod\\"
     local dll_path = base_dir .. "var_core.dll"
@@ -127,7 +155,21 @@ local function ensure_native_loaded()
     -- em vez de repetir o erro.
     dll_load_failed = true
     dll_error = "loadfail"
-    local lib = ffi.load(dll_path)
+    local lib = nil
+    -- Atualizacao instalada enquanto o jogo estava nos menus (estado 3): a copia var_core.next.dll e a versao
+    -- nova e ja vale nesta sessao. A DLL antiga continua carregada, parada (so fez a verificacao).
+    if updater_lib and updater_lib.var_update_state() == 3 then
+        local next_path = base_dir .. "var_core.next.dll"
+        local fnext = io.open(next_path, "rb")
+        if fnext then
+            fnext:close()
+            log("[var_mod] Atualizacao automatica instalada agora: carregando a versao nova (" .. next_path .. ")")
+            lib = ffi.load(next_path)
+        end
+    end
+    if not lib then
+        lib = updater_lib or ffi.load(dll_path)
+    end
     if not lib then
         log("[var_mod] ERRO: falha ao carregar var_core.dll")
         return false
@@ -274,7 +316,8 @@ function m.init(ctx)
     ctx.register("overlay_on", m.overlay_on)
     ctx.register("key_down", m.key_down)
     ctx.register("key_up", m.key_up)
-    log("[var_mod] v" .. m.version .. " registrado (modo lazy-load: zero impacto na abertura do jogo)")
+    log("[var_mod] v" .. m.version .. " registrado (VAR carregado sob demanda na primeira partida)")
+    start_update_check()
 end
 
 return m

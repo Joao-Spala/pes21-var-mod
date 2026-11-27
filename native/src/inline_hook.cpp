@@ -336,6 +336,14 @@ bool InlineHook::Install(uintptr_t targetAddr, void* detourFunc, size_t stolenLe
         return false;
     }
 
+    // Another mod already jumps from this entry (E9 rel32): only those 5 bytes are taken and the jump is chained
+    // below. Copying more would move a relative jump without relocating it.
+    if (stolenLen != 5 && *reinterpret_cast<const uint8_t*>(targetAddr) == 0xE9) {
+        VAR_LOG_WRN("InlineHook: 0x%llX already starts with a jump from another mod, chaining it (5 bytes instead of %zu)",
+                    static_cast<unsigned long long>(targetAddr), stolenLen);
+        stolenLen = 5;
+    }
+
     // Stub memory layout (64 bytes from shared 4KB near-page slab):
     // [0..31]  Trampoline: stolenBytes[0..stolenLen-1] + E9 rel32 (back to target + stolenLen)
     // [32..47] Relay:      FF 25 00 00 00 00 <uint64_t detourAddr>

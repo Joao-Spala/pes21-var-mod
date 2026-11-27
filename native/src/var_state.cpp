@@ -540,7 +540,7 @@ void VarState::SaveHudConfig() const {
     std::fprintf(out, "auto_zoom_box = %d\n", cfg.autoZoomBox ? 1 : 0);
     std::fprintf(out, "auto_open = %d\n", cfg.autoOpenPanel ? 1 : 0);
     std::fprintf(out, "replay_after_decision = %d\n", cfg.replayAfterDecision ? 1 : 0);
-    std::fprintf(out, "# auto_update = 1: a cada 6 h le a ultima versao no GitHub e instala uma versao nova assinada (0 = sem rede)\n");
+    std::fprintf(out, "# auto_update = 1: a cada abertura do jogo le a ultima versao no GitHub e instala uma versao nova assinada (0 = sem rede)\n");
     std::fprintf(out, "auto_update = %d\n", cfg.autoUpdate ? 1 : 0);
     std::fprintf(out, "language = %s\n", i18n::LanguageCode(cfg.language == 1 ? Language::English : Language::PtBr));
     std::fprintf(out, "# Atalhos: key_* = ate 2 codigos de tecla virtual (hex, 0x00 = vazio), pad_* = botao XInput (hex)\n");

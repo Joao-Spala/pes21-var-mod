@@ -6,8 +6,10 @@ namespace var_mod {
 
 // AOB signatures (all verified unique in PES2021.exe Steam 1.7.2.0 .text section)
 namespace Aobs {
+    // Prologue up to and including `mov rax, [rip+disp32]` at +0x30 (the GMATCH global, disp differs per build)
     constexpr const char* MainTick =
-        "48 89 5C 24 20 4C 89 44 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 60";
+        "48 89 5C 24 20 4C 89 44 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 60 "
+        "33 DB 48 8B E9 33 FF 66 66 66 0F 1F 84 00 00 00 00 00 48 8B 05 ?? ?? ?? ??";
 
     constexpr const char* JudgeFinalizeFrame =
         "33 C0 48 89 81 B8 03 00 00 48 89 81 C0 03 00 00 C3";
@@ -33,7 +35,7 @@ namespace Aobs {
 
     // Getter at 0x1414BC550: `mov rax, [rip+disp]; ret` -> resolves MatchRoster global
     constexpr const char* MatchRosterGetter =
-        "48 8B 05 E9 7C 25 02 C3 CC CC CC CC CC CC CC CC 83 79 30 04 0F 94 C0";
+        "48 8B 05 ?? ?? ?? ?? C3 CC CC CC CC CC CC CC CC 83 79 30 04 0F 94 C0"; // disp differs per build
 
     // ManualReplayController::SyncToReplayManager (0x1420C16A0):
     // Clean 20-byte non-RIP-relative prologue; runs every frame during Manual Replay (playing or paused).
@@ -109,12 +111,34 @@ namespace Aobs {
 
 // Call sites of FoulSnapshotPool::Find whose callers dereference the result WITHOUT a NULL check
 // (foul event consumer 0x1404B4870 and its helpers 0x1404B4B40 / 0x1404B4D90). Verified in Steam 1.7.2.0:
-// each RVA holds `E8 rel32` targeting FoulSnapshotPool_Find. A missing snapshot id there is the
+// each holds `E8 rel32` targeting FoulSnapshotPool_Find. A missing snapshot id there is the
 // PES2021.exe+0x4B4C25 crash. Every other caller (0x140510EE6, 0x140A1FCAA, 0x140A347F7, 0x140A3D71C,
 // 0x14145FDCA, 0x141477EF7) already tests for NULL and keeps the native result.
+// Found by signature (16 bytes of context, the call, 12 bytes after), never by address: the context holds the
+// pool offset 0x17AC and the FoulInfo snapshot field 0x15AC, so a layout change stops the match. The call is
+// at kCallOffset in each pattern. Hints = reference build addresses of the call.
 namespace FoulSnapshotUncheckedCallSites {
-    constexpr uintptr_t Rvas[] = { 0x04B49BD, 0x04B4BC7, 0x04B4EA0 };
+    constexpr const char* Patterns[] = {
+        "49 8B 0E 48 8B 09 48 81 C1 AC 17 00 00 8B 55 88 E8 ?? ?? ?? ?? 4C 8B E0 8B 4C 24 68 83 F9 01 75 33",
+        "74 24 50 48 8D 8A AC 17 00 00 8B 92 AC 15 00 00 E8 ?? ?? ?? ?? 49 8B 0F 4C 8B E0 48 8B 54 24 38 4C",
+        "48 8B 10 48 8D 8A AC 17 00 00 8B 92 AC 15 00 00 E8 ?? ?? ?? ?? 4C 8B D8 48 89 44 24 20 49 6B C6 2C",
+    };
+    constexpr uintptr_t HintRvas[] = { 0x04B49BD, 0x04B4BC7, 0x04B4EA0 };
+    constexpr size_t kCallOffset = 16;
 } // namespace FoulSnapshotUncheckedCallSites
+
+// Vtables the mod compares objects against, found by their MSVC RTTI name at install (the RVA differs per
+// build). Hints = reference build vtable RVAs.
+namespace RttiVtables {
+    constexpr const char* ReplayCameraLow   = ".?AVCameraLow@match@@";          // replay camera mode 0 controller
+    constexpr const char* ReplayCameraUp    = ".?AVCameraUp@match@@";           // replay camera mode 1 controller
+    constexpr const char* VanishingSprayRef = ".?AVVanishingSprayInfoRef@registry@match@@";
+    constexpr const char* SimMain           = ".?AVSimMain@Screen@match2D@@";   // scoreboard model
+    constexpr uintptr_t ReplayCameraLowHint   = 0x2BDFB40;
+    constexpr uintptr_t ReplayCameraUpHint    = 0x2BDFB88;
+    constexpr uintptr_t VanishingSprayRefHint = 0x25A1570;
+    constexpr uintptr_t SimMainHint           = 0x2BF58F8;
+} // namespace RttiVtables
 
 // Fast O(1) Steam 1.7.2.0 RVA hints (validated against pattern; falls back to full .text scan on mismatch)
 namespace AobHints {

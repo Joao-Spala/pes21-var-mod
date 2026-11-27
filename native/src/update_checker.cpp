@@ -207,7 +207,11 @@ void TryInstall(const char* tag) {
         Publish(tag, Phase::Available);
         return;
     }
-    VAR_LOG_INF("Automatic update: v%s verified (signature, SHA-256) and installed, active from the next game start", tag);
+    // Copy for this session: the loaded var_core.dll keeps its name in the loader, so the new one is loaded from
+    // another path. Without it the new version simply starts at the next game start.
+    const std::wstring nextDll = g_baseDir + L"var_core.next.dll";
+    if (!WriteWholeFile(nextDll, dll)) DeleteFileW(nextDll.c_str());
+    VAR_LOG_INF("Automatic update: v%s verified (signature, SHA-256) and installed", tag);
     Publish(tag, Phase::Installed);
 }
 
@@ -219,7 +223,7 @@ void CheckThread(int64_t now, std::string cachedLatest) {
         !ParseTagName(json.data(), json.size(), tag, sizeof(tag))) {
         // Offline or blocked: tried again after the interval, the version already known stays
         WriteCache(now, cachedLatest.c_str());
-        VAR_LOG_INF("Update check: no answer from GitHub (HTTP %lu, offline or blocked), next try in 6 h", st);
+        VAR_LOG_INF("Update check: no answer from GitHub (HTTP %lu, offline or blocked), next try at the next game start", st);
         return;
     }
     WriteCache(now, tag);
@@ -488,13 +492,14 @@ bool ApplyUpdate(const std::wstring& dllPath, const std::wstring& luaPath, const
     return true;
 }
 
-void FinishPreviousUpdate(const std::wstring& baseDir, const std::wstring& luaPath) {
+bool FinishPreviousUpdate(const std::wstring& baseDir, const std::wstring& luaPath) {
     const std::wstring dllPath = baseDir + L"var_core.dll";
     const std::wstring oldDll = dllPath + L".old";
     const std::wstring oldLua = luaPath + L".old";
     DeleteFileW((dllPath + L".new").c_str());
+    DeleteFileW((baseDir + L"var_core.next.dll").c_str()); // fails (and stays) while it is the running copy
     if (!luaPath.empty()) DeleteFileW((luaPath + L".new").c_str());
-    if (!FileExists(oldDll) && (luaPath.empty() || !FileExists(oldLua))) return;
+    if (!FileExists(oldDll) && (luaPath.empty() || !FileExists(oldLua))) return false;
     const std::wstring prev = baseDir + L"previous\\";
     CreateDirectoryW(prev.c_str(), nullptr);
     if (FileExists(oldDll) && !MoveFileExW(oldDll.c_str(), (prev + L"var_core.dll").c_str(), MOVEFILE_REPLACE_EXISTING)) {
@@ -505,6 +510,7 @@ void FinishPreviousUpdate(const std::wstring& baseDir, const std::wstring& luaPa
         DeleteFileW(oldLua.c_str());
     }
     VAR_LOG_INF("Automatic update: now running v" VAR_MOD_VERSION ", the previous version is kept in previous\\");
+    return true;
 }
 
 void SetBaseDir(const std::wstring& baseDir) {
@@ -513,7 +519,7 @@ void SetBaseDir(const std::wstring& baseDir) {
     g_cachePath = baseDir + L"update_check.ini";
     g_dllPath = baseDir + L"var_core.dll";
     LuaPathFromBase(baseDir, g_luaPath);
-    FinishPreviousUpdate(g_baseDir, g_luaPath);
+    if (FinishPreviousUpdate(g_baseDir, g_luaPath)) Publish(VAR_MOD_VERSION, Phase::Updated);
 }
 
 void Start(bool enabled) {
@@ -525,7 +531,7 @@ void Start(bool enabled) {
     NoteLatest(latest);
     const int64_t now = static_cast<int64_t>(std::time(nullptr));
     if (!CheckDue(lastCheck, now)) {
-        VAR_LOG_INF("Update check: last one less than 6 h ago%s%s", latest[0] ? ", latest known v" : "", latest);
+        VAR_LOG_INF("Update check: last one less than 10 min ago%s%s", latest[0] ? ", latest known v" : "", latest);
         return;
     }
     // Detached: the module is pinned for the life of the process, and WinHTTP's own timeouts end the thread
