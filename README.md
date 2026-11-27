@@ -129,7 +129,7 @@ Run **`VAR_Mod_Setup.bat`** and choose **`1 - Install or update`**. It runs `VAR
 | **1 - Install or update** | Copies the files and enables the mod in `sider.ini` |
 | **2 - Enable** | Writes the same `sider.ini` lines without copying files |
 | **3 - Disable** | Comments out the mod's line in `sider.ini` and keeps the files |
-| **4 - Uninstall** | Saves your settings as `var_mod.ini.before-uninstall-<date>.bak` next to `sider.ini`, then removes the mod's line, `modulesar_mod.lua` and the `modulesar_mod\` folder. `lua.enabled` and `luajit.ext.enabled` stay at 1 |
+| **4 - Uninstall** | Saves your settings as `var_mod.ini.before-uninstall-<date>.bak` next to `sider.ini`, then removes the mod's line, `modules\var_mod.lua` and the `modules\var_mod\` folder. `lua.enabled` and `luajit.ext.enabled` stay at 1 |
 
 ## Options
 
