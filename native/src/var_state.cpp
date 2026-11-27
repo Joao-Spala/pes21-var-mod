@@ -470,6 +470,8 @@ void VarState::LoadHudConfig() {
             cfg.autoOpenPanel = ParseBoolStr(v, cfg.autoOpenPanel);
         } else if (k == "replay_after_decision") {
             cfg.replayAfterDecision = ParseBoolStr(v, cfg.replayAfterDecision);
+        } else if (k == "check_updates") {
+            cfg.checkUpdates = ParseBoolStr(v, cfg.checkUpdates);
         } else if (k == "language") {
             cfg.language = (i18n::ParseLanguageCode(v.c_str()) == Language::English) ? 1 : 0;
         } else if (k.rfind("key_", 0) == 0 || k.rfind("pad_", 0) == 0) {
@@ -538,6 +540,8 @@ void VarState::SaveHudConfig() const {
     std::fprintf(out, "auto_zoom_box = %d\n", cfg.autoZoomBox ? 1 : 0);
     std::fprintf(out, "auto_open = %d\n", cfg.autoOpenPanel ? 1 : 0);
     std::fprintf(out, "replay_after_decision = %d\n", cfg.replayAfterDecision ? 1 : 0);
+    std::fprintf(out, "# check_updates = 1: uma vez por dia le a versao mais recente no GitHub e avisa no painel (nunca baixa nada)\n");
+    std::fprintf(out, "check_updates = %d\n", cfg.checkUpdates ? 1 : 0);
     std::fprintf(out, "language = %s\n", i18n::LanguageCode(cfg.language == 1 ? Language::English : Language::PtBr));
     std::fprintf(out, "# Atalhos: key_* = ate 2 codigos de tecla virtual (hex, 0x00 = vazio), pad_* = botao XInput (hex)\n");
     for (int a = 0; a < kBindActionCount; ++a) {

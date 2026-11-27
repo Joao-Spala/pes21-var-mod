@@ -182,6 +182,10 @@ I18N("Alertas durante o jogo", "Live alerts")
 I18N("Idioma", "Language")
 I18N("Controles", "Controls")
 I18N("Teclado e controle", "Keyboard and pad")
+I18N("Avisar nova versão", "Notify new version")
+I18N("Nova versão %s disponível em", "New version %s available at")
+I18N("Versão instalada: %s", "Installed version: %s")
+I18N("NOVA VERSÃO", "NEW VERSION")
 
 // ---- Controls page
 I18N("AÇÃO", "ACTION")

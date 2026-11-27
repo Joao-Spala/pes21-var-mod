@@ -122,7 +122,7 @@ To **disable** the mod, put a `;` at the start of the `lua.module = "var_mod.lua
 
 ### Option B: setup script
 
-Run **`VAR_Mod_Setup.bat`** and choose **`1 - Install or update`**. It runs `VAR_Mod_Setup.ps1`, a plain-text PowerShell script you can open in Notepad before running. Its header lists everything it does: it finds the Sider folder (or asks for it), copies the two files, edits `sider.ini` and its `sider-<name>.ini` variants as in option A after saving a dated backup of each one, and changes nothing while the game is running. No network access and no registry changes.
+Run **`VAR_Mod_Setup.bat`** and choose **`1 - Install or update`**. It runs `VAR_Mod_Setup.ps1`, a plain-text PowerShell script you can open in Notepad before running. Its header lists everything it does: it finds the Sider folder (or asks for it), copies the two files, edits `sider.ini` and its `sider-<name>.ini` variants as in option A after saving a dated backup of each one, and changes nothing while the game is running. No registry changes. Only option 5 uses the network.
 
 | Option | Action |
 | --- | --- |
@@ -130,6 +130,7 @@ Run **`VAR_Mod_Setup.bat`** and choose **`1 - Install or update`**. It runs `VAR
 | **2 - Enable** | Writes the same `sider.ini` lines without copying files |
 | **3 - Disable** | Comments out the mod's line in `sider.ini` and keeps the files |
 | **4 - Uninstall** | Saves your settings as `var_mod.ini.before-uninstall-<date>.bak` next to `sider.ini`, then removes the mod's line, `modules\var_mod.lua` and the `modules\var_mod\` folder. `lua.enabled` and `luajit.ext.enabled` stay at 1 |
+| **5 - Check for updates** | Reads the latest release on this repository and compares it with the installed version. Only if you answer `y` it downloads the release zip, checks its SHA256 against the one GitHub publishes (refuses otherwise), saves the installed files in `<sider folder>\var_mod-backup-<version>-<date>\` and installs the new version like option 1. Your settings are kept |
 
 ## Options
 
@@ -145,7 +146,10 @@ Settings are saved in `<sider folder>\modules\var_mod\var_mod.ini`.
 | Live alerts | On |
 | Replay the play after the decision | On |
 | Language | Português (BR) |
+| Notify new version | On |
 | Controls | Two keys per action, remappable |
+
+**Notify new version**: at most once a day, in the background, the mod reads the number of the latest release on this repository (one request to `api.github.com`, nothing about you, your PC or your matches is sent). When a newer version exists, a notice shows the first time the VAR replay opens, and OPTIONS shows where to get it. The mod never downloads or installs anything by itself: update with option 5 of the setup script or by hand. Turn the option off to make the mod use no network at all. The last check is kept in `modules\var_mod\update_check.ini`.
 
 ## Shortcuts
 
@@ -166,7 +170,7 @@ All shortcuts can be changed in **OPTIONS > Controls**. While the panel has focu
 ## Limitations
 
 - Supports only the Steam executable `v1.7.2.0`.
-- Offline matches only: Exhibition, Master League, Become a Legend and Cups. Network, DRM and online modes are not touched.
+- Offline matches only: Exhibition, Master League, Become a Legend and Cups. The game's network, DRM and online modes are not touched. The only connection the mod makes is the optional new version check above.
 - A decision applies to the stoppage in which it was made. A goal can be disallowed until its kickoff is taken.
 - The replay after the decision requires a foul or penalty given with the ball in play and the reviewed moment still in the game's replay memory (about 11 s of play). The engine's own instant replay may play first.
 - The gamepad opens and collapses the panel and controls the replay. Navigation inside the panel uses keyboard and mouse.

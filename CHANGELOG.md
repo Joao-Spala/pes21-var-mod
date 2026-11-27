@@ -10,6 +10,8 @@
 - **Replay after the decision**: follows the fouled player (or the offender). Before, the game kept the player of an earlier clip.
 - **End of match**: the cutscene list of the game is checked before the game clears it, and broken links are rebuilt from the list itself. A broken link there crashed the game when leaving a match in a live test. Nothing is written when the list is intact.
 - **Diagnostics**: if the simulation stops for 4 s outside a replay while frames keep being drawn, the log names the code every busy thread is running.
+- **New version notice**: option "Avisar nova versão" in OPTIONS (on by default). At most once a day a background request reads the number of the latest release on GitHub. Nothing about the user is sent and nothing is downloaded. A newer version is announced the first time the VAR replay opens and shown in OPTIONS with the address of the release page. Turning the option off removes every network access of the mod.
+- **Setup script, option 5 "Check for updates"**: compares the installed version with the latest release and, only after the user confirms, downloads the release zip, checks its SHA256 against the one GitHub publishes for it, saves the installed files in `var_mod-backup-<version>-<date>` and installs the new version. A missing or different hash stops it before anything is installed.
 
 ## v4.4.12
 

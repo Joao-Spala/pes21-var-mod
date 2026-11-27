@@ -13,6 +13,8 @@
 #include "i18n.h"
 #include "imgui.h"
 #include "input_manager.h"
+#include "update_checker.h"
+#include "version.h"
 
 #include <windows.h>
 #include <algorithm>
@@ -1889,6 +1891,19 @@ void RenderOptionsPage(ImDrawList* dl, float contentW, const HudConfig& cfg, boo
     toggleRow(kSettingsRowReplayAfterDecision, "Replay do lance após a decisão", cfg.replayAfterDecision);
     SectionCaption(dl, "GERAL", U(10));
     selectorRow(kSettingsRowLanguage, "Idioma", i18n::LanguageDisplayName(cfg.language == 1 ? Language::English : Language::PtBr));
+    toggleRow(kSettingsRowCheckUpdates, "Avisar nova versão", cfg.checkUpdates);
+    if (cfg.checkUpdates) {
+        // Status line under the toggle (not selectable): where to get a newer version, never a download
+        const char* newer = UpdateChecker::NewerVersion();
+        char line[96];
+        if (newer) std::snprintf(line, sizeof(line), Tr("Nova versão %s disponível em"), newer);
+        else std::snprintf(line, sizeof(line), Tr("Versão instalada: %s"), VAR_MOD_VERSION);
+        const ImVec2 lp = ImGui::GetCursorScreenPos();
+        const float lh = LineH(Txt::Small);
+        TextFit(dl, Txt::Small, ImVec2(lp.x + U(16), lp.y), contentW - U(32), newer ? C::Accent : C::Text3, line);
+        if (newer) TextFit(dl, Txt::Small, ImVec2(lp.x + U(16), lp.y + lh + U(2)), contentW - U(32), C::Text2, UpdateChecker::kReleasesUrl);
+        ImGui::Dummy(ImVec2(contentW, (newer ? lh * 2.0f + U(2) : lh) + U(6)));
+    }
     {
         bool hov = false;
         const ImVec2 rp = rowStart(kSettingsRowControls, &hov);
@@ -2816,6 +2831,19 @@ void VarHudRenderer::RenderFrame(float viewportW, float viewportH) {
     }
     if (cfg.broadcastAlerts && !g_controller.IsInManualReplay() && tel.alertBannerText[0] != '\0') {
         RenderBanner(viewportW, viewportH, tel.alertBannerText, tel.alertBannerStartMs, tel.alertBannerUntilMs, tel.alertBannerStyle, true);
+    }
+
+    // New version notice: once per game session, the first time the VAR replay opens (never during play)
+    {
+        static bool s_updateNoticeShown = false;
+        const char* newer = cfg.checkUpdates ? UpdateChecker::NewerVersion() : nullptr;
+        if (!s_updateNoticeShown && newer && g_controller.IsInManualReplay() && !tel.siderOverlayOpen &&
+            GetTickCount64() >= tel.lastBannerUntilMs) {
+            s_updateNoticeShown = true;
+            char text[128];
+            std::snprintf(text, sizeof(text), "%s %s  \xC2\xB7  %s", Tr("NOVA VERSÃO"), newer, UpdateChecker::kReleasesUrl);
+            state.SetPostApplyBanner(text, 8000, BannerStyle::Info);
+        }
     }
 
     if (g_controller.IsInManualReplay() && !tel.siderOverlayOpen) {

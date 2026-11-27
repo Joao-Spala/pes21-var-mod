@@ -10,15 +10,21 @@
 #     after saving a dated copy of each file next to it (sider.ini.before-var-mod-<date>.bak, never overwritten)
 #   - enable: writes the same three sider.ini lines as install, without copying files
 #   - disable: comments out the lua.module line (the files stay)
-#   - uninstall: removes the lua.module line, modulesar_mod.lua and the modulesar_mod\ folder, after saving
+#   - uninstall: removes the lua.module line, modules\var_mod.lua and the modules\var_mod\ folder, after saving
 #     your settings as var_mod.ini.before-uninstall-<date>.bak next to sider.ini (lua.enabled and luajit.ext.enabled stay 1)
 #   - status: only reads
-# It changes nothing while PES 2021 is open. No network access, no registry, no other files.
+#   - update (menu option 5): the only option that uses the network. It reads the latest release of
+#     github.com/Joao-Spala/pes21-var-mod (one request, nothing about you or your PC is sent) and compares it with
+#     the installed version. Only if you answer y it downloads the release zip from that page into a temporary
+#     folder, checks its SHA256 against the one GitHub publishes for it (refuses when they differ or none is
+#     published), saves the installed var_mod.lua and var_core.dll in <Sider folder>\var_mod-backup-<version>-<date>\
+#     and installs the new ones like option 1. The temporary folder is deleted at the end.
+# It changes nothing while PES 2021 is open. No registry, no other files.
 #
-# Usage: VAR_Mod_Setup.bat  (menu)  or  powershell -File VAR_Mod_Setup.ps1 -Action install|enable|disable|uninstall|status [-SiderDir <path>]
+# Usage: VAR_Mod_Setup.bat  (menu)  or  powershell -File VAR_Mod_Setup.ps1 -Action install|enable|disable|uninstall|status|update [-SiderDir <path>]
 
 param(
-    [ValidateSet("menu", "install", "enable", "disable", "uninstall", "status")]
+    [ValidateSet("menu", "install", "enable", "disable", "uninstall", "status", "update")]
     [string]$Action = "menu",
     [string]$SiderDir = ""
 )
@@ -33,6 +39,9 @@ $RepoRoot  = if (Test-Path -LiteralPath (Join-Path $ScriptDir "modules\var_mod\v
 $SrcLua = Join-Path $RepoRoot "modules\var_mod.lua"
 $SrcDll = Join-Path $RepoRoot "modules\var_mod\var_core.dll"
 $ModuleLine = 'lua.module = "var_mod.lua"'
+$ReleaseApi = "https://api.github.com/repos/Joao-Spala/pes21-var-mod/releases/latest"
+$DownloadPrefix = "https://github.com/Joao-Spala/pes21-var-mod/releases/download/"
+$HttpHeaders = @{ "User-Agent" = "pes21-var-mod-setup"; "Accept" = "application/vnd.github+json" }
 $Latin1 = [System.Text.Encoding]::GetEncoding(28591)
 
 # sider.ini is read and written as raw bytes (Latin1 maps every byte 1:1), keeping a UTF-8 BOM, the line
@@ -268,18 +277,18 @@ function Show-Status([string]$dir) {
     Write-Host ""
 }
 
-function Do-Install([string]$dir) {
+function Do-Install([string]$dir, [string]$srcLua = $SrcLua, [string]$srcDll = $SrcDll) {
     Assert-GameClosed
-    if (-not (Test-Path -LiteralPath $SrcLua) -or -not (Test-Path -LiteralPath $SrcDll)) {
-        throw "Package files not found ($SrcLua / $SrcDll). Run native\build.ps1 first."
+    if (-not (Test-Path -LiteralPath $srcLua) -or -not (Test-Path -LiteralPath $srcDll)) {
+        throw "Package files not found ($srcLua / $srcDll). Run native\build.ps1 first."
     }
     $dstModDir = Join-Path $dir "modules"
     $dstCoreDir = Join-Path $dstModDir "var_mod"
     New-Item -ItemType Directory -Force -Path $dstCoreDir | Out-Null
 
     # DLL first: a new Lua must never run against an old DLL (missing exports)
-    Copy-Item -Force -LiteralPath $SrcDll -Destination (Join-Path $dstCoreDir "var_core.dll")
-    Copy-Item -Force -LiteralPath $SrcLua -Destination (Join-Path $dstModDir "var_mod.lua")
+    Copy-Item -Force -LiteralPath $srcDll -Destination (Join-Path $dstCoreDir "var_core.dll")
+    Copy-Item -Force -LiteralPath $srcLua -Destination (Join-Path $dstModDir "var_mod.lua")
     Write-Host "[copy] var_mod.lua and var_core.dll copied to $dstModDir"
 
     $inis = Get-TargetInis $dir
@@ -324,6 +333,115 @@ function Do-Uninstall([string]$dir) {
     Show-Status $dir
 }
 
+function Get-InstalledVersion([string]$dir) {
+    $lua = Join-Path $dir "modules\var_mod.lua"
+    if (-not (Test-Path -LiteralPath $lua)) { return $null }
+    $m = Select-String -LiteralPath $lua -Pattern 'version\s*=\s*"(\d+(\.\d+){0,3})"' | Select-Object -First 1
+    if ($m) { return $m.Matches[0].Groups[1].Value }
+    return $null
+}
+
+function ConvertTo-ModVersion([string]$text) {
+    $parts = @(($text.TrimStart('v', 'V') -split '\.') | ForEach-Object { [int]$_ })
+    while ($parts.Count -lt 4) { $parts += 0 }
+    return New-Object System.Version $parts[0], $parts[1], $parts[2], $parts[3]
+}
+
+function Backup-ModFiles([string]$dir, [string]$version) {
+    $lua = Join-Path $dir "modules\var_mod.lua"
+    $dll = Join-Path $dir "modules\var_mod\var_core.dll"
+    if (-not (Test-Path -LiteralPath $lua) -and -not (Test-Path -LiteralPath $dll)) { return }
+    $label = if ($version) { $version } else { "unknown" }
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $bak = Join-Path $dir "var_mod-backup-$label-$stamp"
+    $n = 2
+    while (Test-Path -LiteralPath $bak) { $bak = Join-Path $dir "var_mod-backup-$label-$stamp-$n"; $n++ }
+    New-Item -ItemType Directory -Path $bak | Out-Null
+    if (Test-Path -LiteralPath $lua) { Copy-Item -LiteralPath $lua -Destination $bak }
+    if (Test-Path -LiteralPath $dll) { Copy-Item -LiteralPath $dll -Destination $bak }
+    Write-Host "[backup] Installed files saved in: $bak"
+}
+
+function Do-Update([string]$dir) {
+    Assert-GameClosed
+    $installed = Get-InstalledVersion $dir
+    Write-Host ""
+    Write-Host "Installed version: $(if ($installed) { $installed } else { 'not installed' })"
+    Write-Host "Reading the latest release on GitHub (nothing about you or your PC is sent)..."
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    try {
+        $rel = Invoke-RestMethod -Uri $ReleaseApi -Headers $HttpHeaders -TimeoutSec 20 -UseBasicParsing
+    } catch {
+        throw "GitHub could not be reached ($($_.Exception.Message)). Nothing was changed."
+    }
+    $tag = [string]$rel.tag_name
+    if ($tag -notmatch '^[vV]?\d+(\.\d+){0,3}$') { throw "Unexpected release tag '$tag'. Nothing was changed." }
+    $latest = $tag.TrimStart('v', 'V')
+    Write-Host "Latest release: $latest"
+    if ($installed -and (ConvertTo-ModVersion $latest) -le (ConvertTo-ModVersion $installed)) {
+        Write-Host "You already have the latest version."
+        return
+    }
+
+    $asset = @($rel.assets | Where-Object { $_.name -match '^PES2021_VAR_Mod_v[0-9.]+\.zip$' }) | Select-Object -First 1
+    if (-not $asset) { throw "The release $latest has no package zip. Nothing was downloaded." }
+    $url = [string]$asset.browser_download_url
+    if (-not $url.StartsWith($DownloadPrefix, [System.StringComparison]::Ordinal)) {
+        throw "Unexpected download address '$url'. Nothing was downloaded."
+    }
+    # SHA256 published by GitHub for the asset, else a line of the release notes naming the zip and its hash
+    $expected = $null
+    if ([string]$asset.digest -match '^sha256:([0-9a-fA-F]{64})$') {
+        $expected = $Matches[1]
+    } elseif ([string]$rel.body -match ('(?m)' + [regex]::Escape([string]$asset.name) + '\W+([0-9a-fA-F]{64})\b')) {
+        $expected = $Matches[1]
+    }
+    if (-not $expected) { throw "The release publishes no SHA256 for $($asset.name). Nothing was downloaded." }
+
+    $sizeMb = "{0:N1}" -f ([double]$asset.size / 1MB)
+    $answer = Read-Host "Download $($asset.name) ($sizeMb MB) from GitHub and install version $latest? (y/N)"
+    if ($answer -notmatch '^[yYsS]$') {
+        Write-Host "Nothing was downloaded."
+        return
+    }
+
+    $work = Join-Path ([System.IO.Path]::GetTempPath()) ("var_mod_update_" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $work | Out-Null
+    try {
+        $zip = Join-Path $work "package.zip"
+        $oldProgress = $ProgressPreference
+        $ProgressPreference = "SilentlyContinue" # the progress bar of PowerShell 5.1 makes the download much slower
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $zip -Headers @{ "User-Agent" = "pes21-var-mod-setup" } -TimeoutSec 180 -UseBasicParsing
+        } finally {
+            $ProgressPreference = $oldProgress
+        }
+        $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+        if ($actual.ToUpperInvariant() -ne $expected.ToUpperInvariant()) {
+            throw "SHA256 of the download ($actual) differs from the published one ($expected). It was discarded, nothing was installed."
+        }
+        Write-Host "[verify] SHA256 matches the one published for the release: $actual"
+
+        $extract = Join-Path $work "package"
+        Expand-Archive -LiteralPath $zip -DestinationPath $extract
+        $dll = Get-ChildItem -LiteralPath $extract -Recurse -File -Filter "var_core.dll" |
+               Where-Object { $_.Directory.Name -eq "var_mod" -and $_.Directory.Parent.Name -eq "modules" } |
+               Select-Object -First 1
+        if (-not $dll) { throw "modules\var_mod\var_core.dll is missing from the package. Nothing was installed." }
+        $lua = Join-Path $dll.Directory.Parent.FullName "var_mod.lua"
+        if (-not (Test-Path -LiteralPath $lua)) { throw "modules\var_mod.lua is missing from the package. Nothing was installed." }
+
+        Assert-GameClosed # the download may have taken a while
+        Backup-ModFiles $dir $installed
+        Do-Install $dir $lua $dll.FullName
+        Write-Host "[update] Version $latest installed. Your settings (var_mod.ini) were kept."
+        Write-Host "         The new setup script and the notes of this version are in the release page:"
+        Write-Host "         https://github.com/Joao-Spala/pes21-var-mod/releases/latest"
+    } finally {
+        Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue
+    }
+}
+
 $targetDir = Resolve-SiderDir $SiderDir
 
 switch ($Action) {
@@ -332,6 +450,7 @@ switch ($Action) {
     "disable"   { Do-Toggle $targetDir $false }
     "uninstall" { Do-Uninstall $targetDir }
     "status"    { Show-Status $targetDir }
+    "update"    { Do-Update $targetDir }
     "menu" {
         while ($true) {
             Show-Status $targetDir
@@ -339,6 +458,7 @@ switch ($Action) {
             Write-Host "2 - Enable the VAR Mod in Sider"
             Write-Host "3 - Disable the VAR Mod in Sider (keeps the files)"
             Write-Host "4 - Uninstall completely"
+            Write-Host "5 - Check for updates (downloads only if you confirm, checks the SHA256)"
             Write-Host "0 - Exit"
             $choice = Read-Host "Choose an option"
             try {
@@ -347,6 +467,7 @@ switch ($Action) {
                     "2" { Do-Toggle $targetDir $true }
                     "3" { Do-Toggle $targetDir $false }
                     "4" { Do-Uninstall $targetDir }
+                    "5" { Do-Update $targetDir }
                     "0" { break }
                     default { Write-Host "Invalid option." }
                 }

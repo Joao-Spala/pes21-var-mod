@@ -78,6 +78,7 @@ $CoreSources = @(
     (Join-Path $SrcDir "var_hud.cpp"),
     (Join-Path $SrcDir "var_hud_render.cpp"),
     (Join-Path $SrcDir "dx11_hook.cpp"),
+    (Join-Path $SrcDir "update_checker.cpp"),
     (Join-Path $SrcDir "dllmain.cpp")
 )
 
@@ -136,7 +137,8 @@ $LinkArgs = @(
     "-Wl,--out-implib,$(Join-Path $BuildTmp 'libvar_core.a')",
     "-o", $OutDll
 ) + $CoreObjs + $ImguiObjs + @(
-    "-luser32"
+    "-luser32",
+    "-lwinhttp"
 )
 
 & $Compiler @LinkArgs
@@ -160,7 +162,8 @@ if (-not $SkipTests) {
             (Join-Path $BuildTmp "var_state.o"),
             (Join-Path $BuildTmp "input_manager.o"),
             (Join-Path $BuildTmp "var_hud.o"),
-            (Join-Path $BuildTmp "var_hud_render.o")
+            (Join-Path $BuildTmp "var_hud_render.o"),
+            (Join-Path $BuildTmp "update_checker.o")
         )
         $TestImguiObjs = @(
             (Join-Path $BuildTmp "imgui.o"),
@@ -174,6 +177,7 @@ if (-not $SkipTests) {
             $TestSrc
         ) + $TestCoreObjs + $TestImguiObjs + @(
             "-luser32",
+            "-lwinhttp",
             "-lgdi32",
             "-o", $TestExe
         )

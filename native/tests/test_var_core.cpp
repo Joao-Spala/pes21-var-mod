@@ -7,6 +7,7 @@
 #include "inline_hook.h"
 #include "input_manager.h"
 #include "match_hooks.h"
+#include "update_checker.h"
 #include "var_hud.h"
 #include "var_state.h"
 #include "version.h"
@@ -1661,6 +1662,35 @@ void TestMsvcTreeRepair() {
 
 // A play the referee called is never offered again as a separate or "likely missed" foul: the contact seconds
 // before the whistle belongs to the call, also for the foul the match is stopped for before it is recorded
+// New version notice: tag parsing, version order and the 24 h throttle. Never touches the network here.
+void TestUpdateChecker() {
+    using namespace UpdateChecker;
+    char tag[32];
+    const char* js = "{\"url\":\"x\",\"tag_name\" : \"v4.6.0\",\"name\":\"v4.6.0\"}";
+    EXPECT_TRUE(ParseTagName(js, std::strlen(js), tag, sizeof(tag)) && std::strcmp(tag, "4.6.0") == 0, "tag_name parsed, v removed");
+    const char* bad = "{\"tag_name\":\"v4.6.0<script>\"}";
+    EXPECT_TRUE(!ParseTagName(bad, std::strlen(bad), tag, sizeof(tag)) && tag[0] == '\0', "only a dotted version is accepted");
+    const char* cut = "{\"tag_name\":\"v4.6";
+    EXPECT_TRUE(!ParseTagName(cut, std::strlen(cut), tag, sizeof(tag)), "truncated body refused");
+    const char* none = "{\"message\":\"Not Found\"}";
+    EXPECT_TRUE(!ParseTagName(none, std::strlen(none), tag, sizeof(tag)), "no tag_name");
+    char tiny[4];
+    EXPECT_TRUE(!ParseTagName(js, std::strlen(js), tiny, sizeof(tiny)), "a tag longer than the buffer is refused");
+    EXPECT_TRUE(CompareVersions("4.5.0", "4.5.0") == 0, "equal");
+    EXPECT_TRUE(CompareVersions("v4.10.0", "4.9.9") > 0, "numeric, not text order");
+    EXPECT_TRUE(CompareVersions("4.5", "4.5.0") == 0, "missing part is 0");
+    EXPECT_TRUE(CompareVersions("4.5.0", "4.5.1") < 0, "patch");
+    EXPECT_TRUE(CompareVersions("5.0.0", VAR_MOD_VERSION) > 0, "major above the installed one");
+    EXPECT_TRUE(CheckDue(0, 1000000), "never checked");
+    EXPECT_TRUE(!CheckDue(1000000, 1000000 + 3600), "1 h later: not due");
+    EXPECT_TRUE(CheckDue(1000000, 1000000 + kCheckIntervalSec), "24 h later: due");
+    EXPECT_TRUE(CheckDue(1000000 + 86400 * 5, 1000000), "clock moved back: due");
+    // No base dir in the tests: Start never starts a request, and nothing newer is known
+    Start(true);
+    EXPECT_TRUE(NewerVersion() == nullptr, "nothing published without a check");
+    MarkPass("TestUpdateChecker");
+}
+
 void TestCalledPlayNotSuspect() {
     auto& st = VarState::Instance();
     st.ResetMatch();
@@ -2650,6 +2680,14 @@ void TestHudRenderSmoke() {
             EXPECT_EQ(VarHudRenderer::CurrentPage(), HudPage::Config, "NextTab must reach OPCOES");
             std::snprintf(shotName, sizeof(shotName), "%s_%dx%d_3_opcoes", langTag, static_cast<int>(sz[0]), resTag);
             DumpDrawDataBmp(shotName, px, tw, th);
+            // Docs / visual check only (VAR_HUD_UPDATE_SHOT set): OPTIONS with a newer version known
+            if (GetEnvironmentVariableA("VAR_HUD_UPDATE_SHOT", nullptr, 0) > 0) {
+                UpdateChecker::NoteLatest("9.9.9");
+                frame();
+                frame();
+                std::snprintf(shotName, sizeof(shotName), "%s_%dx%d_3b_opcoes_nova_versao", langTag, static_cast<int>(sz[0]), resTag);
+                DumpDrawDataBmp(shotName, px, tw, th);
+            }
 
             for (int i = 0; i < kSettingsRowControls; ++i) InputManager::QueueKeyboardAction(NavAction::Down);
             frame();
@@ -3523,6 +3561,7 @@ int main() {
     TestContactDetectionRules();
     TestCalledPlayNotSuspect();
     TestMsvcTreeRepair();
+    TestUpdateChecker();
     TestRemapAndLanguage();
     TestHudRenderSmoke();
     TestCompositeVerdictPoolAndRcuOffsets();

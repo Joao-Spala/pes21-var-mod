@@ -122,7 +122,7 @@ Para **desativar**, coloque um `;` no começo da linha `lua.module = "var_mod.lu
 
 ### Opção B: script de instalação
 
-Rode o **`VAR_Mod_Setup.bat`** e escolha **`1 - Install or update`**. Ele executa o `VAR_Mod_Setup.ps1`, um script PowerShell em texto puro que pode ser aberto no Bloco de Notas antes de rodar. O cabeçalho lista tudo o que ele faz: encontra a pasta do Sider (ou pergunta), copia os dois arquivos, edita o `sider.ini` e as variantes `sider-<nome>.ini` como na opção A depois de salvar um backup datado de cada um e não altera nada com o jogo aberto. Sem acesso à rede e sem alterar o registro.
+Rode o **`VAR_Mod_Setup.bat`** e escolha **`1 - Install or update`**. Ele executa o `VAR_Mod_Setup.ps1`, um script PowerShell em texto puro que pode ser aberto no Bloco de Notas antes de rodar. O cabeçalho lista tudo o que ele faz: encontra a pasta do Sider (ou pergunta), copia os dois arquivos, edita o `sider.ini` e as variantes `sider-<nome>.ini` como na opção A depois de salvar um backup datado de cada um e não altera nada com o jogo aberto. Não altera o registro. Só a opção 5 usa a rede.
 
 | Opção | Ação |
 | --- | --- |
@@ -130,6 +130,7 @@ Rode o **`VAR_Mod_Setup.bat`** e escolha **`1 - Install or update`**. Ele execut
 | **2 - Enable** | Grava as mesmas linhas no `sider.ini` sem copiar arquivos |
 | **3 - Disable** | Comenta a linha do mod no `sider.ini` e mantém os arquivos |
 | **4 - Uninstall** | Salva suas configurações como `var_mod.ini.before-uninstall-<data>.bak` ao lado do `sider.ini` e depois remove a linha do mod, o `modules\var_mod.lua` e a pasta `modules\var_mod\`. `lua.enabled` e `luajit.ext.enabled` continuam em 1 |
+| **5 - Check for updates** | Lê a última release deste repositório e compara com a versão instalada. Só se você responder `y` ele baixa o zip da release, confere o SHA256 com o que o GitHub publica (recusa se não bater), salva os arquivos instalados em `<pasta do sider>\var_mod-backup-<versão>-<data>\` e instala a nova versão como na opção 1. Suas configurações são mantidas |
 
 ## Opções
 
@@ -145,7 +146,10 @@ As configurações ficam em `<pasta do sider>\modules\var_mod\var_mod.ini`.
 | Alertas durante o jogo | Ligado |
 | Replay do lance após a decisão | Ligado |
 | Idioma | Português (BR) |
+| Avisar nova versão | Ligado |
 | Controles | Duas teclas por ação, remapeáveis |
+
+**Avisar nova versão**: no máximo uma vez por dia, em segundo plano, o mod lê o número da última release deste repositório (uma consulta ao `api.github.com`, nada sobre você, seu PC ou suas partidas é enviado). Quando existe versão mais nova, um aviso aparece na primeira vez que o replay do VAR abre, e as OPÇÕES mostram onde baixar. O mod nunca baixa nem instala nada sozinho: atualize pela opção 5 do script de instalação ou manualmente. Desligue a opção para o mod não usar a rede em nenhum momento. A última verificação fica em `modules\var_mod\update_check.ini`.
 
 ## Atalhos
 
@@ -166,7 +170,7 @@ Todos os atalhos podem ser alterados em **OPÇÕES > Controles**. Com o painel e
 ## Limitações
 
 - Suporta apenas o executável Steam `v1.7.2.0`.
-- Apenas partidas offline: Exibição, Master Liga, Rumo ao Estrelato e Copas. Rede, DRM e modos online não são tocados.
+- Apenas partidas offline: Exibição, Master Liga, Rumo ao Estrelato e Copas. Rede, DRM e modos online do jogo não são tocados. A única conexão que o mod faz é a verificação opcional de nova versão descrita acima.
 - Uma decisão vale para a parada em que foi tomada. Um gol pode ser anulado até a saída de bola.
 - O replay após a decisão exige falta ou pênalti marcado com a bola rolando e o momento revisado ainda na memória de replay do jogo (cerca de 11 s de jogo). O replay instantâneo da engine pode ser exibido antes.
 - O controle abre e recolhe o painel e controla o replay. A navegação dentro do painel usa teclado e mouse.

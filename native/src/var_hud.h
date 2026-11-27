@@ -20,12 +20,13 @@ enum class HudPage : int32_t {
     Controls  = 4, // OPCOES > Controles (remap de teclas e botoes)
 };
 
-// OPCOES rows: 0..5 toggles, 6 = Idioma, 7 = Controles, 8 = Voltar
+// OPCOES rows: 0..6 toggles, 7 = Idioma, 8 = Avisar nova versao, 9 = Controles, 10 = Voltar
 constexpr int kSettingsRowReplayAfterDecision = 6;
 constexpr int kSettingsRowLanguage = 7;
-constexpr int kSettingsRowControls = 8;
-constexpr int kSettingsRowBack     = 9;
-constexpr int kSettingsRowCount    = 10;
+constexpr int kSettingsRowCheckUpdates = 8;
+constexpr int kSettingsRowControls = 9;
+constexpr int kSettingsRowBack     = 10;
+constexpr int kSettingsRowCount    = 11;
 // Controles rows: one per BindAction, then Restaurar Padrao, then Voltar
 constexpr int kControlsRowRestore  = kBindActionCount;
 constexpr int kControlsRowBack     = kBindActionCount + 1;

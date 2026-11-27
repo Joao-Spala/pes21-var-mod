@@ -2,6 +2,7 @@
 
 #include "imgui.h"
 #include "logger.h"
+#include "update_checker.h"
 
 #include <windows.h>
 #include <algorithm>
@@ -1233,9 +1234,12 @@ void VarHudController::TriggerSettingsRow(int row, int delta, VarState& state) {
         cfg.replayAfterDecision = !cfg.replayAfterDecision;
     } else if (row == kSettingsRowLanguage) {
         cfg.language = (cfg.language == 1) ? 0 : 1; // applied instantly to the whole HUD
+    } else if (row == kSettingsRowCheckUpdates) {
+        cfg.checkUpdates = !cfg.checkUpdates;
     }
     config_ = cfg;
     state.SetHudConfig(cfg, true);
+    if (row == kSettingsRowCheckUpdates) UpdateChecker::Start(cfg.checkUpdates); // background, once per process
 }
 
 // ---------------------------------------------------------------------------
@@ -1862,7 +1866,7 @@ void VarHudController::HandleAction(NavAction action, VarState& state) {
         } else if (action == NavAction::Down) {
             selectedIndex_ = (selectedIndex_ + 1) % totalRows;
         } else if (action == NavAction::Left) {
-            if (selectedIndex_ <= kSettingsRowLanguage) TriggerSettingsRow(selectedIndex_, -1, state);
+            if (selectedIndex_ <= kSettingsRowCheckUpdates) TriggerSettingsRow(selectedIndex_, -1, state);
         } else if (action == NavAction::Right || action == NavAction::Confirm) {
             if (action == NavAction::Right && selectedIndex_ == kSettingsRowBack) return;
             TriggerSettingsRow(selectedIndex_, +1, state);

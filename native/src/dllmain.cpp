@@ -5,6 +5,7 @@
 #include "logger.h"
 #include "heap_guard.h"
 #include "match_hooks.h"
+#include "update_checker.h"
 #include "var_hud.h"
 #include "var_state.h"
 #include "version.h"
@@ -105,6 +106,9 @@ __declspec(dllexport) int __cdecl var_init(const char* logDirUtf8) {
 
     var_mod::VarState::Instance().SetIniPath(baseDir.empty() ? L"var_mod.ini" : (baseDir + L"var_mod.ini"));
     var_mod::VarState::Instance().LoadHudConfig();
+    // New version notice (option "Avisar nova versao", on by default): one background GET a day, never a download
+    var_mod::UpdateChecker::SetBaseDir(baseDir);
+    var_mod::UpdateChecker::Start(var_mod::VarState::Instance().GetHudConfig().checkUpdates);
 
     // Engine heap fix, independent from the VAR itself: makes the dlmalloc segment release atomic so the
     // post-match heap trim cannot write into a segment it has just released (crash at PES2021.exe+0x3FE31D).
